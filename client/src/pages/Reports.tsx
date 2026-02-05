@@ -180,7 +180,7 @@ export default function Reports() {
                             −{formatCurrency(pnl.taxes)}
                           </TableCell>
                         </TableRow>
-                        <TableRow className="bg-slate-50 border-t-2">
+                        <TableRow className="bg-muted border-t-2">
                           <TableCell className="font-bold flex items-center gap-2">
                             {pnl.netProfit >= 0 ? (
                               <TrendingUp className="w-4 h-4 text-green-500" />

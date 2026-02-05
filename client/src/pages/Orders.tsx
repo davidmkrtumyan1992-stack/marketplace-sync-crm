@@ -59,7 +59,7 @@ export default function Orders() {
         </div>
 
         <div className="flex flex-wrap gap-3">
-          <span className="yellow-badge">
+          <span className="teal-badge">
             <ShoppingCart className="w-4 h-4 mr-1.5 inline" />
             Всего: {orders?.length || 0}
           </span>

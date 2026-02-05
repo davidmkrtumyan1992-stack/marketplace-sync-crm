@@ -31,7 +31,7 @@ export default function Customers() {
           </div>
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
             <DialogTrigger asChild>
-              <Button size="lg" className="shadow-lg" data-testid="button-add-customer">
+              <Button size="lg" className="premium-button" data-testid="button-add-customer">
                 <UserPlus className="w-5 h-5 mr-2" />
                 Добавить клиента
               </Button>
@@ -46,7 +46,7 @@ export default function Customers() {
         </div>
 
         <div className="flex items-center gap-3">
-          <span className="yellow-badge">
+          <span className="teal-badge">
             <Users className="w-4 h-4 mr-1.5 inline" />
             Всего: {customers?.length || 0}
           </span>

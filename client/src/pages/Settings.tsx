@@ -113,9 +113,9 @@ function TaxSettingsCard({
 
   return (
     <Card className="dashboard-card overflow-hidden">
-      <CardHeader className="bg-slate-50/50 border-b">
+      <CardHeader className="bg-muted/50 border-b">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-white rounded-lg border shadow-sm text-amber-600">
+          <div className="p-2 bg-card rounded-lg border shadow-sm text-primary">
             <Calculator className="w-6 h-6" />
           </div>
           <div>
@@ -136,7 +136,7 @@ function TaxSettingsCard({
                 onValueChange={(val) => form.setValue("taxSystem", val as "usn_6" | "usn_15")}
                 className="grid gap-3"
               >
-                <div className="flex items-start space-x-3 p-4 border rounded-lg hover:bg-slate-50 cursor-pointer">
+                <div className="flex items-start space-x-3 p-4 border rounded-lg hover:bg-muted cursor-pointer">
                   <RadioGroupItem value="usn_6" id="usn_6" className="mt-1" />
                   <div className="flex-1">
                     <Label htmlFor="usn_6" className="font-medium cursor-pointer">
@@ -147,7 +147,7 @@ function TaxSettingsCard({
                     </p>
                   </div>
                 </div>
-                <div className="flex items-start space-x-3 p-4 border rounded-lg hover:bg-slate-50 cursor-pointer">
+                <div className="flex items-start space-x-3 p-4 border rounded-lg hover:bg-muted cursor-pointer">
                   <RadioGroupItem value="usn_15" id="usn_15" className="mt-1" />
                   <div className="flex-1">
                     <Label htmlFor="usn_15" className="font-medium cursor-pointer">
@@ -245,10 +245,10 @@ function MarketplaceCard({
 
   return (
     <Card className="dashboard-card overflow-hidden">
-      <CardHeader className="bg-slate-50/50 border-b">
+      <CardHeader className="bg-muted/50 border-b">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className={`p-2 bg-white rounded-lg border shadow-sm ${logoColor}`}>
+            <div className={`p-2 bg-card rounded-lg border shadow-sm ${logoColor}`}>
               <CheckCircle2 className="w-6 h-6" />
             </div>
             <div>

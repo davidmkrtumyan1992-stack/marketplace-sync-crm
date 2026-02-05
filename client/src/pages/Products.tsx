@@ -110,7 +110,7 @@ export default function Products() {
             </Dialog>
             <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
               <DialogTrigger asChild>
-                <Button size="lg" className="shadow-lg shadow-primary/25" data-testid="button-add-product">
+                <Button size="lg" className="premium-button" data-testid="button-add-product">
                   <Plus className="w-4 h-4 mr-2" />
                   Добавить товар
                 </Button>
@@ -126,22 +126,23 @@ export default function Products() {
           </div>
         </div>
 
-        <div className="flex items-center gap-4 bg-white p-4 rounded-xl border shadow-sm">
+        <div className="flex items-center gap-4 bg-card p-4 rounded-xl border border-border/50 shadow-sm">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input 
               placeholder="Поиск по названию или артикулу..." 
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 bg-slate-50 border-slate-200"
+              className="pl-9"
+              data-testid="input-search-products"
             />
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+        <div className="bg-card rounded-xl border border-border/50 shadow-sm overflow-hidden">
           <Table>
             <TableHeader>
-              <TableRow className="bg-slate-50/50">
+              <TableRow className="bg-muted/30">
                 <TableHead>Товар</TableHead>
                 <TableHead>Артикул</TableHead>
                 <TableHead className="text-right">Закупка</TableHead>
@@ -276,7 +277,7 @@ function ProductForm({ onSuccess }: { onSuccess: () => void }) {
       mutate(submitData as any, { onSuccess });
     })} className="space-y-4 py-4">
       {/* Image Upload Section */}
-      <div className="border rounded-lg p-4 space-y-3 bg-slate-50">
+      <div className="border rounded-lg p-4 space-y-3 bg-muted">
         <Label className="text-sm font-medium flex items-center gap-2">
           <ImagePlus className="w-4 h-4" />
           Фото товара
@@ -376,7 +377,7 @@ function ProductForm({ onSuccess }: { onSuccess: () => void }) {
         )}
       </div>
 
-      <div className="border rounded-lg p-4 space-y-3 bg-slate-50">
+      <div className="border rounded-lg p-4 space-y-3 bg-muted">
         <Label className="text-sm font-medium">Распределение остатков</Label>
         <div className="grid grid-cols-3 gap-3">
           <div className="grid gap-1">
@@ -468,7 +469,7 @@ function ImportProductsForm({ onSuccess }: { onSuccess: () => void }) {
 
   return (
     <div className="space-y-4 py-4">
-      <div className="border-2 border-dashed rounded-lg p-6 text-center bg-slate-50">
+      <div className="border-2 border-dashed rounded-lg p-6 text-center bg-muted">
         <Upload className="w-10 h-10 mx-auto text-slate-400 mb-3" />
         <Input
           type="file"
@@ -563,7 +564,7 @@ function StockInflowForm({ product, onSuccess }: { product: Product; onSuccess: 
         />
       </div>
 
-      <div className="border rounded-lg p-4 space-y-3 bg-slate-50">
+      <div className="border rounded-lg p-4 space-y-3 bg-muted">
         <Label className="text-sm font-medium">Распределить по каналам</Label>
         <div className="grid gap-3">
           <div className="flex items-center justify-between">
@@ -614,7 +615,7 @@ function ProductRow({ product, onInflow }: { product: Product; onInflow: () => v
   const { mutate: syncProduct, isPending: isSyncing } = useSyncProduct();
 
   return (
-    <TableRow className="group hover:bg-slate-50 transition-colors">
+    <TableRow className="group hover:bg-muted transition-colors">
       <TableCell className="font-medium">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded bg-slate-100 flex items-center justify-center text-slate-400">
