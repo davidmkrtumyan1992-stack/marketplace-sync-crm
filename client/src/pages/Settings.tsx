@@ -23,12 +23,12 @@ export default function Settings() {
       <div className="space-y-8 max-w-4xl mx-auto">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h2 className="text-3xl font-bold tracking-tight">Integrations</h2>
-            <p className="text-muted-foreground mt-1">Connect your marketplaces to sync inventory.</p>
+            <h2 className="text-3xl font-bold tracking-tight">Интеграции</h2>
+            <p className="text-muted-foreground mt-1">Подключите маркетплейсы для синхронизации остатков.</p>
           </div>
           <Button onClick={() => syncAll()} disabled={isSyncing} variant="outline">
             <RefreshCw className={`w-4 h-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
-            Sync All Now
+            Синхронизировать всё
           </Button>
         </div>
 
@@ -36,7 +36,7 @@ export default function Settings() {
           <MarketplaceCard 
             title="Ozon" 
             marketplace="ozon"
-            description="Sync products and orders with Ozon Seller API."
+            description="Синхронизация товаров и заказов через Ozon Seller API."
             existingSettings={ozonSettings}
             logoColor="text-blue-600"
           />
@@ -44,7 +44,7 @@ export default function Settings() {
           <MarketplaceCard 
             title="Wildberries" 
             marketplace="wildberries"
-            description="Connect your WB partner account via API Key."
+            description="Подключите ваш партнёрский аккаунт WB через API ключ."
             existingSettings={wbSettings}
             logoColor="text-purple-600"
           />
@@ -110,7 +110,7 @@ function MarketplaceCard({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Label htmlFor={`${marketplace}-active`} className="text-sm text-muted-foreground">Active</Label>
+            <Label htmlFor={`${marketplace}-active`} className="text-sm text-muted-foreground">Активен</Label>
             <Switch 
               id={`${marketplace}-active`}
               checked={form.watch("isActive")}
@@ -122,8 +122,8 @@ function MarketplaceCard({
       <CardContent className="pt-6">
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
           <div className="grid gap-2">
-            <Label>API Key</Label>
-            <Input type="password" {...form.register("apiKey")} placeholder="Your API Key" />
+            <Label>API ключ</Label>
+            <Input type="password" {...form.register("apiKey")} placeholder="Ваш API ключ" />
             {form.formState.errors.apiKey && <span className="text-xs text-red-500">{form.formState.errors.apiKey.message}</span>}
           </div>
           
@@ -136,7 +136,7 @@ function MarketplaceCard({
 
           <div className="flex justify-end pt-2">
             <Button type="submit" disabled={isPending}>
-              {isPending ? "Saving..." : "Save Configuration"}
+              {isPending ? "Сохранение..." : "Сохранить настройки"}
             </Button>
           </div>
         </form>

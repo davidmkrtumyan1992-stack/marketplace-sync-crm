@@ -26,11 +26,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const navItems = [
-    { href: "/", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/products", label: "Inventory", icon: Package },
-    { href: "/orders", label: "Orders", icon: ShoppingCart },
-    { href: "/customers", label: "Customers", icon: Users },
-    { href: "/settings", label: "Marketplace", icon: Settings },
+    { href: "/", label: "Панель управления", icon: LayoutDashboard },
+    { href: "/products", label: "Товары", icon: Package },
+    { href: "/orders", label: "Заказы", icon: ShoppingCart },
+    { href: "/customers", label: "Клиенты", icon: Users },
+    { href: "/settings", label: "Маркетплейсы", icon: Settings },
   ];
 
   return (
@@ -39,7 +39,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <aside className="hidden lg:flex flex-col w-64 bg-slate-900 text-white border-r border-slate-800">
         <div className="p-6">
           <h1 className="text-xl font-bold tracking-tight text-blue-400">CloudERP</h1>
-          <p className="text-xs text-slate-400 mt-1">Inventory & Sales</p>
+          <p className="text-xs text-slate-400 mt-1">Учёт товаров и продаж</p>
         </div>
         
         <nav className="flex-1 px-4 space-y-1">
@@ -64,7 +64,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3 px-2 py-2">
             <Avatar className="h-8 w-8 border border-slate-700">
               <AvatarImage src={user?.profileImageUrl} />
-              <AvatarFallback>{user?.firstName?.charAt(0) || "U"}</AvatarFallback>
+              <AvatarFallback>{user?.firstName?.charAt(0) || "П"}</AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{user?.firstName} {user?.lastName}</p>
@@ -101,7 +101,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               ))}
               <button onClick={() => logout()} className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-base font-medium text-red-400">
                 <LogOut size={20} />
-                Logout
+                Выйти
               </button>
             </nav>
           </div>

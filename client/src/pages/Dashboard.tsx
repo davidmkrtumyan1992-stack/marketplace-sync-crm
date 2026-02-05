@@ -3,62 +3,93 @@ import { StatsCard } from "@/components/StatsCard";
 import { useProducts } from "@/hooks/use-products";
 import { useOrders } from "@/hooks/use-orders";
 import { useCustomers } from "@/hooks/use-customers";
-import { Package, ShoppingCart, Users, DollarSign } from "lucide-react";
+import { Package, ShoppingCart, Users, DollarSign, Database } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Dashboard() {
   const { data: products } = useProducts();
   const { data: orders } = useOrders();
   const { data: customers } = useCustomers();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
 
-  // Derived Statistics
+  const seedMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/seed"),
+    onSuccess: () => {
+      toast({ title: "Готово", description: "Демо-данные успешно созданы" });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+    },
+    onError: () => {
+      toast({ title: "Ошибка", description: "Не удалось создать демо-данные", variant: "destructive" });
+    }
+  });
+
+  // Производные статистики
   const totalProducts = products?.length || 0;
   const lowStock = products?.filter(p => p.stockQuantity < 10).length || 0;
   const totalOrders = orders?.length || 0;
   const totalRevenue = orders?.reduce((acc, order) => acc + Number(order.totalAmount), 0) || 0;
   const totalCustomers = customers?.length || 0;
 
-  // Mock chart data - in a real app this would come from an analytics endpoint
+  // Данные для графика
   const chartData = [
-    { name: 'Mon', sales: 4000 },
-    { name: 'Tue', sales: 3000 },
-    { name: 'Wed', sales: 2000 },
-    { name: 'Thu', sales: 2780 },
-    { name: 'Fri', sales: 1890 },
-    { name: 'Sat', sales: 2390 },
-    { name: 'Sun', sales: 3490 },
+    { name: 'Пн', sales: 4000 },
+    { name: 'Вт', sales: 3000 },
+    { name: 'Ср', sales: 2000 },
+    { name: 'Чт', sales: 2780 },
+    { name: 'Пт', sales: 1890 },
+    { name: 'Сб', sales: 2390 },
+    { name: 'Вс', sales: 3490 },
   ];
 
   return (
     <Layout>
       <div className="space-y-8">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-          <p className="text-muted-foreground mt-1">Overview of your business performance.</p>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h2 className="text-3xl font-bold tracking-tight">Панель управления</h2>
+            <p className="text-muted-foreground mt-1">Обзор эффективности вашего бизнеса.</p>
+          </div>
+          {totalProducts === 0 && (
+            <Button 
+              onClick={() => seedMutation.mutate()} 
+              disabled={seedMutation.isPending}
+              className="shadow-lg"
+            >
+              <Database className="w-4 h-4 mr-2" />
+              {seedMutation.isPending ? "Создание..." : "Создать демо-данные"}
+            </Button>
+          )}
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <StatsCard
-            title="Total Revenue"
-            value={`$${totalRevenue.toLocaleString()}`}
+            title="Общая выручка"
+            value={`${totalRevenue.toLocaleString('ru-RU')} ₽`}
             icon={DollarSign}
             trend={{ value: 12, isPositive: true }}
           />
           <StatsCard
-            title="Active Orders"
+            title="Активные заказы"
             value={totalOrders}
             icon={ShoppingCart}
-            description="Pending shipment"
+            description="Ожидают отправки"
           />
           <StatsCard
-            title="Inventory Items"
+            title="Товаров на складе"
             value={totalProducts}
             icon={Package}
-            description={`${lowStock} low stock items`}
+            description={`${lowStock} с низким остатком`}
           />
           <StatsCard
-            title="Total Customers"
+            title="Всего клиентов"
             value={totalCustomers}
             icon={Users}
             trend={{ value: 4, isPositive: true }}
@@ -68,7 +99,7 @@ export default function Dashboard() {
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
           <Card className="col-span-4 dashboard-card">
             <CardHeader>
-              <CardTitle>Weekly Sales Overview</CardTitle>
+              <CardTitle>Продажи за неделю</CardTitle>
             </CardHeader>
             <CardContent className="pl-2">
               <div className="h-[300px]">
@@ -87,11 +118,12 @@ export default function Dashboard() {
                       fontSize={12} 
                       tickLine={false} 
                       axisLine={false} 
-                      tickFormatter={(value) => `$${value}`} 
+                      tickFormatter={(value) => `${value} ₽`} 
                     />
                     <Tooltip 
                       cursor={{fill: '#f3f4f6'}}
                       contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                      formatter={(value: number) => [`${value.toLocaleString('ru-RU')} ₽`, 'Продажи']}
                     />
                     <Bar dataKey="sales" fill="#3b82f6" radius={[4, 4, 0, 0]} />
                   </BarChart>
@@ -102,7 +134,7 @@ export default function Dashboard() {
 
           <Card className="col-span-3 dashboard-card">
             <CardHeader>
-              <CardTitle>Low Stock Alert</CardTitle>
+              <CardTitle>Низкий остаток</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
@@ -114,16 +146,16 @@ export default function Dashboard() {
                       </div>
                       <div>
                         <p className="text-sm font-medium leading-none">{product.name}</p>
-                        <p className="text-xs text-muted-foreground mt-1">SKU: {product.sku}</p>
+                        <p className="text-xs text-muted-foreground mt-1">Артикул: {product.sku}</p>
                       </div>
                     </div>
                     <div className="text-sm font-bold text-red-600">
-                      {product.stockQuantity} left
+                      {product.stockQuantity} шт.
                     </div>
                   </div>
                 ))}
                 {lowStock === 0 && (
-                  <p className="text-sm text-muted-foreground text-center py-4">No low stock items.</p>
+                  <p className="text-sm text-muted-foreground text-center py-4">Нет товаров с низким остатком.</p>
                 )}
               </div>
             </CardContent>

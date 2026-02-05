@@ -33,19 +33,19 @@ export default function Customers() {
       <div className="space-y-6">
         <div className="flex justify-between items-center">
           <div>
-            <h2 className="text-3xl font-bold tracking-tight">Customers</h2>
-            <p className="text-muted-foreground mt-1">Manage your client database.</p>
+            <h2 className="text-3xl font-bold tracking-tight">Клиенты</h2>
+            <p className="text-muted-foreground mt-1">Управление базой клиентов.</p>
           </div>
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
             <DialogTrigger asChild>
               <Button size="lg" className="shadow-lg shadow-primary/25">
                 <UserPlus className="w-4 h-4 mr-2" />
-                Add Customer
+                Добавить клиента
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Add Customer</DialogTitle>
+                <DialogTitle>Добавить клиента</DialogTitle>
               </DialogHeader>
               <CustomerForm onSuccess={() => setIsCreateOpen(false)} />
             </DialogContent>
@@ -56,21 +56,21 @@ export default function Customers() {
           <Table>
             <TableHeader>
               <TableRow className="bg-slate-50/50">
-                <TableHead>Name</TableHead>
+                <TableHead>Имя</TableHead>
                 <TableHead>Email</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead>Notes</TableHead>
+                <TableHead>Телефон</TableHead>
+                <TableHead>Заметки</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="h-24 text-center">Loading customers...</TableCell>
+                  <TableCell colSpan={4} className="h-24 text-center">Загрузка клиентов...</TableCell>
                 </TableRow>
               ) : customers?.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
-                    No customers found.
+                    Клиенты не найдены.
                   </TableCell>
                 </TableRow>
               ) : (
@@ -121,7 +121,7 @@ function CustomerForm({ onSuccess }: { onSuccess: () => void }) {
   return (
     <form onSubmit={form.handleSubmit((data) => mutate(data, { onSuccess }))} className="space-y-4 py-4">
       <div className="grid gap-2">
-        <Label htmlFor="name">Name</Label>
+        <Label htmlFor="name">Имя</Label>
         <Input id="name" {...form.register("name")} />
         {form.formState.errors.name && <span className="text-xs text-red-500">{form.formState.errors.name.message}</span>}
       </div>
@@ -130,15 +130,15 @@ function CustomerForm({ onSuccess }: { onSuccess: () => void }) {
         <Input id="email" type="email" {...form.register("email")} />
       </div>
       <div className="grid gap-2">
-        <Label htmlFor="phone">Phone</Label>
+        <Label htmlFor="phone">Телефон</Label>
         <Input id="phone" {...form.register("phone")} />
       </div>
       <div className="grid gap-2">
-        <Label htmlFor="notes">Notes</Label>
+        <Label htmlFor="notes">Заметки</Label>
         <Input id="notes" {...form.register("notes")} />
       </div>
       <Button type="submit" className="w-full mt-2" disabled={isPending}>
-        {isPending ? "Adding..." : "Add Customer"}
+        {isPending ? "Добавление..." : "Добавить клиента"}
       </Button>
     </form>
   );
