@@ -4,6 +4,49 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { z } from "zod";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import * as XLSX from "xlsx";
+import mammoth from "mammoth";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
+
+// Configure multer for file uploads
+const imageStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(process.cwd(), "uploads/images");
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const uploadImage = multer({
+  storage: imageStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    if (extname && mimetype) {
+      cb(null, true);
+    } else {
+      cb(new Error("Только изображения (jpg, png, gif, webp)"));
+    }
+  }
+});
+
+const uploadFile = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+});
 
 export async function registerRoutes(
   httpServer: Server,
@@ -170,6 +213,144 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Seed error:", error);
       res.status(500).json({ message: "Ошибка при создании демо-данных" });
+    }
+  });
+
+  // Image Upload Endpoint
+  app.post("/api/upload/image", isAuthenticated, uploadImage.single("image"), (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ message: "Файл не загружен" });
+    }
+    const imageUrl = `/uploads/images/${req.file.filename}`;
+    res.json({ imageUrl });
+  });
+
+  // Serve uploaded images with path traversal protection
+  app.use("/uploads/images", (req, res, next) => {
+    const baseDir = path.join(process.cwd(), "uploads/images");
+    // Normalize and resolve the path
+    const requestedPath = path.normalize(req.path).replace(/^(\.\.(\/|\\|$))+/, "");
+    const filePath = path.resolve(baseDir, requestedPath);
+    
+    // Ensure the resolved path is within the uploads directory
+    if (!filePath.startsWith(baseDir)) {
+      return res.status(403).json({ message: "Доступ запрещён" });
+    }
+    
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      res.sendFile(filePath);
+    } else {
+      res.status(404).json({ message: "Файл не найден" });
+    }
+  });
+
+  // Product Import from File (Excel, Word, PDF)
+  app.post("/api/products/import", isAuthenticated, uploadFile.single("file"), async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ message: "Файл не загружен" });
+    }
+
+    const orgId = getOrgId(req);
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    let products: any[] = [];
+
+    try {
+      if (ext === ".xlsx" || ext === ".xls") {
+        // Parse Excel
+        const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const data = XLSX.utils.sheet_to_json(sheet);
+        
+        products = data.map((row: any, index: number) => ({
+          name: row["Название"] || row["name"] || row["Name"] || `Товар ${index + 1}`,
+          sku: row["Артикул"] || row["sku"] || row["SKU"] || `SKU-${Date.now()}-${index}`,
+          purchasePrice: String(row["Закупка"] || row["purchasePrice"] || row["Закупочная цена"] || 0),
+          sellingPrice: String(row["Продажа"] || row["sellingPrice"] || row["Цена продажи"] || row["Цена"] || 0),
+          stockLocal: Number(row["Склад"] || row["stockLocal"] || row["Количество"] || 0),
+          category: row["Категория"] || row["category"] || "",
+          description: row["Описание"] || row["description"] || "",
+        }));
+      } else if (ext === ".docx" || ext === ".doc") {
+        // Parse Word document
+        const result = await mammoth.extractRawText({ buffer: req.file.buffer });
+        const lines = result.value.split("\n").filter(line => line.trim());
+        
+        // Try to parse table-like structure
+        products = [];
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (line && !line.startsWith("#") && !line.toLowerCase().includes("название")) {
+            // Parse tab or space separated values
+            const parts = line.split(/\t|\s{2,}/).map(p => p.trim());
+            if (parts.length >= 1 && parts[0]) {
+              products.push({
+                name: parts[0],
+                sku: parts[1] || `SKU-${Date.now()}-${i}`,
+                purchasePrice: String(parts[2] || 0),
+                sellingPrice: String(parts[3] || 0),
+                stockLocal: Number(parts[4] || 0),
+                category: parts[5] || "",
+                description: "",
+              });
+            }
+          }
+        }
+      } else if (ext === ".pdf") {
+        // Parse PDF
+        const pdfData = await pdfParse(req.file.buffer);
+        const lines: string[] = pdfData.text.split("\n").filter((line: string) => line.trim());
+        
+        products = [];
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (line && !line.toLowerCase().includes("название") && line.length > 3) {
+            const parts = line.split(/\t|\s{2,}/).map((p: string) => p.trim());
+            if (parts.length >= 1 && parts[0] && !/^\d+$/.test(parts[0])) {
+              products.push({
+                name: parts[0],
+                sku: parts[1] || `SKU-${Date.now()}-${i}`,
+                purchasePrice: String(parts[2]?.replace(/[^\d.]/g, "") || 0),
+                sellingPrice: String(parts[3]?.replace(/[^\d.]/g, "") || 0),
+                stockLocal: Number(parts[4]?.replace(/\D/g, "") || 0),
+                category: "",
+                description: "",
+              });
+            }
+          }
+        }
+      } else {
+        return res.status(400).json({ message: "Неподдерживаемый формат файла. Используйте Excel (.xlsx), Word (.docx) или PDF." });
+      }
+
+      // Create products in database
+      const created: any[] = [];
+      const errors: string[] = [];
+      
+      for (const p of products) {
+        try {
+          const product = await storage.createProduct({
+            ...p,
+            price: p.sellingPrice,
+            stockOzon: 0,
+            stockWb: 0,
+            organizationId: orgId,
+          });
+          created.push(product);
+        } catch (err: any) {
+          errors.push(`${p.name}: ${err.message}`);
+        }
+      }
+
+      res.json({
+        success: true,
+        imported: created.length,
+        errors: errors.length > 0 ? errors : undefined,
+        message: `Импортировано ${created.length} товаров${errors.length > 0 ? `, ошибок: ${errors.length}` : ""}`
+      });
+    } catch (error: any) {
+      console.error("Import error:", error);
+      res.status(500).json({ message: `Ошибка импорта: ${error.message}` });
     }
   });
 

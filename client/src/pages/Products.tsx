@@ -37,10 +37,11 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { formatCurrency, formatQuantity } from "@/lib/format";
+import { queryClient } from "@/lib/queryClient";
 
 const formSchema = insertProductSchema.extend({
   purchasePrice: z.coerce.number(),
@@ -72,6 +73,7 @@ export default function Products() {
   const { data: products, isLoading } = useProducts();
   const [search, setSearch] = useState("");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [inflowProduct, setInflowProduct] = useState<Product | null>(null);
   const { toast } = useToast();
 
@@ -88,21 +90,40 @@ export default function Products() {
             <h2 className="text-3xl font-bold tracking-tight">Товары</h2>
             <p className="text-muted-foreground mt-1">Управление товарами и остатками.</p>
           </div>
-          <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-            <DialogTrigger asChild>
-              <Button size="lg" className="shadow-lg shadow-primary/25">
-                <Plus className="w-4 h-4 mr-2" />
-                Добавить товар
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>Добавить новый товар</DialogTitle>
-                <DialogDescription>Заполните информацию о товаре</DialogDescription>
-              </DialogHeader>
-              <ProductForm onSuccess={() => setIsCreateOpen(false)} />
-            </DialogContent>
-          </Dialog>
+          <div className="flex gap-2">
+            <Dialog open={isImportOpen} onOpenChange={setIsImportOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="lg" data-testid="button-import-products">
+                  <FileSpreadsheet className="w-4 h-4 mr-2" />
+                  Импорт из файла
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Импорт товаров из файла</DialogTitle>
+                  <DialogDescription>
+                    Загрузите файл Excel (.xlsx), Word (.docx) или PDF с товарами
+                  </DialogDescription>
+                </DialogHeader>
+                <ImportProductsForm onSuccess={() => setIsImportOpen(false)} />
+              </DialogContent>
+            </Dialog>
+            <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+              <DialogTrigger asChild>
+                <Button size="lg" className="shadow-lg shadow-primary/25" data-testid="button-add-product">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Добавить товар
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Добавить новый товар</DialogTitle>
+                  <DialogDescription>Заполните информацию о товаре</DialogDescription>
+                </DialogHeader>
+                <ProductForm onSuccess={() => setIsCreateOpen(false)} />
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
 
         <div className="flex items-center gap-4 bg-white p-4 rounded-xl border shadow-sm">
@@ -169,6 +190,11 @@ export default function Products() {
 
 function ProductForm({ onSuccess }: { onSuccess: () => void }) {
   const { mutate, isPending } = useCreateProduct();
+  const { toast } = useToast();
+  const [markup, setMarkup] = useState(0);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -192,10 +218,48 @@ function ProductForm({ onSuccess }: { onSuccess: () => void }) {
   const stockLocal = form.watch("stockLocal") || 0;
   const stockOzon = form.watch("stockOzon") || 0;
   const stockWb = form.watch("stockWb") || 0;
+  const purchasePrice = form.watch("purchasePrice") || 0;
 
   useEffect(() => {
     form.setValue("stockQuantity", stockLocal + stockOzon + stockWb);
   }, [stockLocal, stockOzon, stockWb, form]);
+
+  // Auto-calculate selling price from markup
+  useEffect(() => {
+    if (markup > 0 && purchasePrice > 0) {
+      const newSellingPrice = purchasePrice * (1 + markup / 100);
+      form.setValue("sellingPrice", Math.round(newSellingPrice * 100) / 100);
+    }
+  }, [markup, purchasePrice, form]);
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append("image", file);
+
+    try {
+      const response = await fetch("/api/upload/image", {
+        method: "POST",
+        body: formData,
+        credentials: "include"
+      });
+
+      if (!response.ok) {
+        throw new Error("Ошибка загрузки");
+      }
+
+      const { imageUrl: url } = await response.json();
+      setImageUrl(url);
+      toast({ title: "Фото загружено" });
+    } catch (error) {
+      toast({ title: "Ошибка загрузки фото", variant: "destructive" });
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   return (
     <form onSubmit={form.handleSubmit((data) => {
@@ -207,24 +271,53 @@ function ProductForm({ onSuccess }: { onSuccess: () => void }) {
         weight: data.weight?.toString() || null,
         logisticsCost: data.logisticsCost?.toString() || "0",
         marketplaceCommission: data.marketplaceCommission?.toString() || "15",
+        imageUrl: imageUrl,
       };
       mutate(submitData as any, { onSuccess });
     })} className="space-y-4 py-4">
+      {/* Image Upload Section */}
+      <div className="border rounded-lg p-4 space-y-3 bg-slate-50">
+        <Label className="text-sm font-medium flex items-center gap-2">
+          <ImagePlus className="w-4 h-4" />
+          Фото товара
+        </Label>
+        <div className="flex items-center gap-4">
+          {imageUrl ? (
+            <img src={imageUrl} alt="Preview" className="w-20 h-20 object-cover rounded-lg border" />
+          ) : (
+            <div className="w-20 h-20 bg-slate-200 rounded-lg flex items-center justify-center">
+              <ImagePlus className="w-8 h-8 text-slate-400" />
+            </div>
+          )}
+          <div className="flex-1">
+            <Input
+              type="file"
+              accept="image/*"
+              onChange={handleImageUpload}
+              disabled={isUploading}
+              className="cursor-pointer"
+              data-testid="input-product-image"
+            />
+            <p className="text-xs text-muted-foreground mt-1">JPG, PNG, WebP до 10 МБ</p>
+          </div>
+        </div>
+      </div>
+
       <div className="grid gap-2">
         <Label htmlFor="name">Название товара</Label>
-        <Input id="name" {...form.register("name")} placeholder="например, Беспроводные наушники" />
+        <Input id="name" {...form.register("name")} placeholder="например, Беспроводные наушники" data-testid="input-product-name" />
         {form.formState.errors.name && <span className="text-xs text-red-500">{form.formState.errors.name.message}</span>}
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label htmlFor="sku">Артикул (SKU)</Label>
-          <Input id="sku" {...form.register("sku")} placeholder="WH-001" />
+          <Input id="sku" {...form.register("sku")} placeholder="WH-001" data-testid="input-product-sku" />
         </div>
         <div className="grid gap-2">
           <Label>Категория</Label>
           <Select onValueChange={(val) => form.setValue("category", val)}>
-            <SelectTrigger>
+            <SelectTrigger data-testid="select-category">
               <SelectValue placeholder="Выберите категорию" />
             </SelectTrigger>
             <SelectContent>
@@ -236,15 +329,51 @@ function ProductForm({ onSuccess }: { onSuccess: () => void }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div className="grid gap-2">
-          <Label htmlFor="purchasePrice">Закупочная цена, ₽</Label>
-          <Input id="purchasePrice" type="number" step="0.01" {...form.register("purchasePrice")} />
+      {/* Pricing with Markup Calculator */}
+      <div className="border rounded-lg p-4 space-y-3 bg-blue-50/50">
+        <Label className="text-sm font-medium flex items-center gap-2">
+          <Percent className="w-4 h-4" />
+          Ценообразование
+        </Label>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="grid gap-1">
+            <Label htmlFor="purchasePrice" className="text-xs text-muted-foreground">Закупка, ₽</Label>
+            <Input 
+              id="purchasePrice" 
+              type="number" 
+              step="0.01" 
+              {...form.register("purchasePrice")} 
+              data-testid="input-purchase-price"
+            />
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="markup" className="text-xs text-muted-foreground">Наценка, %</Label>
+            <Input 
+              id="markup" 
+              type="number" 
+              step="1"
+              value={markup}
+              onChange={(e) => setMarkup(Number(e.target.value))}
+              placeholder="50"
+              data-testid="input-markup-percent"
+            />
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="sellingPrice" className="text-xs text-muted-foreground">Продажа, ₽</Label>
+            <Input 
+              id="sellingPrice" 
+              type="number" 
+              step="0.01" 
+              {...form.register("sellingPrice")} 
+              data-testid="input-selling-price"
+            />
+          </div>
         </div>
-        <div className="grid gap-2">
-          <Label htmlFor="sellingPrice">Продажная цена, ₽</Label>
-          <Input id="sellingPrice" type="number" step="0.01" {...form.register("sellingPrice")} />
-        </div>
+        {markup > 0 && purchasePrice > 0 && (
+          <p className="text-xs text-blue-600">
+            Наценка {markup}% от {purchasePrice} ₽ = {Math.round(purchasePrice * (1 + markup / 100) * 100) / 100} ₽
+          </p>
+        )}
       </div>
 
       <div className="border rounded-lg p-4 space-y-3 bg-slate-50">
@@ -252,15 +381,15 @@ function ProductForm({ onSuccess }: { onSuccess: () => void }) {
         <div className="grid grid-cols-3 gap-3">
           <div className="grid gap-1">
             <Label htmlFor="stockLocal" className="text-xs text-muted-foreground">На складе</Label>
-            <Input id="stockLocal" type="number" {...form.register("stockLocal")} />
+            <Input id="stockLocal" type="number" {...form.register("stockLocal")} data-testid="input-stock-local" />
           </div>
           <div className="grid gap-1">
             <Label htmlFor="stockOzon" className="text-xs text-muted-foreground">Ozon</Label>
-            <Input id="stockOzon" type="number" {...form.register("stockOzon")} />
+            <Input id="stockOzon" type="number" {...form.register("stockOzon")} data-testid="input-stock-ozon" />
           </div>
           <div className="grid gap-1">
             <Label htmlFor="stockWb" className="text-xs text-muted-foreground">Wildberries</Label>
-            <Input id="stockWb" type="number" {...form.register("stockWb")} />
+            <Input id="stockWb" type="number" {...form.register("stockWb")} data-testid="input-stock-wb" />
           </div>
         </div>
         <p className="text-xs text-muted-foreground">Итого: {stockLocal + stockOzon + stockWb} шт.</p>
@@ -286,10 +415,104 @@ function ProductForm({ onSuccess }: { onSuccess: () => void }) {
         <Input id="desc" {...form.register("description")} />
       </div>
 
-      <Button type="submit" className="w-full mt-2" disabled={isPending}>
+      <Button type="submit" className="w-full mt-2" disabled={isPending || isUploading} data-testid="button-create-product">
         {isPending ? "Создание..." : "Создать товар"}
       </Button>
     </form>
+  );
+}
+
+function ImportProductsForm({ onSuccess }: { onSuccess: () => void }) {
+  const { toast } = useToast();
+  const [isUploading, setIsUploading] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+
+  const handleImport = async () => {
+    if (!file) return;
+
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await fetch("/api/products/import", {
+        method: "POST",
+        body: formData,
+        credentials: "include"
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || "Ошибка импорта");
+      }
+
+      toast({ 
+        title: "Импорт завершён", 
+        description: result.message 
+      });
+      
+      // Invalidate products query to refresh the list
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      onSuccess();
+    } catch (error: any) {
+      toast({ 
+        title: "Ошибка импорта", 
+        description: error.message,
+        variant: "destructive" 
+      });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4 py-4">
+      <div className="border-2 border-dashed rounded-lg p-6 text-center bg-slate-50">
+        <Upload className="w-10 h-10 mx-auto text-slate-400 mb-3" />
+        <Input
+          type="file"
+          accept=".xlsx,.xls,.docx,.doc,.pdf"
+          onChange={(e) => setFile(e.target.files?.[0] || null)}
+          className="cursor-pointer"
+          data-testid="input-import-file"
+        />
+        <p className="text-xs text-muted-foreground mt-2">
+          Поддерживаемые форматы: Excel (.xlsx), Word (.docx), PDF
+        </p>
+      </div>
+
+      {file && (
+        <div className="bg-blue-50 p-3 rounded-lg flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileSpreadsheet className="w-5 h-5 text-blue-600" />
+            <span className="text-sm font-medium">{file.name}</span>
+          </div>
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={() => setFile(null)}
+          >
+            Удалить
+          </Button>
+        </div>
+      )}
+
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+        <p className="text-xs text-amber-800">
+          <strong>Формат файла Excel:</strong> Используйте колонки: Название, Артикул, Закупка, Продажа, Склад, Категория, Описание
+        </p>
+      </div>
+
+      <Button 
+        onClick={handleImport} 
+        className="w-full" 
+        disabled={!file || isUploading}
+        data-testid="button-import-submit"
+      >
+        {isUploading ? "Импорт..." : "Импортировать товары"}
+      </Button>
+    </div>
   );
 }
 
