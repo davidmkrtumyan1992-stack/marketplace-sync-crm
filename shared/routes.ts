@@ -4,10 +4,15 @@ import {
   insertCustomerSchema, 
   insertOrderSchema, 
   insertMarketplaceSettingsSchema,
+  insertTaxSettingsSchema,
+  insertStockInflowSchema,
   products,
   customers,
   orders,
-  marketplaceSettings
+  marketplaceSettings,
+  taxSettings,
+  auditLog,
+  stockInflow
 } from './schema';
 
 export const errorSchemas = {
@@ -66,7 +71,7 @@ export const api = {
         404: errorSchemas.notFound,
       },
     },
-    sync: { // Manual trigger to sync specific product with marketplaces
+    sync: {
       method: 'POST' as const,
       path: '/api/products/:id/sync',
       responses: {
@@ -115,14 +120,14 @@ export const api = {
       method: 'GET' as const,
       path: '/api/orders',
       responses: {
-        200: z.array(z.custom<any>()), // OrderWithDetails type complex to Zod-ify fully here, using custom
+        200: z.array(z.custom<any>()),
       },
     },
     get: {
       method: 'GET' as const,
       path: '/api/orders/:id',
       responses: {
-        200: z.custom<any>(), // OrderWithDetails
+        200: z.custom<any>(),
         404: errorSchemas.notFound,
       },
     },
@@ -176,7 +181,71 @@ export const api = {
         200: z.object({ success: z.boolean(), message: z.string() }),
       },
     }
-  }
+  },
+  taxSettings: {
+    get: {
+      method: 'GET' as const,
+      path: '/api/settings/tax',
+      responses: {
+        200: z.custom<typeof taxSettings.$inferSelect>().nullable(),
+      },
+    },
+    save: {
+      method: 'POST' as const,
+      path: '/api/settings/tax',
+      input: insertTaxSettingsSchema,
+      responses: {
+        201: z.custom<typeof taxSettings.$inferSelect>(),
+        400: errorSchemas.validation,
+      },
+    },
+  },
+  kpi: {
+    get: {
+      method: 'GET' as const,
+      path: '/api/kpi',
+      responses: {
+        200: z.object({
+          totalStock: z.number(),
+          capitalization: z.number(),
+          expectedRevenue: z.number(),
+          expectedProfit: z.number(),
+          stockDistribution: z.object({
+            local: z.number(),
+            ozon: z.number(),
+            wb: z.number(),
+          }),
+        }),
+      },
+    },
+  },
+  auditLog: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/audit-log',
+      responses: {
+        200: z.array(z.custom<typeof auditLog.$inferSelect>()),
+      },
+    },
+  },
+  stockInflow: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/stock-inflow',
+      responses: {
+        200: z.array(z.custom<typeof stockInflow.$inferSelect>()),
+      },
+    },
+    create: {
+      method: 'POST' as const,
+      path: '/api/stock-inflow',
+      input: insertStockInflowSchema,
+      responses: {
+        201: z.custom<typeof stockInflow.$inferSelect>(),
+        400: errorSchemas.validation,
+      },
+    },
+  },
 };
 
 export function buildUrl(path: string, params?: Record<string, string | number>): string {

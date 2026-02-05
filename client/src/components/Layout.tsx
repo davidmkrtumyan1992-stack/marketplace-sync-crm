@@ -8,7 +8,8 @@ import {
   Settings,
   LogOut,
   Menu,
-  X
+  X,
+  FileBarChart
 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -30,7 +31,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/products", label: "Товары", icon: Package },
     { href: "/orders", label: "Заказы", icon: ShoppingCart },
     { href: "/customers", label: "Клиенты", icon: Users },
-    { href: "/settings", label: "Маркетплейсы", icon: Settings },
+    { href: "/reports", label: "Отчёты", icon: FileBarChart },
+    { href: "/settings", label: "Настройки", icon: Settings },
   ];
 
   return (

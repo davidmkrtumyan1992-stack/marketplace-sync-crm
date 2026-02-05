@@ -16,6 +16,10 @@ export async function registerRoutes(
 
   // Helper to get Org ID (User ID in this case)
   const getOrgId = (req: any) => req.user?.claims?.sub;
+  const getUserInfo = (req: any) => ({
+    userId: req.user?.claims?.sub || "",
+    userName: `${req.user?.claims?.first_name || ""} ${req.user?.claims?.last_name || ""}`.trim() || "System"
+  });
 
   // Products
   app.get(api.products.list.path, isAuthenticated, async (req, res) => {
@@ -48,6 +52,14 @@ export async function registerRoutes(
   app.delete(api.products.delete.path, isAuthenticated, async (req, res) => {
     await storage.deleteProduct(Number(req.params.id));
     res.status(204).send();
+  });
+
+  app.post(api.products.sync.path, isAuthenticated, async (req, res) => {
+    const productId = Number(req.params.id);
+    const product = await storage.getProduct(productId);
+    if (!product) return res.status(404).json({ message: "Product not found" });
+    // TODO: Implement actual marketplace sync via API
+    res.json({ success: true, message: "Синхронизация запущена" });
   });
 
   // Customers
@@ -98,12 +110,58 @@ export async function registerRoutes(
   });
 
   app.post(api.marketplace.syncAll.path, isAuthenticated, async (req, res) => {
-    // This is where you would iterate over settings and call external APIs
-    // For MVP we just return success
-    res.json({ success: true, message: "Sync started in background" });
+    // TODO: Iterate over settings and call external APIs
+    res.json({ success: true, message: "Синхронизация всех маркетплейсов запущена" });
   });
 
-  // Seed Data Endpoint (For testing)
+  // Tax Settings
+  app.get(api.taxSettings.get.path, isAuthenticated, async (req, res) => {
+    const settings = await storage.getTaxSettings(getOrgId(req));
+    res.json(settings || null);
+  });
+
+  app.post(api.taxSettings.save.path, isAuthenticated, async (req, res) => {
+    try {
+      const input = api.taxSettings.save.input.parse({ ...req.body, organizationId: getOrgId(req) });
+      const setting = await storage.saveTaxSettings(input);
+      res.status(201).json(setting);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json(err);
+      throw err;
+    }
+  });
+
+  // KPI Dashboard
+  app.get(api.kpi.get.path, isAuthenticated, async (req, res) => {
+    const kpi = await storage.getDashboardKPI(getOrgId(req));
+    res.json(kpi);
+  });
+
+  // Audit Log
+  app.get(api.auditLog.list.path, isAuthenticated, async (req, res) => {
+    const log = await storage.getAuditLog(getOrgId(req));
+    res.json(log);
+  });
+
+  // Stock Inflow
+  app.get(api.stockInflow.list.path, isAuthenticated, async (req, res) => {
+    const inflows = await storage.getStockInflows(getOrgId(req));
+    res.json(inflows);
+  });
+
+  app.post(api.stockInflow.create.path, isAuthenticated, async (req, res) => {
+    try {
+      const { userId, userName } = getUserInfo(req);
+      const input = api.stockInflow.create.input.parse({ ...req.body, organizationId: getOrgId(req) });
+      const inflow = await storage.createStockInflow(input, userId, userName);
+      res.status(201).json(inflow);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json(err);
+      throw err;
+    }
+  });
+
+  // Seed Data Endpoint
   app.post("/api/seed", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);

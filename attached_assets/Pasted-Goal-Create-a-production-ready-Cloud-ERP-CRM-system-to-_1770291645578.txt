@@ -1,0 +1,87 @@
+Goal: Create a production-ready Cloud ERP/CRM system to manage inventory across Ozon and Wildberries. The system must act as the "Single Source of Truth."
+
+1. General Styling & Localization Rules:
+
+Language: Russian (UI and data).
+
+Quotes: Use only angle quotes (« ») for all UI strings and labels.
+
+Numbers: Use a space as a thousand separator for all currency and quantity displays (e.g., «1 450 000 руб.», «1 200 шт.»).
+
+Aesthetic: Modern SaaS look, clean white/light-gray background with high-contrast KPI cards.
+
+2. Module: Financial & Inventory Dashboard (Main Screen): Display four primary KPI cards at the top:
+
+Общий остаток: Total units across all channels.
+
+Капитализация (Закупка): SUM(current_stock * purchase_price).
+
+Ожидаемая выручка: SUM(current_stock * selling_price).
+
+Прогноз чистой прибыли: Potential Revenue - (Cost + Marketplace Fees + Logistics + Taxes).
+
+Visuals: A pie chart showing stock distribution: «На складе», «Ozon», «Wildberries».
+
+3. Module: Advanced Inventory & «Split-Stock» Logic:
+
+Product Database: Fields: SKU (Артикул), Name, Category, Purchase Price, Selling Price, Weight, Dimensions.
+
+Stock Inflow (Оприходование): - Support manual entry and Excel upload.
+
+Smart Split Interface: When a user adds a batch (e.g., 50 units), show a form to distribute:
+
+Распределить на Ozon: [Input]
+
+Распределить на Wildberries: [Input]
+
+Оставить на локальном складе: [Auto-calculated remainder]
+
+Validation: Total distribution cannot exceed the batch quantity.
+
+4. Module: Russian Tax & Marketplace Expense Engine:
+
+Tax Settings: Toggle in settings between «УСН Доходы 6%» and «УСН Доходы минус Расходы 15%».
+
+Logistics & Fees:
+
+Per-item Logistics Cost field.
+
+Marketplace Commission % field (per category or global).
+
+Calculation Logic (2026 Compliance):
+
+For 6%: Tax = Gross Revenue * 0.06. (Note: Calculated from the price paid by the customer, not the payout).
+
+For 15%: Tax = (Gross Revenue - (Purchase Cost + Marketplace Fee + Logistics)) * 0.15.
+
+Min Tax: For 15% system, ensure tax is at least 1% of Gross Revenue.
+
+5. Module: Marketplace API Integration (Sync Engine):
+
+Settings: Secure storage for Ozon Client ID, Ozon API Key, and Wildberries API Token.
+
+Endpoints Logic:
+
+Ozon: Use POST /v2/products/stocks to update warehouse balances.
+
+Wildberries: Use PUT /api/v3/stocks/{warehouseId} to synchronize inventory.
+
+Auto-Sync: Any stock change in CRM (sale or manual edit) must trigger an immediate API push to the respective marketplace.
+
+Auto-Listing: Button «Опубликовать на маркетплейсы» to send product metadata via API to create/update cards.
+
+6. Module: Reports & Audit:
+
+P&L Statement: A monthly table showing: Gross Revenue | COGS | Marketplace Fees | Logistics | Taxes | Net Profit.
+
+Audit Log: Track all manual stock adjustments (User, Action, Timestamp, Delta).
+
+Technical Stack:
+
+Frontend: React with Tailwind CSS.
+
+Backend: Python (FastAPI/Flask) or Node.js.
+
+Database: PostgreSQL (Relational).
+
+Auth: Replit Auth.

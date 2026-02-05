@@ -48,10 +48,11 @@ export function useCreateProduct() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.products.list.path] });
-      toast({ title: "Product created", description: "Successfully added to inventory" });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      toast({ title: "Товар создан", description: "Добавлен в каталог" });
     },
     onError: (error: Error) => {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
     },
   });
 }
@@ -74,10 +75,11 @@ export function useUpdateProduct() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.products.list.path] });
-      toast({ title: "Product updated", description: "Changes saved successfully" });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      toast({ title: "Товар обновлён", description: "Изменения сохранены" });
     },
     onError: (error: Error) => {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
     },
   });
 }
@@ -94,7 +96,8 @@ export function useDeleteProduct() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.products.list.path] });
-      toast({ title: "Product deleted", description: "Item removed from inventory" });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      toast({ title: "Товар удалён", description: "Удалён из каталога" });
     },
   });
 }
@@ -109,7 +112,7 @@ export function useSyncProduct() {
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Sync initiated", description: "Product updates sent to marketplaces" });
+      toast({ title: "Синхронизация", description: "Обновления отправлены на маркетплейсы" });
     },
   });
 }

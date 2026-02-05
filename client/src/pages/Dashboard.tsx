@@ -2,19 +2,22 @@ import { Layout } from "@/components/Layout";
 import { StatsCard } from "@/components/StatsCard";
 import { useProducts } from "@/hooks/use-products";
 import { useOrders } from "@/hooks/use-orders";
-import { useCustomers } from "@/hooks/use-customers";
-import { Package, ShoppingCart, Users, DollarSign, Database } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { useKPI } from "@/hooks/use-kpi";
+import { Package, Warehouse, TrendingUp, Coins, Database } from "lucide-react";
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { formatCurrency, formatQuantity } from "@/lib/format";
+
+const COLORS = ['#3b82f6', '#8b5cf6', '#10b981'];
 
 export default function Dashboard() {
   const { data: products } = useProducts();
   const { data: orders } = useOrders();
-  const { data: customers } = useCustomers();
+  const { data: kpi, isLoading: kpiLoading } = useKPI();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -25,29 +28,34 @@ export default function Dashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
     },
     onError: () => {
       toast({ title: "Ошибка", description: "Не удалось создать демо-данные", variant: "destructive" });
     }
   });
 
-  // Производные статистики
   const totalProducts = products?.length || 0;
   const lowStock = products?.filter(p => p.stockQuantity < 10).length || 0;
-  const totalOrders = orders?.length || 0;
-  const totalRevenue = orders?.reduce((acc, order) => acc + Number(order.totalAmount), 0) || 0;
-  const totalCustomers = customers?.length || 0;
 
-  // Данные для графика
-  const chartData = [
-    { name: 'Пн', sales: 4000 },
-    { name: 'Вт', sales: 3000 },
-    { name: 'Ср', sales: 2000 },
-    { name: 'Чт', sales: 2780 },
-    { name: 'Пт', sales: 1890 },
-    { name: 'Сб', sales: 2390 },
-    { name: 'Вс', sales: 3490 },
-  ];
+  // Pie chart data for stock distribution
+  const pieData = kpi ? [
+    { name: "На складе", value: kpi.stockDistribution.local },
+    { name: "Ozon", value: kpi.stockDistribution.ozon },
+    { name: "Wildberries", value: kpi.stockDistribution.wb },
+  ].filter(d => d.value > 0) : [];
+
+  const CustomTooltip = ({ active, payload }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="bg-white p-2 border rounded shadow-lg">
+          <p className="text-sm font-medium">{payload[0].name}</p>
+          <p className="text-sm text-muted-foreground">{formatQuantity(payload[0].value)}</p>
+        </div>
+      );
+    }
+    return null;
+  };
 
   return (
     <Layout>
@@ -55,7 +63,7 @@ export default function Dashboard() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h2 className="text-3xl font-bold tracking-tight">Панель управления</h2>
-            <p className="text-muted-foreground mt-1">Обзор эффективности вашего бизнеса.</p>
+            <p className="text-muted-foreground mt-1">Финансовые показатели и аналитика склада</p>
           </div>
           {totalProducts === 0 && (
             <Button 
@@ -69,69 +77,74 @@ export default function Dashboard() {
           )}
         </div>
 
+        {/* KPI Cards - Main Financial Metrics */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <StatsCard
-            title="Общая выручка"
-            value={`${totalRevenue.toLocaleString('ru-RU')} ₽`}
-            icon={DollarSign}
-            trend={{ value: 12, isPositive: true }}
+            title="Общий остаток"
+            value={kpiLoading ? "..." : formatQuantity(kpi?.totalStock || 0)}
+            icon={Warehouse}
+            description="Единиц на всех каналах"
           />
           <StatsCard
-            title="Активные заказы"
-            value={totalOrders}
-            icon={ShoppingCart}
-            description="Ожидают отправки"
+            title="Капитализация (Закупка)"
+            value={kpiLoading ? "..." : formatCurrency(kpi?.capitalization || 0)}
+            icon={Coins}
+            description="Сумма по закупочной цене"
           />
           <StatsCard
-            title="Товаров на складе"
-            value={totalProducts}
+            title="Ожидаемая выручка"
+            value={kpiLoading ? "..." : formatCurrency(kpi?.expectedRevenue || 0)}
+            icon={TrendingUp}
+            description="По продажной цене"
+          />
+          <StatsCard
+            title="Прогноз чистой прибыли"
+            value={kpiLoading ? "..." : formatCurrency(kpi?.expectedProfit || 0)}
             icon={Package}
-            description={`${lowStock} с низким остатком`}
-          />
-          <StatsCard
-            title="Всего клиентов"
-            value={totalCustomers}
-            icon={Users}
-            trend={{ value: 4, isPositive: true }}
+            description="С учётом налогов и комиссий"
+            className={kpi && kpi.expectedProfit > 0 ? "border-green-200" : ""}
           />
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+          {/* Stock Distribution Pie Chart */}
           <Card className="col-span-4 dashboard-card">
             <CardHeader>
-              <CardTitle>Продажи за неделю</CardTitle>
+              <CardTitle>Распределение остатков</CardTitle>
             </CardHeader>
-            <CardContent className="pl-2">
-              <div className="h-[300px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                    <XAxis 
-                      dataKey="name" 
-                      stroke="#888888" 
-                      fontSize={12} 
-                      tickLine={false} 
-                      axisLine={false} 
-                    />
-                    <YAxis 
-                      stroke="#888888" 
-                      fontSize={12} 
-                      tickLine={false} 
-                      axisLine={false} 
-                      tickFormatter={(value) => `${value} ₽`} 
-                    />
-                    <Tooltip 
-                      cursor={{fill: '#f3f4f6'}}
-                      contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                      formatter={(value: number) => [`${value.toLocaleString('ru-RU')} ₽`, 'Продажи']}
-                    />
-                    <Bar dataKey="sales" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+            <CardContent>
+              {pieData.length > 0 ? (
+                <div className="h-[300px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={pieData}
+                        cx="50%"
+                        cy="50%"
+                        labelLine={false}
+                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                        outerRadius={100}
+                        fill="#8884d8"
+                        dataKey="value"
+                      >
+                        {pieData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<CustomTooltip />} />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+                  Нет данных для отображения
+                </div>
+              )}
             </CardContent>
           </Card>
 
+          {/* Low Stock Alert */}
           <Card className="col-span-3 dashboard-card">
             <CardHeader>
               <CardTitle>Низкий остаток</CardTitle>
@@ -161,6 +174,45 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Stock Distribution Summary Cards */}
+        {kpi && (
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card className="dashboard-card border-l-4 border-l-blue-500">
+              <CardContent className="pt-6">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">На складе</p>
+                    <p className="text-2xl font-bold">{formatQuantity(kpi.stockDistribution.local)}</p>
+                  </div>
+                  <Warehouse className="h-8 w-8 text-blue-500" />
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="dashboard-card border-l-4 border-l-purple-500">
+              <CardContent className="pt-6">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">Ozon</p>
+                    <p className="text-2xl font-bold">{formatQuantity(kpi.stockDistribution.ozon)}</p>
+                  </div>
+                  <div className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-bold">OZON</div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="dashboard-card border-l-4 border-l-green-500">
+              <CardContent className="pt-6">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">Wildberries</p>
+                    <p className="text-2xl font-bold">{formatQuantity(kpi.stockDistribution.wb)}</p>
+                  </div>
+                  <div className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-bold">WB</div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
       </div>
     </Layout>
   );

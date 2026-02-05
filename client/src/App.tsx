@@ -10,6 +10,7 @@ import Products from "@/pages/Products";
 import Orders from "@/pages/Orders";
 import Customers from "@/pages/Customers";
 import Settings from "@/pages/Settings";
+import Reports from "@/pages/Reports";
 import { useAuth } from "@/hooks/use-auth";
 import { Loader2 } from "lucide-react";
 
@@ -38,6 +39,7 @@ function Router() {
       <Route path="/products" component={() => <ProtectedRoute component={Products} />} />
       <Route path="/orders" component={() => <ProtectedRoute component={Orders} />} />
       <Route path="/customers" component={() => <ProtectedRoute component={Customers} />} />
+      <Route path="/reports" component={() => <ProtectedRoute component={Reports} />} />
       <Route path="/settings" component={() => <ProtectedRoute component={Settings} />} />
       <Route component={NotFound} />
     </Switch>
