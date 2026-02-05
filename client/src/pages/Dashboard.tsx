@@ -2,8 +2,8 @@ import { Layout } from "@/components/Layout";
 import { useProducts } from "@/hooks/use-products";
 import { useOrders } from "@/hooks/use-orders";
 import { useKPI } from "@/hooks/use-kpi";
-import { Package, Warehouse, TrendingUp, Coins, Database, ShoppingCart, Users, ArrowUpRight, BarChart3 } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
+import { Package, Warehouse, TrendingUp, Coins, Database, ArrowUpRight, BarChart3 } from "lucide-react";
+import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
@@ -12,7 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatCurrency, formatQuantity } from "@/lib/format";
 import { Customer } from "@shared/schema";
 
-const COLORS = ['#f59e0b', '#d97706', '#b45309'];
+const CHART_COLORS = ['#0FC2C0', '#0CABA8', '#008F8C'];
 
 export default function Dashboard() {
   const { data: products } = useProducts();
@@ -37,32 +37,48 @@ export default function Dashboard() {
   });
 
   const totalProducts = products?.length || 0;
-  const totalOrders = orders?.length || 0;
-  const totalCustomers = customers?.length || 0;
   const lowStock = products?.filter(p => p.stockQuantity < 10).length || 0;
 
   const pieData = kpi ? [
-    { name: "Склад", value: kpi.stockDistribution.local },
-    { name: "Ozon", value: kpi.stockDistribution.ozon },
-    { name: "WB", value: kpi.stockDistribution.wb },
+    { name: "Склад", value: kpi.stockDistribution.local, color: CHART_COLORS[0] },
+    { name: "Ozon", value: kpi.stockDistribution.ozon, color: CHART_COLORS[1] },
+    { name: "WB", value: kpi.stockDistribution.wb, color: CHART_COLORS[2] },
   ].filter(d => d.value > 0) : [];
 
   const barData = kpi ? [
-    { name: "Склад", value: kpi.stockDistribution.local },
-    { name: "Ozon", value: kpi.stockDistribution.ozon },
-    { name: "WB", value: kpi.stockDistribution.wb },
+    { name: "Склад", value: kpi.stockDistribution.local, fill: CHART_COLORS[0] },
+    { name: "Ozon", value: kpi.stockDistribution.ozon, fill: CHART_COLORS[1] },
+    { name: "WB", value: kpi.stockDistribution.wb, fill: CHART_COLORS[2] },
   ] : [];
 
-  const CustomTooltip = ({ active, payload }: any) => {
+  const totalStock = (kpi?.stockDistribution.local || 0) + (kpi?.stockDistribution.ozon || 0) + (kpi?.stockDistribution.wb || 0);
+
+  const CustomBarTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       return (
-        <div className="bg-card p-3 border border-border rounded-xl shadow-lg">
-          <p className="text-sm font-semibold">{payload[0].name}</p>
-          <p className="text-lg font-bold text-primary">{formatQuantity(payload[0].value)} шт.</p>
+        <div className="glass-card p-4">
+          <p className="text-sm font-semibold text-foreground">{payload[0].payload.name}</p>
+          <p className="text-2xl font-bold text-primary">{formatQuantity(payload[0].value)} шт.</p>
         </div>
       );
     }
     return null;
+  };
+
+  const renderCustomBarLabel = (props: any) => {
+    const { x, y, width, value } = props;
+    return (
+      <text 
+        x={x + width / 2} 
+        y={y - 10} 
+        fill="hsl(var(--foreground))" 
+        textAnchor="middle" 
+        fontSize={14}
+        fontWeight={700}
+      >
+        {formatQuantity(value)}
+      </text>
+    );
   };
 
   return (
@@ -70,7 +86,7 @@ export default function Dashboard() {
       <div className="space-y-8 pb-8">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
           <div>
-            <h1 className="text-4xl font-bold tracking-tight" data-testid="text-welcome">
+            <h1 className="text-4xl font-extrabold tracking-tight bg-gradient-to-r from-foreground via-foreground to-primary bg-clip-text" data-testid="text-welcome">
               Добро пожаловать
             </h1>
             <p className="text-muted-foreground mt-2 text-lg">Управление складом и продажами</p>
@@ -81,7 +97,7 @@ export default function Dashboard() {
               <Button 
                 onClick={() => seedMutation.mutate()} 
                 disabled={seedMutation.isPending}
-                className="shadow-lg"
+                className="premium-button"
                 data-testid="button-seed-data"
               >
                 <Database className="w-4 h-4 mr-2" />
@@ -91,88 +107,62 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-3">
-          <span className="yellow-badge">
-            Товаров: {totalProducts}
-          </span>
-          <span className="yellow-badge">
-            Заказов: {totalOrders}
-          </span>
-          <span className="yellow-badge">
-            Клиентов: {totalCustomers}
-          </span>
-          {lowStock > 0 && (
-            <span className="bg-destructive/20 text-destructive px-3 py-1.5 rounded-full text-sm font-medium">
-              Мало на складе: {lowStock}
-            </span>
-          )}
-        </div>
-
-        <div className="flex items-center justify-end gap-6">
-          <div className="flex items-center gap-2" data-testid="stat-products">
-            <Package className="w-5 h-5 text-muted-foreground" />
-            <span className="text-3xl font-bold">{totalProducts}</span>
-            <span className="text-sm text-muted-foreground">Товаров</span>
+        {lowStock > 0 && (
+          <div className="teal-badge inline-flex items-center gap-2">
+            <Package className="w-4 h-4" />
+            Мало на складе: {lowStock} товаров
           </div>
-          <div className="flex items-center gap-2" data-testid="stat-orders">
-            <ShoppingCart className="w-5 h-5 text-muted-foreground" />
-            <span className="text-3xl font-bold">{totalOrders}</span>
-            <span className="text-sm text-muted-foreground">Заказов</span>
-          </div>
-          <div className="flex items-center gap-2" data-testid="stat-customers">
-            <Users className="w-5 h-5 text-muted-foreground" />
-            <span className="text-3xl font-bold">{totalCustomers}</span>
-            <span className="text-sm text-muted-foreground">Клиентов</span>
-          </div>
-        </div>
+        )}
 
         <div className="grid gap-6 lg:grid-cols-3">
-          <Card className="kpi-card col-span-1 warm-gradient" data-testid="card-capitalization">
+          <Card className="kpi-card hover-elevate" data-testid="card-capitalization">
             <CardContent className="pt-6">
               <div className="flex items-start justify-between">
                 <div>
-                  <p className="text-sm font-medium text-muted-foreground mb-2">Капитализация</p>
-                  <p className="text-3xl font-bold tracking-tight">
+                  <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">Капитализация</p>
+                  <p className="text-4xl font-extrabold tracking-tight">
                     {kpiLoading ? "..." : formatCurrency(kpi?.capitalization || 0)}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-2">По закупочной цене</p>
+                  <p className="text-xs text-muted-foreground mt-3">По закупочной цене</p>
                 </div>
-                <div className="p-3 bg-primary/20 rounded-xl">
-                  <Coins className="w-6 h-6 text-primary" />
+                <div className="icon-box icon-box-lg">
+                  <Coins className="w-7 h-7 text-primary" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="kpi-card col-span-1" data-testid="card-revenue">
+          <Card className="kpi-card hover-elevate" data-testid="card-revenue">
             <CardContent className="pt-6">
               <div className="flex items-start justify-between">
                 <div>
-                  <p className="text-sm font-medium text-muted-foreground mb-2">Ожидаемая выручка</p>
-                  <p className="text-3xl font-bold tracking-tight">
+                  <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">Ожидаемая выручка</p>
+                  <p className="text-4xl font-extrabold tracking-tight">
                     {kpiLoading ? "..." : formatCurrency(kpi?.expectedRevenue || 0)}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-2">По продажной цене</p>
+                  <p className="text-xs text-muted-foreground mt-3">По продажной цене</p>
                 </div>
-                <div className="p-3 bg-accent/30 rounded-xl">
-                  <TrendingUp className="w-6 h-6 text-accent-foreground" />
+                <div className="icon-box icon-box-lg">
+                  <TrendingUp className="w-7 h-7 text-primary" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="dark-card col-span-1" data-testid="card-profit">
+          <Card className="stat-card-premium hover-elevate" data-testid="card-profit">
             <CardContent className="pt-6">
               <div className="flex items-start justify-between">
                 <div>
-                  <p className="text-sm font-medium text-sidebar-foreground/70 mb-2">Прогноз прибыли</p>
-                  <p className="text-3xl font-bold tracking-tight text-sidebar-foreground">
+                  <p className="text-sm font-medium uppercase tracking-wide" style={{ color: 'hsl(175 30% 70%)' }}>
+                    Прогноз прибыли
+                  </p>
+                  <p className="stat-number mt-2">
                     {kpiLoading ? "..." : formatCurrency(kpi?.expectedProfit || 0)}
                   </p>
-                  <p className="text-xs text-sidebar-foreground/60 mt-2">С учётом налогов и комиссий</p>
+                  <p className="text-xs mt-3" style={{ color: 'hsl(175 20% 55%)' }}>С учётом налогов и комиссий</p>
                 </div>
-                <div className="p-3 bg-sidebar-accent/20 rounded-xl">
-                  <ArrowUpRight className="w-6 h-6 text-sidebar-accent" />
+                <div className="icon-box icon-box-lg" style={{ background: 'linear-gradient(135deg, hsl(175 98% 41% / 0.3) 0%, hsl(175 85% 35% / 0.2) 100%)' }}>
+                  <ArrowUpRight className="w-7 h-7 text-primary" />
                 </div>
               </div>
             </CardContent>
@@ -182,38 +172,65 @@ export default function Dashboard() {
         <div className="grid gap-6 lg:grid-cols-7">
           <Card className="lg:col-span-4 kpi-card" data-testid="card-stock-chart">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-lg font-semibold">Распределение остатков</CardTitle>
-              <BarChart3 className="w-5 h-5 text-muted-foreground" />
+              <div>
+                <CardTitle className="text-xl font-bold">Распределение остатков</CardTitle>
+                <p className="text-sm text-muted-foreground mt-1">Количество товаров по каналам</p>
+              </div>
+              <div className="counter-badge">
+                {formatQuantity(totalStock)} шт.
+              </div>
             </CardHeader>
             <CardContent>
               {barData.length > 0 ? (
-                <div className="h-[280px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={barData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                      <XAxis 
-                        dataKey="name" 
-                        axisLine={false} 
-                        tickLine={false}
-                        tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                      />
-                      <YAxis 
-                        axisLine={false} 
-                        tickLine={false}
-                        tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                      />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Bar 
-                        dataKey="value" 
-                        fill="hsl(var(--primary))" 
-                        radius={[8, 8, 0, 0]}
-                        maxBarSize={60}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
+                <div className="chart-container">
+                  <div className="h-[300px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={barData} margin={{ top: 30, right: 30, left: 20, bottom: 20 }}>
+                        <XAxis 
+                          dataKey="name" 
+                          axisLine={false} 
+                          tickLine={false}
+                          tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 13, fontWeight: 500 }}
+                        />
+                        <YAxis 
+                          axisLine={false} 
+                          tickLine={false}
+                          tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                        />
+                        <Tooltip content={<CustomBarTooltip />} cursor={{ fill: 'hsl(var(--muted) / 0.3)' }} />
+                        <Bar 
+                          dataKey="value" 
+                          radius={[12, 12, 0, 0]}
+                          maxBarSize={80}
+                          label={renderCustomBarLabel}
+                        >
+                          {barData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.fill} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  
+                  <div className="flex justify-center gap-6 mt-4 pt-4 border-t border-border/50">
+                    {barData.map((entry, index) => (
+                      <div key={entry.name} className="flex flex-col items-center gap-1">
+                        <div 
+                          className="w-4 h-4 rounded-lg shadow-lg" 
+                          style={{ backgroundColor: entry.fill, boxShadow: `0 4px 14px -3px ${entry.fill}40` }}
+                        />
+                        <span className="text-sm font-medium">{entry.name}</span>
+                        <span className="counter-badge text-xs px-2 py-1">{formatQuantity(entry.value)}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : (
-                <div className="h-[280px] flex items-center justify-center text-muted-foreground">
-                  Нет данных для отображения
+                <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+                  <div className="text-center">
+                    <BarChart3 className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                    <p>Нет данных для отображения</p>
+                  </div>
                 </div>
               )}
             </CardContent>
@@ -221,43 +238,70 @@ export default function Dashboard() {
 
           <Card className="lg:col-span-3 kpi-card" data-testid="card-stock-pie">
             <CardHeader className="pb-2">
-              <CardTitle className="text-lg font-semibold">Доля каналов</CardTitle>
+              <CardTitle className="text-xl font-bold">Доля каналов</CardTitle>
+              <p className="text-sm text-muted-foreground">Процентное распределение</p>
             </CardHeader>
             <CardContent>
               {pieData.length > 0 ? (
-                <div className="h-[280px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={pieData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={100}
-                        paddingAngle={3}
-                        dataKey="value"
-                      >
-                        {pieData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip content={<CustomTooltip />} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="flex justify-center gap-6 -mt-4">
-                    {pieData.map((entry, index) => (
-                      <div key={entry.name} className="flex items-center gap-2">
-                        <div 
-                          className="w-3 h-3 rounded-full" 
-                          style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                <div className="chart-container">
+                  <div className="h-[260px] relative">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={pieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={70}
+                          outerRadius={100}
+                          paddingAngle={4}
+                          dataKey="value"
+                          strokeWidth={0}
+                        >
+                          {pieData.map((entry, index) => (
+                            <Cell 
+                              key={`cell-${index}`} 
+                              fill={entry.color}
+                              style={{ filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.1))' }}
+                            />
+                          ))}
+                        </Pie>
+                        <Tooltip 
+                          content={<CustomBarTooltip />}
                         />
-                        <span className="text-sm text-muted-foreground">{entry.name}</span>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div className="text-center">
+                        <p className="text-3xl font-extrabold">{formatQuantity(totalStock)}</p>
+                        <p className="text-xs text-muted-foreground uppercase tracking-wide">Всего</p>
                       </div>
-                    ))}
+                    </div>
+                  </div>
+                  
+                  <div className="flex flex-col gap-3 mt-4 pt-4 border-t border-border/50">
+                    {pieData.map((entry) => {
+                      const percent = totalStock > 0 ? ((entry.value / totalStock) * 100).toFixed(0) : 0;
+                      return (
+                        <div key={entry.name} className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div 
+                              className="w-4 h-4 rounded-lg" 
+                              style={{ backgroundColor: entry.color, boxShadow: `0 4px 14px -3px ${entry.color}40` }}
+                            />
+                            <span className="text-sm font-medium">{entry.name}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-sm font-bold">{formatQuantity(entry.value)} шт.</span>
+                            <span className="counter-badge text-xs px-2 py-1">{percent}%</span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
-                <div className="h-[280px] flex items-center justify-center text-muted-foreground">
+                <div className="h-[260px] flex items-center justify-center text-muted-foreground">
                   Нет данных
                 </div>
               )}
@@ -266,81 +310,131 @@ export default function Dashboard() {
         </div>
 
         <div className="grid gap-6 lg:grid-cols-3">
-          <Card className="kpi-card" data-testid="card-stock-local">
+          <Card className="kpi-card hover-elevate group" data-testid="card-stock-local">
             <CardContent className="pt-6">
               <div className="flex justify-between items-center">
                 <div>
-                  <p className="text-sm font-medium text-muted-foreground">На складе</p>
-                  <p className="text-3xl font-bold mt-1">
-                    {kpiLoading ? "..." : formatQuantity(kpi?.stockDistribution.local || 0)}
-                  </p>
+                  <p className="text-sm font-medium text-muted-foreground uppercase tracking-wide">На складе</p>
+                  <div className="flex items-baseline gap-2 mt-2">
+                    <p className="text-4xl font-extrabold">
+                      {kpiLoading ? "..." : formatQuantity(kpi?.stockDistribution.local || 0)}
+                    </p>
+                    <span className="text-muted-foreground">шт.</span>
+                  </div>
                 </div>
-                <div className="p-3 bg-primary/10 rounded-xl">
-                  <Warehouse className="h-6 w-6 text-primary" />
+                <div className="icon-box icon-box-lg group-hover:scale-110 transition-transform duration-300" style={{ background: CHART_COLORS[0] + '20' }}>
+                  <Warehouse className="h-7 w-7" style={{ color: CHART_COLORS[0] }} />
                 </div>
+              </div>
+              <div className="mt-4 h-2 rounded-full overflow-hidden bg-muted">
+                <div 
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{ 
+                    width: totalStock > 0 ? `${((kpi?.stockDistribution.local || 0) / totalStock) * 100}%` : '0%',
+                    background: `linear-gradient(90deg, ${CHART_COLORS[0]}, ${CHART_COLORS[1]})`
+                  }}
+                />
               </div>
             </CardContent>
           </Card>
 
-          <Card className="kpi-card" data-testid="card-stock-ozon">
+          <Card className="kpi-card hover-elevate group" data-testid="card-stock-ozon">
             <CardContent className="pt-6">
               <div className="flex justify-between items-center">
                 <div>
-                  <p className="text-sm font-medium text-muted-foreground">Ozon</p>
-                  <p className="text-3xl font-bold mt-1">
-                    {kpiLoading ? "..." : formatQuantity(kpi?.stockDistribution.ozon || 0)}
-                  </p>
+                  <p className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Ozon</p>
+                  <div className="flex items-baseline gap-2 mt-2">
+                    <p className="text-4xl font-extrabold">
+                      {kpiLoading ? "..." : formatQuantity(kpi?.stockDistribution.ozon || 0)}
+                    </p>
+                    <span className="text-muted-foreground">шт.</span>
+                  </div>
                 </div>
-                <div className="px-3 py-2 bg-orange-100 text-orange-700 rounded-xl text-sm font-bold">
+                <div 
+                  className="px-4 py-2 rounded-xl text-sm font-bold group-hover:scale-110 transition-transform duration-300"
+                  style={{ background: CHART_COLORS[1] + '20', color: CHART_COLORS[1] }}
+                >
                   OZON
                 </div>
               </div>
+              <div className="mt-4 h-2 rounded-full overflow-hidden bg-muted">
+                <div 
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{ 
+                    width: totalStock > 0 ? `${((kpi?.stockDistribution.ozon || 0) / totalStock) * 100}%` : '0%',
+                    background: CHART_COLORS[1]
+                  }}
+                />
+              </div>
             </CardContent>
           </Card>
 
-          <Card className="kpi-card" data-testid="card-stock-wb">
+          <Card className="kpi-card hover-elevate group" data-testid="card-stock-wb">
             <CardContent className="pt-6">
               <div className="flex justify-between items-center">
                 <div>
-                  <p className="text-sm font-medium text-muted-foreground">Wildberries</p>
-                  <p className="text-3xl font-bold mt-1">
-                    {kpiLoading ? "..." : formatQuantity(kpi?.stockDistribution.wb || 0)}
-                  </p>
+                  <p className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Wildberries</p>
+                  <div className="flex items-baseline gap-2 mt-2">
+                    <p className="text-4xl font-extrabold">
+                      {kpiLoading ? "..." : formatQuantity(kpi?.stockDistribution.wb || 0)}
+                    </p>
+                    <span className="text-muted-foreground">шт.</span>
+                  </div>
                 </div>
-                <div className="px-3 py-2 bg-purple-100 text-purple-700 rounded-xl text-sm font-bold">
+                <div 
+                  className="px-4 py-2 rounded-xl text-sm font-bold group-hover:scale-110 transition-transform duration-300"
+                  style={{ background: CHART_COLORS[2] + '20', color: CHART_COLORS[2] }}
+                >
                   WB
                 </div>
+              </div>
+              <div className="mt-4 h-2 rounded-full overflow-hidden bg-muted">
+                <div 
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{ 
+                    width: totalStock > 0 ? `${((kpi?.stockDistribution.wb || 0) / totalStock) * 100}%` : '0%',
+                    background: CHART_COLORS[2]
+                  }}
+                />
               </div>
             </CardContent>
           </Card>
         </div>
 
         {products && products.filter(p => p.stockQuantity < 10).length > 0 && (
-          <Card className="kpi-card border-l-4 border-l-destructive" data-testid="card-low-stock">
+          <Card className="kpi-card" data-testid="card-low-stock" style={{ borderLeft: '4px solid hsl(var(--destructive))' }}>
             <CardHeader className="pb-3">
-              <CardTitle className="text-lg font-semibold flex items-center gap-2">
-                <Package className="w-5 h-5 text-destructive" />
+              <CardTitle className="text-xl font-bold flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-destructive/10">
+                  <Package className="w-5 h-5 text-destructive" />
+                </div>
                 Низкий остаток
+                <span className="counter-badge ml-auto" style={{ background: 'hsl(var(--destructive))' }}>
+                  {products.filter(p => p.stockQuantity < 10).length}
+                </span>
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {products.filter(p => p.stockQuantity < 10).slice(0, 6).map(product => (
                   <div 
                     key={product.id} 
-                    className="flex items-center justify-between p-3 bg-muted/50 rounded-xl"
+                    className="flex items-center justify-between p-4 rounded-xl border border-border/50 hover-elevate bg-card"
                     data-testid={`low-stock-item-${product.id}`}
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="h-10 w-10 rounded-xl bg-card flex items-center justify-center flex-shrink-0 border border-border">
-                        <Package className="h-5 w-5 text-muted-foreground" />
+                      <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center flex-shrink-0">
+                        <Package className="h-6 w-6 text-muted-foreground" />
                       </div>
                       <div className="min-w-0">
-                        <p className="text-sm font-medium leading-none truncate">{product.name}</p>
-                        <p className="text-xs text-muted-foreground mt-1">{product.sku}</p>
+                        <p className="text-sm font-semibold leading-none truncate">{product.name}</p>
+                        <p className="text-xs text-muted-foreground mt-1.5">{product.sku}</p>
                       </div>
                     </div>
-                    <div className="text-sm font-bold text-destructive flex-shrink-0 ml-2">
+                    <div 
+                      className="counter-badge flex-shrink-0 ml-3"
+                      style={{ background: 'hsl(var(--destructive))' }}
+                    >
                       {product.stockQuantity} шт.
                     </div>
                   </div>
