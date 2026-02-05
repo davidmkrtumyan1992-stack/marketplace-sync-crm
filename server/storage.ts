@@ -73,12 +73,31 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createProduct(insertProduct: InsertProduct): Promise<Product> {
-    const [product] = await db.insert(products).values(insertProduct).returning();
+    const stockLocal = insertProduct.stockLocal || 0;
+    const stockOzon = insertProduct.stockOzon || 0;
+    const stockWb = insertProduct.stockWb || 0;
+    const calculatedTotal = stockLocal + stockOzon + stockWb;
+    
+    const [product] = await db.insert(products).values({
+      ...insertProduct,
+      stockQuantity: calculatedTotal
+    }).returning();
     return product;
   }
 
   async updateProduct(id: number, updates: UpdateProductRequest): Promise<Product> {
-    const [product] = await db.update(products).set({ ...updates, updatedAt: new Date() }).where(eq(products.id, id)).returning();
+    const [existingProduct] = await db.select().from(products).where(eq(products.id, id));
+    
+    const stockLocal = updates.stockLocal !== undefined ? updates.stockLocal : (existingProduct?.stockLocal || 0);
+    const stockOzon = updates.stockOzon !== undefined ? updates.stockOzon : (existingProduct?.stockOzon || 0);
+    const stockWb = updates.stockWb !== undefined ? updates.stockWb : (existingProduct?.stockWb || 0);
+    const calculatedTotal = stockLocal + stockOzon + stockWb;
+    
+    const [product] = await db.update(products).set({ 
+      ...updates, 
+      stockQuantity: calculatedTotal,
+      updatedAt: new Date() 
+    }).where(eq(products.id, id)).returning();
     return product;
   }
 
@@ -162,9 +181,45 @@ export class DatabaseStorage implements IStorage {
 
         const [product] = await tx.select().from(products).where(eq(products.id, item.productId));
         if (product) {
-            await tx.update(products)
-              .set({ stockQuantity: product.stockQuantity - item.quantity })
-              .where(eq(products.id, item.productId));
+          // Initialize with null-safe values
+          let newStockLocal = product.stockLocal || 0;
+          let newStockOzon = product.stockOzon || 0;
+          let newStockWb = product.stockWb || 0;
+          
+          // Determine which channel to decrement based on order source
+          const source = orderData.source;
+          if (source === "ozon") {
+            // Decrement Ozon stock, enforce non-negative
+            if (newStockOzon < item.quantity) {
+              throw new Error(`Недостаточно товара на Ozon: доступно ${newStockOzon}, запрошено ${item.quantity}`);
+            }
+            newStockOzon -= item.quantity;
+          } else if (source === "wildberries") {
+            // Decrement Wildberries stock, enforce non-negative
+            if (newStockWb < item.quantity) {
+              throw new Error(`Недостаточно товара на Wildberries: доступно ${newStockWb}, запрошено ${item.quantity}`);
+            }
+            newStockWb -= item.quantity;
+          } else {
+            // Default: decrement from local warehouse
+            if (newStockLocal < item.quantity) {
+              throw new Error(`Недостаточно товара на складе: доступно ${newStockLocal}, запрошено ${item.quantity}`);
+            }
+            newStockLocal -= item.quantity;
+          }
+          
+          // Recalculate total from channels
+          const newTotal = newStockLocal + newStockOzon + newStockWb;
+          
+          await tx.update(products)
+            .set({ 
+              stockQuantity: newTotal,
+              stockLocal: newStockLocal,
+              stockOzon: newStockOzon,
+              stockWb: newStockWb,
+              updatedAt: new Date()
+            })
+            .where(eq(products.id, item.productId));
         }
       }
       return order;
@@ -236,17 +291,33 @@ export class DatabaseStorage implements IStorage {
 
   // Stock Inflow
   async createStockInflow(inflow: InsertStockInflow, userId: string, userName: string): Promise<StockInflow> {
+    // Validate: inflow.quantity must equal sum of channel distributions
+    const toLocal = inflow.toLocal || 0;
+    const toOzon = inflow.toOzon || 0;
+    const toWb = inflow.toWb || 0;
+    const channelSum = toLocal + toOzon + toWb;
+    
+    if (channelSum !== inflow.quantity) {
+      throw new Error(`Stock inflow validation failed: quantity (${inflow.quantity}) must equal sum of channels (${channelSum})`);
+    }
+    
     return await db.transaction(async (tx) => {
       const [created] = await tx.insert(stockInflow).values(inflow).returning();
       
       // Update product stock
       const [product] = await tx.select().from(products).where(eq(products.id, inflow.productId));
       if (product) {
+        const newStockLocal = (product.stockLocal || 0) + toLocal;
+        const newStockOzon = (product.stockOzon || 0) + toOzon;
+        const newStockWb = (product.stockWb || 0) + toWb;
+        // Always recalculate total from channels
+        const newTotal = newStockLocal + newStockOzon + newStockWb;
+        
         await tx.update(products).set({
-          stockQuantity: product.stockQuantity + inflow.quantity,
-          stockLocal: product.stockLocal + (inflow.toLocal || 0),
-          stockOzon: product.stockOzon + (inflow.toOzon || 0),
-          stockWb: product.stockWb + (inflow.toWb || 0),
+          stockQuantity: newTotal,
+          stockLocal: newStockLocal,
+          stockOzon: newStockOzon,
+          stockWb: newStockWb,
           purchasePrice: inflow.purchasePrice || product.purchasePrice,
           updatedAt: new Date()
         }).where(eq(products.id, inflow.productId));
