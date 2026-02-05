@@ -105,45 +105,14 @@ export async function registerRoutes(
 
   // Seed Data Endpoint (For testing)
   app.post("/api/seed", isAuthenticated, async (req, res) => {
-    const orgId = getOrgId(req);
-    // Only seed if empty
-    const existing = await storage.getProducts(orgId);
-    if (existing.length === 0) {
-      const p1 = await storage.createProduct({
-        name: "Wireless Headphones",
-        sku: "WH-001",
-        price: "99.99",
-        stockQuantity: 50,
-        organizationId: orgId,
-        description: "High quality wireless headphones",
-      });
-      const p2 = await storage.createProduct({
-        name: "Smartphone Stand",
-        sku: "SS-002",
-        price: "15.00",
-        stockQuantity: 120,
-        organizationId: orgId,
-        description: "Adjustable aluminium stand",
-      });
-      
-      const c1 = await storage.createCustomer({
-        name: "John Doe",
-        email: "john@example.com",
-        organizationId: orgId,
-      });
-
-      await storage.createOrder({
-        orderNumber: "ORD-001",
-        customerId: c1.id,
-        totalAmount: "114.99",
-        organizationId: orgId,
-        source: "manual"
-      }, [
-        { productId: p1.id, quantity: 1, price: 99.99 },
-        { productId: p2.id, quantity: 1, price: 15.00 }
-      ]);
+    try {
+      const orgId = getOrgId(req);
+      await storage.seedData(orgId);
+      res.json({ message: "Демо-данные успешно созданы" });
+    } catch (error) {
+      console.error("Seed error:", error);
+      res.status(500).json({ message: "Ошибка при создании демо-данных" });
     }
-    res.json({ message: "Seeded" });
   });
 
   return httpServer;

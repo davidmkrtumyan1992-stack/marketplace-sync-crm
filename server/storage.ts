@@ -33,6 +33,9 @@ export interface IStorage {
   getMarketplaceSettings(organizationId: string): Promise<MarketplaceSetting[]>;
   saveMarketplaceSetting(setting: InsertMarketplaceSetting): Promise<MarketplaceSetting>;
   
+  // Seed
+  seedData(organizationId: string): Promise<void>;
+
   // Auth
   auth: typeof authStorage;
 }
@@ -178,6 +181,87 @@ export class DatabaseStorage implements IStorage {
     } else {
       const [created] = await db.insert(marketplaceSettings).values(setting).returning();
       return created;
+    }
+  }
+
+  async seedData(orgId: string): Promise<void> {
+    const existing = await this.getProducts(orgId);
+    if (existing.length === 0) {
+      const p1 = await this.createProduct({
+        name: "Беспроводные наушники",
+        sku: "WH-001",
+        price: "99.99",
+        stockQuantity: 50,
+        organizationId: orgId,
+        description: "Высококачественные беспроводные наушники",
+      });
+      const p2 = await this.createProduct({
+        name: "Подставка для смартфона",
+        sku: "SS-002",
+        price: "15.00",
+        stockQuantity: 120,
+        organizationId: orgId,
+        description: "Регулируемая алюминиевая подставка",
+      });
+      const p3 = await this.createProduct({
+        name: "Умные часы",
+        sku: "SW-003",
+        price: "199.99",
+        stockQuantity: 30,
+        organizationId: orgId,
+        description: "Фитнес-трекер и уведомления",
+      });
+      
+      const c1 = await this.createCustomer({
+        name: "Иван Иванов",
+        email: "ivan@example.com",
+        phone: "+79001112233",
+        organizationId: orgId,
+      });
+
+      const c2 = await this.createCustomer({
+        name: "Мария Петрова",
+        email: "maria@example.com",
+        phone: "+79004445566",
+        organizationId: orgId,
+      });
+
+      await this.createOrder({
+        orderNumber: "ORD-2024-001",
+        customerId: c1.id,
+        totalAmount: "114.99",
+        organizationId: orgId,
+        source: "manual"
+      }, [
+        { productId: p1.id, quantity: 1, price: 99.99 },
+        { productId: p2.id, quantity: 1, price: 15.00 }
+      ]);
+
+      await this.createOrder({
+        orderNumber: "ORD-WB-882",
+        customerId: c2.id,
+        totalAmount: "199.99",
+        organizationId: orgId,
+        source: "wildberries",
+        externalId: "WB-556677"
+      }, [
+        { productId: p3.id, quantity: 1, price: 199.99 }
+      ]);
+      
+      await this.saveMarketplaceSetting({
+        organizationId: orgId,
+        marketplace: "ozon",
+        apiKey: "demo-api-key-ozon",
+        clientId: "123456",
+        isActive: true
+      });
+
+      await this.saveMarketplaceSetting({
+        organizationId: orgId,
+        marketplace: "wildberries",
+        apiKey: "demo-api-key-wb",
+        isActive: true
+      });
     }
   }
 }
