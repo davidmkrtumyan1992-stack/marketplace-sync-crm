@@ -14,6 +14,37 @@ Key capabilities:
 
 The UI is fully localized in Russian with proper typographic conventions (angle quotes «», space-separated numbers).
 
+## Design System
+
+### Color Palette (Teal Theme)
+- **Primary**: #0FC2C0 (bright teal) - hsl(175 98% 41%)
+- **Accent**: #0CABA8 (medium teal) - hsl(175 85% 35%)
+- **Dark**: #008F8C (deep teal) - hsl(180 85% 28%)
+- **Sidebar**: #023535 (very dark teal) - hsl(180 50% 10%)
+- **Darkest**: #015958 (deep dark teal) - hsl(180 60% 18%)
+
+### Theme Toggle
+- Light/Dark mode switch available in header (sun/moon icon)
+- Theme persisted in localStorage
+- CSS variables adapt for both modes
+
+### UI Components
+- **Sidebar Stats**: Premium stat cards with gradient backgrounds, large icons, and animated counters
+- **KPI Cards**: Glass-morphism effect with subtle gradients and hover elevation
+- **Charts**: Bar and Pie charts with teal color scheme and value counters
+- **Buttons**: Premium gradient buttons with glow effects
+- **Badges**: Teal badges with semi-transparent backgrounds
+
+### CSS Classes
+- `.premium-button` - Gradient button with shadow
+- `.stat-card-premium` - Dark stat card with glow
+- `.kpi-card` - Light card with gradient
+- `.teal-badge` - Teal badge styling
+- `.counter-badge` - Teal counter pill
+- `.icon-box` - Icon container with gradient
+- `.glass-card` - Glass effect card
+- `.hover-elevate` - Elevation on hover
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.
