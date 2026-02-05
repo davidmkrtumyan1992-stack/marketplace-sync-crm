@@ -28,8 +28,8 @@ export default function Settings() {
       <div className="space-y-8 max-w-4xl mx-auto">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h2 className="text-3xl font-bold tracking-tight">Настройки</h2>
-            <p className="text-muted-foreground mt-1">Интеграции и налоговые параметры.</p>
+            <h1 className="text-4xl font-bold tracking-tight">Настройки</h1>
+            <p className="text-muted-foreground mt-2 text-lg">Интеграции и налоговые параметры</p>
           </div>
           <Button onClick={() => syncAll()} disabled={isSyncing} variant="outline">
             <RefreshCw className={`w-4 h-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />

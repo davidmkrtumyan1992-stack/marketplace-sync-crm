@@ -42,7 +42,7 @@ export default function Reports() {
       const orderRevenue = Number(order.totalAmount);
       grossRevenue += orderRevenue;
 
-      order.items?.forEach(item => {
+      order.items?.forEach((item: any) => {
         const product = products.find(p => p.id === item.productId);
         if (product) {
           cogs += item.quantity * Number(product.purchasePrice || 0);
@@ -102,10 +102,10 @@ export default function Reports() {
 
   return (
     <Layout>
-      <div className="space-y-6">
+      <div className="space-y-8">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Отчёты</h2>
-          <p className="text-muted-foreground mt-1">Финансовая отчётность и история изменений</p>
+          <h1 className="text-4xl font-bold tracking-tight">Отчёты</h1>
+          <p className="text-muted-foreground mt-2 text-lg">Финансовая отчётность и история изменений</p>
         </div>
 
         <Tabs defaultValue="pnl" className="space-y-4">
@@ -121,7 +121,7 @@ export default function Reports() {
           </TabsList>
 
           <TabsContent value="pnl">
-            <Card className="dashboard-card">
+            <Card className="kpi-card">
               <CardHeader>
                 <CardTitle>Отчёт о прибылях и убытках</CardTitle>
                 <CardDescription>
@@ -133,7 +133,7 @@ export default function Reports() {
                   <div className="space-y-6">
                     <Table>
                       <TableHeader>
-                        <TableRow className="bg-slate-50/50">
+                        <TableRow className="bg-muted/30">
                           <TableHead className="w-1/2">Показатель</TableHead>
                           <TableHead className="text-right">Сумма</TableHead>
                         </TableRow>
@@ -225,7 +225,7 @@ export default function Reports() {
           </TabsContent>
 
           <TabsContent value="audit">
-            <Card className="dashboard-card">
+            <Card className="kpi-card">
               <CardHeader>
                 <CardTitle>История изменений</CardTitle>
                 <CardDescription>Журнал всех изменений остатков и данных</CardDescription>
@@ -233,7 +233,7 @@ export default function Reports() {
               <CardContent>
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-slate-50/50">
+                    <TableRow className="bg-muted/30">
                       <TableHead>Дата и время</TableHead>
                       <TableHead>Пользователь</TableHead>
                       <TableHead>Действие</TableHead>
