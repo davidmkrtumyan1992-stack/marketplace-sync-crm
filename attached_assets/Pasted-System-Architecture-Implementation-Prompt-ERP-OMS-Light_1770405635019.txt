@@ -1,0 +1,80 @@
+System Architecture & Implementation Prompt: ERP/OMS «Lighthouse» v3.0
+Role: You are a Senior Full-stack Developer and System Architect. Your goal is to build a high-performance Marketplace Management System (OMS/ERP) for a business operating multiple entities.
+
+1. Strategic Architecture (Multi-Tenancy & Data Integrity):
+
+Multi-Entity Logic: Implement a data structure where 2 separate Companies (ИП Тигран, ИП Лаура) exist. Each company owns 3 separate marketplace connections (Ozon, Wildberries, Yandex Market). Total: 6 distinct API integrations.
+
+Global Single Window: The dashboard must aggregate data from all 6 stores into one view, but maintain strict separation in the database.
+
+Role-Based Access Control (RBAC):
+
+Owner: Full system access.
+
+Accountant: Access ONLY to Financials, P&L, and Expenses. No stock/order editing.
+
+Administrator: Access to Inventory, Barcode Intake, and Order Processing. NO access to financial reports or purchase prices.
+
+2. Module: Smart Barcode Intake System (Приемка товара):
+
+Workflow: Create a dedicated "Intake" page.
+
+Scanning Logic: Support USB barcode scanners (keyboard emulation).
+
+When a barcode is scanned:
+
+If SKU exists: Increment quantity in a temporary "Pending Batch".
+
+If SKU is new: Open a quick "Create Product" modal.
+
+Confirmation: A "Confirm Receipt" button that bulk-updates CRM inventory and triggers API stock updates to all connected marketplaces.
+
+3. Module: Full Marketplace Sync & Management (OMS):
+
+Bi-directional API: * Import: A tool to fetch all existing products from Ozon/WB/Yandex APIs into the CRM.
+
+Order Fulfillment: Orders from all 6 stores appear in a unified "Orders" list.
+
+One-Click Action: Confirming/Packing an order in the CRM must automatically update the status on the marketplace.
+
+Printing: Generate thermal shipping labels (75x120mm) directly from the CRM.
+
+4. Module: Dashboard Matrix (UI/UX):
+
+Header: Aggregated KPIs (Total Stock, Valuation, Profit) with a 7% tax rate pre-calculated.
+
+The Grid: Two distinct rows (one for ИП Тигран, one for ИП Лаура).
+
+Store Widgets: Each of the 6 stores must have a card showing:
+
+Current Stock.
+
+Number of Pending Orders.
+
+"Quick Access" button to jump to that store's orders.
+
+Formatting: Use space as a thousand separator («1 450 000 руб.») and angle quotes (« »).
+
+5. Module: Financial Analysis (Expense Splitting):
+
+Classify all costs into:
+
+Internal (Внутренние): Salaries, Rent, Warehouse supplies.
+
+External (Внешние): Taxes, Marketplace Commissions, Logistics.
+
+Update P&L reports to reflect this split for granular profitability analysis.
+
+6. Implementation Strategy (Instruction for Replit):
+
+Phase 1: Design a PostgreSQL schema that supports multiple companies, stores, and roles.
+
+Phase 2: Develop the API bridge for Ozon, WB, and Yandex (use Mock data first if keys are not provided).
+
+Phase 3: Build the "Smart Intake" scanner interface.
+
+Phase 4: Create the Aggregated Dashboard with the 2-row multi-company layout.
+
+Phase 5: Finalize the P&L report with internal/external expense logic.
+
+Action: Before writing code, summarize your technical strategy for handling identical SKUs across different companies and how you will ensure real-time API sync without hitting rate limits. Then proceed to implementation.
