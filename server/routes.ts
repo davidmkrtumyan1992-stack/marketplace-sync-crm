@@ -13,7 +13,6 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 
-// Configure multer for file uploads
 const imageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(process.cwd(), "uploads/images");
@@ -30,7 +29,7 @@ const imageStorage = multer.diskStorage({
 
 const uploadImage = multer({
   storage: imageStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -45,7 +44,7 @@ const uploadImage = multer({
 
 const uploadFile = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  limits: { fileSize: 50 * 1024 * 1024 },
 });
 
 export async function registerRoutes(
@@ -53,21 +52,102 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   
-  // Initialize Auth
   await setupAuth(app);
   registerAuthRoutes(app);
 
-  // Helper to get Org ID (User ID in this case)
   const getOrgId = (req: any) => req.user?.claims?.sub;
   const getUserInfo = (req: any) => ({
     userId: req.user?.claims?.sub || "",
     userName: `${req.user?.claims?.first_name || ""} ${req.user?.claims?.last_name || ""}`.trim() || "System"
   });
 
+  // Companies
+  app.get(api.companies.list.path, isAuthenticated, async (req, res) => {
+    const list = await storage.getCompanies(getOrgId(req));
+    res.json(list);
+  });
+
+  app.post(api.companies.create.path, isAuthenticated, async (req, res) => {
+    const input = api.companies.create.input.parse({ ...req.body, organizationId: getOrgId(req) });
+    const company = await storage.createCompany(input);
+    res.status(201).json(company);
+  });
+
+  // Stores
+  app.get(api.stores.list.path, isAuthenticated, async (req, res) => {
+    const list = await storage.getStoresByOrg(getOrgId(req));
+    res.json(list);
+  });
+
+  app.get(api.stores.byCompany.path, isAuthenticated, async (req, res) => {
+    const company = await storage.getCompany(Number(req.params.companyId));
+    if (!company || company.organizationId !== getOrgId(req)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    const list = await storage.getStores(Number(req.params.companyId));
+    res.json(list);
+  });
+
+  app.post(api.stores.create.path, isAuthenticated, async (req, res) => {
+    const company = await storage.getCompany(Number(req.body.companyId));
+    if (!company || company.organizationId !== getOrgId(req)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    const store = await storage.createStore(req.body);
+    res.status(201).json(store);
+  });
+
+  app.put(api.stores.update.path, isAuthenticated, async (req, res) => {
+    const store = await storage.updateStore(Number(req.params.id), req.body);
+    res.json(store);
+  });
+
+  // User Roles
+  app.get(api.userRoles.get.path, isAuthenticated, async (req, res) => {
+    const orgId = getOrgId(req);
+    const role = await storage.getUserRole(orgId, orgId);
+    res.json(role || { role: "owner" });
+  });
+
+  app.post(api.userRoles.set.path, isAuthenticated, async (req, res) => {
+    const input = api.userRoles.set.input.parse({ ...req.body, organizationId: getOrgId(req) });
+    const role = await storage.setUserRole(input);
+    res.json(role);
+  });
+
+  // Expenses
+  app.get(api.expenses.list.path, isAuthenticated, async (req, res) => {
+    const companyId = req.query.companyId ? Number(req.query.companyId) : undefined;
+    const list = await storage.getExpenses(getOrgId(req), companyId);
+    res.json(list);
+  });
+
+  app.post(api.expenses.create.path, isAuthenticated, async (req, res) => {
+    const input = api.expenses.create.input.parse({ ...req.body, organizationId: getOrgId(req) });
+    const expense = await storage.createExpense(input);
+    res.status(201).json(expense);
+  });
+
+  app.delete(api.expenses.delete.path, isAuthenticated, async (req, res) => {
+    const expense = await storage.getExpense(Number(req.params.id));
+    if (!expense || expense.organizationId !== getOrgId(req)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    await storage.deleteExpense(Number(req.params.id));
+    res.status(204).send();
+  });
+
   // Products
   app.get(api.products.list.path, isAuthenticated, async (req, res) => {
-    const products = await storage.getProducts(getOrgId(req));
-    res.json(products);
+    const companyId = req.query.companyId ? Number(req.query.companyId) : undefined;
+    const list = await storage.getProducts(getOrgId(req), companyId);
+    res.json(list);
+  });
+
+  app.get("/api/products/barcode/:barcode", isAuthenticated, async (req, res) => {
+    const product = await storage.getProductByBarcode(String(req.params.barcode), getOrgId(req));
+    if (!product) return res.status(404).json({ message: "Товар не найден" });
+    res.json(product);
   });
 
   app.get(api.products.get.path, isAuthenticated, async (req, res) => {
@@ -101,14 +181,13 @@ export async function registerRoutes(
     const productId = Number(req.params.id);
     const product = await storage.getProduct(productId);
     if (!product) return res.status(404).json({ message: "Product not found" });
-    // TODO: Implement actual marketplace sync via API
     res.json({ success: true, message: "Синхронизация запущена" });
   });
 
   // Customers
   app.get(api.customers.list.path, isAuthenticated, async (req, res) => {
-    const customers = await storage.getCustomers(getOrgId(req));
-    res.json(customers);
+    const list = await storage.getCustomers(getOrgId(req));
+    res.json(list);
   });
 
   app.post(api.customers.create.path, isAuthenticated, async (req, res) => {
@@ -124,8 +203,9 @@ export async function registerRoutes(
 
   // Orders
   app.get(api.orders.list.path, isAuthenticated, async (req, res) => {
-    const orders = await storage.getOrders(getOrgId(req));
-    res.json(orders);
+    const companyId = req.query.companyId ? Number(req.query.companyId) : undefined;
+    const list = await storage.getOrders(getOrgId(req), companyId);
+    res.json(list);
   });
 
   app.post(api.orders.create.path, isAuthenticated, async (req, res) => {
@@ -153,7 +233,6 @@ export async function registerRoutes(
   });
 
   app.post(api.marketplace.syncAll.path, isAuthenticated, async (req, res) => {
-    // TODO: Iterate over settings and call external APIs
     res.json({ success: true, message: "Синхронизация всех маркетплейсов запущена" });
   });
 
@@ -204,7 +283,7 @@ export async function registerRoutes(
     }
   });
 
-  // Seed Data Endpoint
+  // Seed Data
   app.post("/api/seed", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
@@ -216,27 +295,18 @@ export async function registerRoutes(
     }
   });
 
-  // Image Upload Endpoint
+  // Image Upload
   app.post("/api/upload/image", isAuthenticated, uploadImage.single("image"), (req, res) => {
-    if (!req.file) {
-      return res.status(400).json({ message: "Файл не загружен" });
-    }
+    if (!req.file) return res.status(400).json({ message: "Файл не загружен" });
     const imageUrl = `/uploads/images/${req.file.filename}`;
     res.json({ imageUrl });
   });
 
-  // Serve uploaded images with path traversal protection
   app.use("/uploads/images", (req, res, next) => {
     const baseDir = path.join(process.cwd(), "uploads/images");
-    // Normalize and resolve the path
     const requestedPath = path.normalize(req.path).replace(/^(\.\.(\/|\\|$))+/, "");
     const filePath = path.resolve(baseDir, requestedPath);
-    
-    // Ensure the resolved path is within the uploads directory
-    if (!filePath.startsWith(baseDir)) {
-      return res.status(403).json({ message: "Доступ запрещён" });
-    }
-    
+    if (!filePath.startsWith(baseDir)) return res.status(403).json({ message: "Доступ запрещён" });
     if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
       res.sendFile(filePath);
     } else {
@@ -244,97 +314,77 @@ export async function registerRoutes(
     }
   });
 
-  // Product Import from File (Excel, Word, PDF)
+  // Product Import
   app.post("/api/products/import", isAuthenticated, uploadFile.single("file"), async (req, res) => {
-    if (!req.file) {
-      return res.status(400).json({ message: "Файл не загружен" });
-    }
+    if (!req.file) return res.status(400).json({ message: "Файл не загружен" });
 
     const orgId = getOrgId(req);
     const ext = path.extname(req.file.originalname).toLowerCase();
-    let products: any[] = [];
+    let parsedProducts: any[] = [];
 
     try {
       if (ext === ".xlsx" || ext === ".xls") {
-        // Parse Excel
         const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
         const data = XLSX.utils.sheet_to_json(sheet);
         
-        products = data.map((row: any, index: number) => ({
-          name: row["Название"] || row["name"] || row["Name"] || `Товар ${index + 1}`,
-          sku: row["Артикул"] || row["sku"] || row["SKU"] || `SKU-${Date.now()}-${index}`,
-          purchasePrice: String(row["Закупка"] || row["purchasePrice"] || row["Закупочная цена"] || 0),
-          sellingPrice: String(row["Продажа"] || row["sellingPrice"] || row["Цена продажи"] || row["Цена"] || 0),
+        parsedProducts = data.map((row: any, index: number) => ({
+          name: row["Название"] || row["name"] || `Товар ${index + 1}`,
+          sku: row["Артикул"] || row["sku"] || `SKU-${Date.now()}-${index}`,
+          barcode: row["Штрихкод"] || row["barcode"] || null,
+          purchasePrice: String(row["Закупка"] || row["purchasePrice"] || 0),
+          sellingPrice: String(row["Продажа"] || row["sellingPrice"] || row["Цена"] || 0),
           stockLocal: Number(row["Склад"] || row["stockLocal"] || row["Количество"] || 0),
           category: row["Категория"] || row["category"] || "",
           description: row["Описание"] || row["description"] || "",
         }));
       } else if (ext === ".docx" || ext === ".doc") {
-        // Parse Word document
         const result = await mammoth.extractRawText({ buffer: req.file.buffer });
         const lines = result.value.split("\n").filter(line => line.trim());
-        
-        // Try to parse table-like structure
-        products = [];
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i].trim();
           if (line && !line.startsWith("#") && !line.toLowerCase().includes("название")) {
-            // Parse tab or space separated values
             const parts = line.split(/\t|\s{2,}/).map(p => p.trim());
             if (parts.length >= 1 && parts[0]) {
-              products.push({
-                name: parts[0],
-                sku: parts[1] || `SKU-${Date.now()}-${i}`,
-                purchasePrice: String(parts[2] || 0),
-                sellingPrice: String(parts[3] || 0),
-                stockLocal: Number(parts[4] || 0),
-                category: parts[5] || "",
-                description: "",
+              parsedProducts.push({
+                name: parts[0], sku: parts[1] || `SKU-${Date.now()}-${i}`,
+                purchasePrice: String(parts[2] || 0), sellingPrice: String(parts[3] || 0),
+                stockLocal: Number(parts[4] || 0), category: parts[5] || "", description: "",
               });
             }
           }
         }
       } else if (ext === ".pdf") {
-        // Parse PDF
         const pdfData = await pdfParse(req.file.buffer);
         const lines: string[] = pdfData.text.split("\n").filter((line: string) => line.trim());
-        
-        products = [];
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i].trim();
           if (line && !line.toLowerCase().includes("название") && line.length > 3) {
             const parts = line.split(/\t|\s{2,}/).map((p: string) => p.trim());
             if (parts.length >= 1 && parts[0] && !/^\d+$/.test(parts[0])) {
-              products.push({
-                name: parts[0],
-                sku: parts[1] || `SKU-${Date.now()}-${i}`,
+              parsedProducts.push({
+                name: parts[0], sku: parts[1] || `SKU-${Date.now()}-${i}`,
                 purchasePrice: String(parts[2]?.replace(/[^\d.]/g, "") || 0),
                 sellingPrice: String(parts[3]?.replace(/[^\d.]/g, "") || 0),
-                stockLocal: Number(parts[4]?.replace(/\D/g, "") || 0),
-                category: "",
-                description: "",
+                stockLocal: Number(parts[4]?.replace(/\D/g, "") || 0), category: "", description: "",
               });
             }
           }
         }
       } else {
-        return res.status(400).json({ message: "Неподдерживаемый формат файла. Используйте Excel (.xlsx), Word (.docx) или PDF." });
+        return res.status(400).json({ message: "Неподдерживаемый формат файла." });
       }
 
-      // Create products in database
       const created: any[] = [];
       const errors: string[] = [];
+      const companyId = req.body.companyId ? Number(req.body.companyId) : null;
       
-      for (const p of products) {
+      for (const p of parsedProducts) {
         try {
           const product = await storage.createProduct({
-            ...p,
-            price: p.sellingPrice,
-            stockOzon: 0,
-            stockWb: 0,
-            organizationId: orgId,
+            ...p, price: p.sellingPrice, stockOzon: 0, stockWb: 0, stockYandex: 0,
+            organizationId: orgId, companyId,
           });
           created.push(product);
         } catch (err: any) {
@@ -343,9 +393,7 @@ export async function registerRoutes(
       }
 
       res.json({
-        success: true,
-        imported: created.length,
-        errors: errors.length > 0 ? errors : undefined,
+        success: true, imported: created.length, errors: errors.length > 0 ? errors : undefined,
         message: `Импортировано ${created.length} товаров${errors.length > 0 ? `, ошибок: ${errors.length}` : ""}`
       });
     } catch (error: any) {

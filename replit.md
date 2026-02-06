@@ -2,14 +2,17 @@
 
 ## Overview
 
-CloudERP is a production-ready cloud ERP/CRM system designed for e-commerce businesses selling on Russian marketplaces (Ozon and Wildberries). The system serves as a "Single Source of Truth" for inventory management, order processing, and financial analytics across multiple sales channels.
+CloudERP is a production-ready multi-company cloud ERP/CRM system designed for e-commerce businesses selling on Russian marketplaces (Ozon, Wildberries, and Yandex Market). The system serves as a "Single Source of Truth" for inventory management, order processing, and financial analytics across multiple sales channels.
 
 Key capabilities:
-- Multi-channel inventory tracking with "split-stock" distribution across local warehouse, Ozon, and Wildberries
-- Russian tax calculation engine supporting УСН (simplified taxation) regimes
-- Dashboard with KPI cards showing capitalization, expected revenue, and profit forecasts
+- Multi-company architecture: multiple companies (ИП) under one account, each with own marketplace stores
+- Multi-channel inventory tracking with "split-stock" distribution across local warehouse, Ozon, Wildberries, and Yandex Market
+- Smart barcode intake: USB scanner support for receiving goods with automatic product lookup
+- Russian tax calculation engine (7% default rate) with expense tracking
+- Dashboard with aggregate KPIs across all companies + per-company/store breakdowns
 - CRM for customer management
-- Marketplace API integration placeholders for Ozon and Wildberries
+- Marketplace API integration placeholders for Ozon, Wildberries, and Yandex Market
+- Expense management with internal/external classification
 - Full audit logging for inventory changes
 
 The UI is fully localized in Russian with proper typographic conventions (angle quotes «», space-separated numbers).
@@ -72,12 +75,16 @@ Preferred communication style: Simple, everyday language.
 - **Database**: PostgreSQL (required, connection via DATABASE_URL environment variable)
 - **Schema Location**: `shared/schema.ts` defines all tables using Drizzle's pgTable
 - **Key Tables**:
-  - `products` - Inventory with multi-location stock tracking (local, Ozon, WB)
+  - `companies` - Multi-company entities (ИП) with INN and tax system
+  - `stores` - Marketplace connections per company (ozon/wildberries/yandex)
+  - `products` - Inventory with multi-location stock tracking (local, Ozon, WB, Yandex) + barcode field
   - `orders` and `orderItems` - Order management with marketplace source tracking
   - `customers` - CRM data
-  - `stockInflow` - Inventory receipt records with distribution splits
-  - `taxSettings` - Russian tax configuration (УСН 6% or 15%)
-  - `marketplaceSettings` - API credentials for Ozon/Wildberries
+  - `stockInflow` - Inventory receipt records with distribution splits (including Yandex)
+  - `expenses` - Expense tracking with internal/external classification
+  - `userRoles` - RBAC (owner/accountant/administrator)
+  - `taxSettings` - Russian tax configuration (7% default)
+  - `marketplaceSettings` - API credentials for Ozon/Wildberries/Yandex
   - `auditLog` - Change tracking for compliance
   - `users` and `sessions` - Authentication (managed by Replit Auth)
 
@@ -112,7 +119,7 @@ shared/               # Shared between client/server
 
 2. **Multi-tenant by User**: Each user operates as their own organization; `organizationId` field ensures data isolation
 
-3. **Split-Stock Model**: Products track inventory separately for each location (`stockLocal`, `stockOzon`, `stockWb`) with `stockQuantity` as the computed total
+3. **Split-Stock Model**: Products track inventory separately for each location (`stockLocal`, `stockOzon`, `stockWb`, `stockYandex`) with `stockQuantity` as the computed total
 
 4. **Russian Localization**: Custom formatting utilities in `client/src/lib/format.ts` handle number/currency display with proper Russian conventions
 
@@ -143,7 +150,17 @@ shared/               # Shared between client/server
 - **Tailwind CSS**: Utility-first styling
 - **class-variance-authority**: Component variant management
 
+### Pages
+- **Dashboard** (`/`) - Aggregate KPIs + per-company/store breakdown cards
+- **Products** (`/products`) - Product CRUD with barcode, 4-channel stock distribution
+- **Orders** (`/orders`) - Order management with Ozon/WB/Yandex/Manual sources
+- **Customers** (`/customers`) - CRM data
+- **Intake** (`/intake`) - Smart barcode scanning intake with batch receipt
+- **Reports** (`/reports`) - P&L with expenses, expense management, audit log
+- **Settings** (`/settings`) - Tax and marketplace configuration
+
 ### Planned Integrations (Not Yet Implemented)
 - **Ozon API**: Marketplace sync for inventory and orders
 - **Wildberries API**: Marketplace sync for inventory and orders
+- **Yandex Market API**: Marketplace sync for inventory and orders
 - Settings schema includes fields for API keys and client IDs

@@ -11,6 +11,7 @@ import Orders from "@/pages/Orders";
 import Customers from "@/pages/Customers";
 import Settings from "@/pages/Settings";
 import Reports from "@/pages/Reports";
+import Intake from "@/pages/Intake";
 import { useAuth } from "@/hooks/use-auth";
 import { Loader2 } from "lucide-react";
 
@@ -41,6 +42,7 @@ function Router() {
       <Route path="/customers" component={() => <ProtectedRoute component={Customers} />} />
       <Route path="/reports" component={() => <ProtectedRoute component={Reports} />} />
       <Route path="/settings" component={() => <ProtectedRoute component={Settings} />} />
+      <Route path="/intake" component={() => <ProtectedRoute component={Intake} />} />
       <Route component={NotFound} />
     </Switch>
   );

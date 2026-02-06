@@ -6,13 +6,10 @@ import {
   insertMarketplaceSettingsSchema,
   insertTaxSettingsSchema,
   insertStockInflowSchema,
-  products,
-  customers,
-  orders,
-  marketplaceSettings,
-  taxSettings,
-  auditLog,
-  stockInflow
+  insertCompanySchema,
+  insertStoreSchema,
+  insertExpenseSchema,
+  insertUserRoleSchema,
 } from './schema';
 
 export const errorSchemas = {
@@ -29,108 +26,43 @@ export const errorSchemas = {
 };
 
 export const api = {
+  companies: {
+    list: { method: 'GET' as const, path: '/api/companies' },
+    create: { method: 'POST' as const, path: '/api/companies', input: insertCompanySchema },
+  },
+  stores: {
+    list: { method: 'GET' as const, path: '/api/stores' },
+    byCompany: { method: 'GET' as const, path: '/api/companies/:companyId/stores' },
+    create: { method: 'POST' as const, path: '/api/stores', input: insertStoreSchema },
+    update: { method: 'PUT' as const, path: '/api/stores/:id', input: insertStoreSchema.partial() },
+  },
+  userRoles: {
+    get: { method: 'GET' as const, path: '/api/user-role' },
+    set: { method: 'POST' as const, path: '/api/user-role', input: insertUserRoleSchema },
+  },
+  expenses: {
+    list: { method: 'GET' as const, path: '/api/expenses' },
+    create: { method: 'POST' as const, path: '/api/expenses', input: insertExpenseSchema },
+    delete: { method: 'DELETE' as const, path: '/api/expenses/:id' },
+  },
   products: {
-    list: {
-      method: 'GET' as const,
-      path: '/api/products',
-      responses: {
-        200: z.array(z.custom<typeof products.$inferSelect>()),
-      },
-    },
-    get: {
-      method: 'GET' as const,
-      path: '/api/products/:id',
-      responses: {
-        200: z.custom<typeof products.$inferSelect>(),
-        404: errorSchemas.notFound,
-      },
-    },
-    create: {
-      method: 'POST' as const,
-      path: '/api/products',
-      input: insertProductSchema,
-      responses: {
-        201: z.custom<typeof products.$inferSelect>(),
-        400: errorSchemas.validation,
-      },
-    },
-    update: {
-      method: 'PUT' as const,
-      path: '/api/products/:id',
-      input: insertProductSchema.partial(),
-      responses: {
-        200: z.custom<typeof products.$inferSelect>(),
-        404: errorSchemas.notFound,
-      },
-    },
-    delete: {
-      method: 'DELETE' as const,
-      path: '/api/products/:id',
-      responses: {
-        204: z.void(),
-        404: errorSchemas.notFound,
-      },
-    },
-    sync: {
-      method: 'POST' as const,
-      path: '/api/products/:id/sync',
-      responses: {
-        200: z.object({ success: z.boolean(), message: z.string() }),
-        404: errorSchemas.notFound,
-      },
-    }
+    list: { method: 'GET' as const, path: '/api/products' },
+    get: { method: 'GET' as const, path: '/api/products/:id' },
+    create: { method: 'POST' as const, path: '/api/products', input: insertProductSchema },
+    update: { method: 'PUT' as const, path: '/api/products/:id', input: insertProductSchema.partial() },
+    delete: { method: 'DELETE' as const, path: '/api/products/:id' },
+    sync: { method: 'POST' as const, path: '/api/products/:id/sync' },
+    lookupBarcode: { method: 'GET' as const, path: '/api/products/barcode/:barcode' },
   },
   customers: {
-    list: {
-      method: 'GET' as const,
-      path: '/api/customers',
-      responses: {
-        200: z.array(z.custom<typeof customers.$inferSelect>()),
-      },
-    },
-    get: {
-      method: 'GET' as const,
-      path: '/api/customers/:id',
-      responses: {
-        200: z.custom<typeof customers.$inferSelect>(),
-        404: errorSchemas.notFound,
-      },
-    },
-    create: {
-      method: 'POST' as const,
-      path: '/api/customers',
-      input: insertCustomerSchema,
-      responses: {
-        201: z.custom<typeof customers.$inferSelect>(),
-        400: errorSchemas.validation,
-      },
-    },
-    update: {
-      method: 'PUT' as const,
-      path: '/api/customers/:id',
-      input: insertCustomerSchema.partial(),
-      responses: {
-        200: z.custom<typeof customers.$inferSelect>(),
-        404: errorSchemas.notFound,
-      },
-    },
+    list: { method: 'GET' as const, path: '/api/customers' },
+    get: { method: 'GET' as const, path: '/api/customers/:id' },
+    create: { method: 'POST' as const, path: '/api/customers', input: insertCustomerSchema },
+    update: { method: 'PUT' as const, path: '/api/customers/:id', input: insertCustomerSchema.partial() },
   },
   orders: {
-    list: {
-      method: 'GET' as const,
-      path: '/api/orders',
-      responses: {
-        200: z.array(z.custom<any>()),
-      },
-    },
-    get: {
-      method: 'GET' as const,
-      path: '/api/orders/:id',
-      responses: {
-        200: z.custom<any>(),
-        404: errorSchemas.notFound,
-      },
-    },
+    list: { method: 'GET' as const, path: '/api/orders' },
+    get: { method: 'GET' as const, path: '/api/orders/:id' },
     create: {
       method: 'POST' as const,
       path: '/api/orders',
@@ -142,109 +74,31 @@ export const api = {
           price: z.number(),
         }))
       }),
-      responses: {
-        201: z.custom<typeof orders.$inferSelect>(),
-        400: errorSchemas.validation,
-      },
     },
     updateStatus: {
       method: 'PATCH' as const,
       path: '/api/orders/:id/status',
       input: z.object({ status: z.string() }),
-      responses: {
-        200: z.custom<typeof orders.$inferSelect>(),
-        404: errorSchemas.notFound,
-      },
     },
   },
   marketplace: {
-    list: {
-      method: 'GET' as const,
-      path: '/api/marketplace/settings',
-      responses: {
-        200: z.array(z.custom<typeof marketplaceSettings.$inferSelect>()),
-      },
-    },
-    save: {
-      method: 'POST' as const,
-      path: '/api/marketplace/settings',
-      input: insertMarketplaceSettingsSchema,
-      responses: {
-        201: z.custom<typeof marketplaceSettings.$inferSelect>(),
-        400: errorSchemas.validation,
-      },
-    },
-    syncAll: {
-      method: 'POST' as const,
-      path: '/api/marketplace/sync',
-      responses: {
-        200: z.object({ success: z.boolean(), message: z.string() }),
-      },
-    }
+    list: { method: 'GET' as const, path: '/api/marketplace/settings' },
+    save: { method: 'POST' as const, path: '/api/marketplace/settings', input: insertMarketplaceSettingsSchema },
+    syncAll: { method: 'POST' as const, path: '/api/marketplace/sync' },
   },
   taxSettings: {
-    get: {
-      method: 'GET' as const,
-      path: '/api/settings/tax',
-      responses: {
-        200: z.custom<typeof taxSettings.$inferSelect>().nullable(),
-      },
-    },
-    save: {
-      method: 'POST' as const,
-      path: '/api/settings/tax',
-      input: insertTaxSettingsSchema,
-      responses: {
-        201: z.custom<typeof taxSettings.$inferSelect>(),
-        400: errorSchemas.validation,
-      },
-    },
+    get: { method: 'GET' as const, path: '/api/settings/tax' },
+    save: { method: 'POST' as const, path: '/api/settings/tax', input: insertTaxSettingsSchema },
   },
   kpi: {
-    get: {
-      method: 'GET' as const,
-      path: '/api/kpi',
-      responses: {
-        200: z.object({
-          totalStock: z.number(),
-          capitalization: z.number(),
-          expectedRevenue: z.number(),
-          expectedProfit: z.number(),
-          stockDistribution: z.object({
-            local: z.number(),
-            ozon: z.number(),
-            wb: z.number(),
-          }),
-        }),
-      },
-    },
+    get: { method: 'GET' as const, path: '/api/kpi' },
   },
   auditLog: {
-    list: {
-      method: 'GET' as const,
-      path: '/api/audit-log',
-      responses: {
-        200: z.array(z.custom<typeof auditLog.$inferSelect>()),
-      },
-    },
+    list: { method: 'GET' as const, path: '/api/audit-log' },
   },
   stockInflow: {
-    list: {
-      method: 'GET' as const,
-      path: '/api/stock-inflow',
-      responses: {
-        200: z.array(z.custom<typeof stockInflow.$inferSelect>()),
-      },
-    },
-    create: {
-      method: 'POST' as const,
-      path: '/api/stock-inflow',
-      input: insertStockInflowSchema,
-      responses: {
-        201: z.custom<typeof stockInflow.$inferSelect>(),
-        400: errorSchemas.validation,
-      },
-    },
+    list: { method: 'GET' as const, path: '/api/stock-inflow' },
+    create: { method: 'POST' as const, path: '/api/stock-inflow', input: insertStockInflowSchema },
   },
 };
 

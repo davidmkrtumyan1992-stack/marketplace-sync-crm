@@ -9,7 +9,8 @@ import {
   LogOut,
   Menu,
   X,
-  FileBarChart
+  FileBarChart,
+  ScanLine
 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/products", label: "Товары", icon: Package },
     { href: "/orders", label: "Заказы", icon: ShoppingCart },
     { href: "/customers", label: "Клиенты", icon: Users },
+    { href: "/intake", label: "Приёмка", icon: ScanLine },
     { href: "/reports", label: "Отчёты", icon: FileBarChart },
     { href: "/settings", label: "Настройки", icon: Settings },
   ];

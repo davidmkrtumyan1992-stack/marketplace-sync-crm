@@ -43,6 +43,7 @@ export default function Orders() {
     switch (source) {
       case "ozon": return <Badge className="bg-blue-500/20 text-blue-700 border-blue-300">OZON</Badge>;
       case "wildberries": return <Badge className="bg-purple-500/20 text-purple-700 border-purple-300">WB</Badge>;
+      case "yandex": return <Badge className="bg-yellow-500/20 text-yellow-700 border-yellow-300">Yandex</Badge>;
       default: return <Badge variant="outline" className="text-xs">Вручную</Badge>;
     }
   };

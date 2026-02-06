@@ -1,53 +1,97 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb, decimal } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, decimal, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { users } from "./models/auth";
 
-// Export Auth Models
 export * from "./models/auth";
 
-// === TABLE DEFINITIONS ===
+// === NEW TABLES: Multi-Company Architecture ===
 
-// Products / Inventory
+export const companies = pgTable("companies", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  inn: text("inn"),
+  organizationId: text("organization_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const stores = pgTable("stores", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().references(() => companies.id),
+  marketplace: text("marketplace").notNull(),
+  name: text("name").notNull(),
+  apiKey: text("api_key"),
+  clientId: text("client_id"),
+  warehouseId: text("warehouse_id"),
+  isActive: boolean("is_active").default(true),
+  lastSync: timestamp("last_sync"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const userRoles = pgTable("user_roles", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  organizationId: text("organization_id").notNull(),
+  role: text("role").notNull().default("owner"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const expenses = pgTable("expenses", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").references(() => companies.id),
+  organizationId: text("organization_id").notNull(),
+  category: text("category").notNull(),
+  type: text("type").notNull(),
+  description: text("description"),
+  amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+  date: timestamp("date").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// === UPDATED TABLE DEFINITIONS ===
+
 export const products = pgTable("products", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  sku: text("sku").notNull().unique(),
+  sku: text("sku").notNull(),
+  barcode: text("barcode"),
   description: text("description"),
   category: text("category"),
   purchasePrice: decimal("purchase_price", { precision: 10, scale: 2 }).notNull().default("0"),
   sellingPrice: decimal("selling_price", { precision: 10, scale: 2 }).notNull().default("0"),
-  price: decimal("price", { precision: 10, scale: 2 }).notNull().default("0"), // Legacy: same as sellingPrice
-  weight: decimal("weight", { precision: 10, scale: 3 }), // kg
-  dimensionLength: decimal("dimension_length", { precision: 10, scale: 2 }), // cm
-  dimensionWidth: decimal("dimension_width", { precision: 10, scale: 2 }), // cm
-  dimensionHeight: decimal("dimension_height", { precision: 10, scale: 2 }), // cm
-  stockQuantity: integer("stock_quantity").notNull().default(0), // Total stock
-  stockLocal: integer("stock_local").notNull().default(0), // On local warehouse
-  stockOzon: integer("stock_ozon").notNull().default(0), // On Ozon warehouse
-  stockWb: integer("stock_wb").notNull().default(0), // On Wildberries warehouse
-  logisticsCost: decimal("logistics_cost", { precision: 10, scale: 2 }).default("0"), // Per item
-  marketplaceCommission: decimal("marketplace_commission", { precision: 5, scale: 2 }).default("0"), // Percentage
+  price: decimal("price", { precision: 10, scale: 2 }).notNull().default("0"),
+  weight: decimal("weight", { precision: 10, scale: 3 }),
+  dimensionLength: decimal("dimension_length", { precision: 10, scale: 2 }),
+  dimensionWidth: decimal("dimension_width", { precision: 10, scale: 2 }),
+  dimensionHeight: decimal("dimension_height", { precision: 10, scale: 2 }),
+  stockQuantity: integer("stock_quantity").notNull().default(0),
+  stockLocal: integer("stock_local").notNull().default(0),
+  stockOzon: integer("stock_ozon").notNull().default(0),
+  stockWb: integer("stock_wb").notNull().default(0),
+  stockYandex: integer("stock_yandex").notNull().default(0),
+  logisticsCost: decimal("logistics_cost", { precision: 10, scale: 2 }).default("0"),
+  marketplaceCommission: decimal("marketplace_commission", { precision: 5, scale: 2 }).default("0"),
   ozonId: text("ozon_id"),
   wbId: text("wb_id"),
+  yandexId: text("yandex_id"),
   imageUrl: text("image_url"),
+  companyId: integer("company_id").references(() => companies.id),
   organizationId: text("organization_id").notNull(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Customers (CRM)
 export const customers = pgTable("customers", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email"),
   phone: text("phone"),
   notes: text("notes"),
+  companyId: integer("company_id").references(() => companies.id),
   organizationId: text("organization_id").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Orders
 export const orders = pgTable("orders", {
   id: serial("id").primaryKey(),
   orderNumber: text("order_number").notNull(),
@@ -56,11 +100,12 @@ export const orders = pgTable("orders", {
   totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull().default("0"),
   source: text("source").notNull().default("manual"),
   externalId: text("external_id"),
+  companyId: integer("company_id").references(() => companies.id),
+  storeId: integer("store_id").references(() => stores.id),
   organizationId: text("organization_id").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Order Items
 export const orderItems = pgTable("order_items", {
   id: serial("id").primaryKey(),
   orderId: integer("order_id").notNull().references(() => orders.id),
@@ -69,93 +114,110 @@ export const orderItems = pgTable("order_items", {
   price: decimal("price", { precision: 10, scale: 2 }).notNull(),
 });
 
-// Marketplace Settings
 export const marketplaceSettings = pgTable("marketplace_settings", {
   id: serial("id").primaryKey(),
   organizationId: text("organization_id").notNull(),
+  companyId: integer("company_id").references(() => companies.id),
   marketplace: text("marketplace").notNull(),
   apiKey: text("api_key").notNull(),
   clientId: text("client_id"),
-  warehouseId: text("warehouse_id"), // For Wildberries
+  warehouseId: text("warehouse_id"),
   isActive: boolean("is_active").default(true),
   lastSync: timestamp("last_sync"),
 });
 
-// Tax Settings
 export const taxSettings = pgTable("tax_settings", {
   id: serial("id").primaryKey(),
-  organizationId: text("organization_id").notNull().unique(),
-  taxSystem: text("tax_system").notNull().default("usn_6"), // usn_6 = УСН 6%, usn_15 = УСН 15%
+  organizationId: text("organization_id").notNull(),
+  companyId: integer("company_id").references(() => companies.id),
+  taxSystem: text("tax_system").notNull().default("usn_6"),
+  taxRate: decimal("tax_rate", { precision: 5, scale: 2 }).default("7"),
   defaultLogisticsCost: decimal("default_logistics_cost", { precision: 10, scale: 2 }).default("0"),
-  defaultMarketplaceCommission: decimal("default_marketplace_commission", { precision: 5, scale: 2 }).default("15"), // Percentage
+  defaultMarketplaceCommission: decimal("default_marketplace_commission", { precision: 5, scale: 2 }).default("15"),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Audit Log
 export const auditLog = pgTable("audit_log", {
   id: serial("id").primaryKey(),
   organizationId: text("organization_id").notNull(),
+  companyId: integer("company_id").references(() => companies.id),
   userId: text("user_id").notNull(),
   userName: text("user_name"),
-  action: text("action").notNull(), // stock_adjustment, product_create, product_update, order_create, etc.
-  entityType: text("entity_type").notNull(), // product, order, customer
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
   entityId: integer("entity_id"),
-  details: text("details"), // JSON stringified details
-  delta: integer("delta"), // For stock changes
+  details: text("details"),
+  delta: integer("delta"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Stock Inflow (Оприходование)
 export const stockInflow = pgTable("stock_inflow", {
   id: serial("id").primaryKey(),
   organizationId: text("organization_id").notNull(),
+  companyId: integer("company_id").references(() => companies.id),
   productId: integer("product_id").notNull().references(() => products.id),
   quantity: integer("quantity").notNull(),
   toLocal: integer("to_local").notNull().default(0),
   toOzon: integer("to_ozon").notNull().default(0),
   toWb: integer("to_wb").notNull().default(0),
+  toYandex: integer("to_yandex").notNull().default(0),
   purchasePrice: decimal("purchase_price", { precision: 10, scale: 2 }),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
 // === RELATIONS ===
-export const productsRelations = relations(products, ({ many }) => ({
+
+export const companiesRelations = relations(companies, ({ many }) => ({
+  stores: many(stores),
+  products: many(products),
+  orders: many(orders),
+  expenses: many(expenses),
+}));
+
+export const storesRelations = relations(stores, ({ one, many }) => ({
+  company: one(companies, { fields: [stores.companyId], references: [companies.id] }),
+  orders: many(orders),
+}));
+
+export const productsRelations = relations(products, ({ one, many }) => ({
+  company: one(companies, { fields: [products.companyId], references: [companies.id] }),
   orderItems: many(orderItems),
   stockInflows: many(stockInflow),
 }));
 
 export const ordersRelations = relations(orders, ({ one, many }) => ({
-  customer: one(customers, {
-    fields: [orders.customerId],
-    references: [customers.id],
-  }),
+  customer: one(customers, { fields: [orders.customerId], references: [customers.id] }),
+  company: one(companies, { fields: [orders.companyId], references: [companies.id] }),
+  store: one(stores, { fields: [orders.storeId], references: [stores.id] }),
   items: many(orderItems),
 }));
 
 export const orderItemsRelations = relations(orderItems, ({ one }) => ({
-  order: one(orders, {
-    fields: [orderItems.orderId],
-    references: [orders.id],
-  }),
-  product: one(products, {
-    fields: [orderItems.productId],
-    references: [products.id],
-  }),
+  order: one(orders, { fields: [orderItems.orderId], references: [orders.id] }),
+  product: one(products, { fields: [orderItems.productId], references: [products.id] }),
 }));
 
-export const customersRelations = relations(customers, ({ many }) => ({
+export const customersRelations = relations(customers, ({ one, many }) => ({
+  company: one(companies, { fields: [customers.companyId], references: [companies.id] }),
   orders: many(orders),
 }));
 
 export const stockInflowRelations = relations(stockInflow, ({ one }) => ({
-  product: one(products, {
-    fields: [stockInflow.productId],
-    references: [products.id],
-  }),
+  product: one(products, { fields: [stockInflow.productId], references: [products.id] }),
+  company: one(companies, { fields: [stockInflow.companyId], references: [companies.id] }),
+}));
+
+export const expensesRelations = relations(expenses, ({ one }) => ({
+  company: one(companies, { fields: [expenses.companyId], references: [companies.id] }),
 }));
 
 // === ZOD SCHEMAS ===
+
+export const insertCompanySchema = createInsertSchema(companies).omit({ id: true, createdAt: true });
+export const insertStoreSchema = createInsertSchema(stores).omit({ id: true, createdAt: true, lastSync: true });
+export const insertUserRoleSchema = createInsertSchema(userRoles).omit({ id: true, createdAt: true });
+export const insertExpenseSchema = createInsertSchema(expenses).omit({ id: true, createdAt: true });
 export const insertProductSchema = createInsertSchema(products).omit({ id: true, updatedAt: true });
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true, createdAt: true });
 export const insertOrderSchema = createInsertSchema(orders).omit({ id: true, createdAt: true });
@@ -166,6 +228,15 @@ export const insertAuditLogSchema = createInsertSchema(auditLog).omit({ id: true
 export const insertStockInflowSchema = createInsertSchema(stockInflow).omit({ id: true, createdAt: true });
 
 // === TYPES ===
+
+export type Company = typeof companies.$inferSelect;
+export type InsertCompany = z.infer<typeof insertCompanySchema>;
+export type Store = typeof stores.$inferSelect;
+export type InsertStore = z.infer<typeof insertStoreSchema>;
+export type UserRole = typeof userRoles.$inferSelect;
+export type InsertUserRole = z.infer<typeof insertUserRoleSchema>;
+export type Expense = typeof expenses.$inferSelect;
+export type InsertExpense = z.infer<typeof insertExpenseSchema>;
 export type Product = typeof products.$inferSelect;
 export type InsertProduct = z.infer<typeof insertProductSchema>;
 export type Customer = typeof customers.$inferSelect;
@@ -197,6 +268,17 @@ export type OrderWithDetails = Order & {
   items: (OrderItem & { product: Product | null })[];
 };
 
+export type StoreWithStats = Store & {
+  productCount: number;
+  pendingOrders: number;
+};
+
+export type CompanyWithStores = Company & {
+  stores: StoreWithStats[];
+  totalStock: number;
+  totalValue: number;
+};
+
 // KPI Types
 export type DashboardKPI = {
   totalStock: number;
@@ -207,5 +289,7 @@ export type DashboardKPI = {
     local: number;
     ozon: number;
     wb: number;
+    yandex: number;
   };
+  companies: CompanyWithStores[];
 };
