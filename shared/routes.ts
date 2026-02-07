@@ -100,6 +100,14 @@ export const api = {
     list: { method: 'GET' as const, path: '/api/stock-inflow' },
     create: { method: 'POST' as const, path: '/api/stock-inflow', input: insertStockInflowSchema },
   },
+  syncHistory: {
+    list: { method: 'GET' as const, path: '/api/sync-history' },
+  },
+  analytics: {
+    abc: { method: 'GET' as const, path: '/api/analytics/abc' },
+    sales: { method: 'GET' as const, path: '/api/analytics/sales' },
+    lowStock: { method: 'GET' as const, path: '/api/analytics/low-stock' },
+  },
 };
 
 export function buildUrl(path: string, params?: Record<string, string | number>): string {

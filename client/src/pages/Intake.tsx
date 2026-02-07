@@ -12,7 +12,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { formatCurrency } from "@/lib/format";
 import type { Product, Company } from "@shared/schema";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Barcode, ScanLine, Package, Plus, Minus, Trash2, Check, Building2 } from "lucide-react";
+import { Barcode, ScanLine, Package, Plus, Minus, Trash2, Check, Building2, FileSpreadsheet } from "lucide-react";
 
 interface BatchItem {
   product: Product;
@@ -317,6 +317,31 @@ export default function Intake() {
               Сканируйте штрихкоды для быстрого оприходования
             </p>
           </div>
+          <Button
+            variant="outline"
+            size="lg"
+            data-testid="button-export-products"
+            onClick={async () => {
+              try {
+                const res = await fetch("/api/export/products", { credentials: "include" });
+                if (!res.ok) throw new Error("Ошибка экспорта");
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "products.xlsx";
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+              } catch {
+                toast({ title: "Ошибка", description: "Не удалось экспортировать товары", variant: "destructive" });
+              }
+            }}
+          >
+            <FileSpreadsheet className="w-5 h-5 mr-2" />
+            Экспорт товаров
+          </Button>
         </div>
 
         <Card>
@@ -393,11 +418,11 @@ export default function Intake() {
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-muted/30">
-                        <TableHead>Название</TableHead>
-                        <TableHead>Артикул</TableHead>
-                        <TableHead>Штрихкод</TableHead>
-                        <TableHead className="text-center">Количество</TableHead>
-                        <TableHead className="text-right">Закупка</TableHead>
+                        <TableHead className="text-lg">Название</TableHead>
+                        <TableHead className="text-lg">Артикул</TableHead>
+                        <TableHead className="text-lg">Штрихкод</TableHead>
+                        <TableHead className="text-center text-lg">Количество</TableHead>
+                        <TableHead className="text-right text-lg">Закупка</TableHead>
                         <TableHead className="w-[50px]"></TableHead>
                       </TableRow>
                     </TableHeader>
@@ -407,10 +432,10 @@ export default function Intake() {
                           <TableCell className="font-medium" data-testid={`text-product-name-${item.product.id}`}>
                             {item.product.name}
                           </TableCell>
-                          <TableCell className="font-mono text-muted-foreground" data-testid={`text-product-sku-${item.product.id}`}>
+                          <TableCell className="font-mono font-bold text-lg" data-testid={`text-product-sku-${item.product.id}`}>
                             {item.product.sku}
                           </TableCell>
-                          <TableCell className="font-mono text-muted-foreground" data-testid={`text-product-barcode-${item.product.id}`}>
+                          <TableCell className="font-mono font-bold text-lg" data-testid={`text-product-barcode-${item.product.id}`}>
                             {item.product.barcode || "—"}
                           </TableCell>
                           <TableCell>
@@ -418,6 +443,7 @@ export default function Intake() {
                               <Button
                                 variant="outline"
                                 size="icon"
+                                className="min-h-12 min-w-12 text-lg"
                                 onClick={() => updateQuantity(item.product.id, -1)}
                                 disabled={item.quantity <= 1}
                                 data-testid={`button-decrease-qty-${item.product.id}`}
@@ -437,6 +463,7 @@ export default function Intake() {
                               <Button
                                 variant="outline"
                                 size="icon"
+                                className="min-h-12 min-w-12 text-lg"
                                 onClick={() => updateQuantity(item.product.id, 1)}
                                 data-testid={`button-increase-qty-${item.product.id}`}
                               >
@@ -484,13 +511,13 @@ export default function Intake() {
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-muted/30">
-                        <TableHead>Товар</TableHead>
-                        <TableHead className="text-center">Всего</TableHead>
-                        <TableHead className="text-center">Склад</TableHead>
-                        <TableHead className="text-center">Ozon</TableHead>
-                        <TableHead className="text-center">Wildberries</TableHead>
-                        <TableHead className="text-center">Yandex Market</TableHead>
-                        <TableHead className="text-center">Сумма</TableHead>
+                        <TableHead className="text-lg">Товар</TableHead>
+                        <TableHead className="text-center text-lg">Всего</TableHead>
+                        <TableHead className="text-center text-lg">Склад</TableHead>
+                        <TableHead className="text-center text-lg">Ozon</TableHead>
+                        <TableHead className="text-center text-lg">Wildberries</TableHead>
+                        <TableHead className="text-center text-lg">Yandex Market</TableHead>
+                        <TableHead className="text-center text-lg">Сумма</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -569,7 +596,7 @@ export default function Intake() {
             <div className="flex justify-end">
               <Button
                 size="lg"
-                className="premium-button"
+                className="premium-button h-14 text-lg"
                 onClick={handleConfirmReceipt}
                 disabled={isSubmitting || !isDistributionValid || batch.length === 0}
                 data-testid="button-confirm-receipt"

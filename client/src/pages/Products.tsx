@@ -42,6 +42,7 @@ import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { formatCurrency, formatQuantity } from "@/lib/format";
 import { queryClient } from "@/lib/queryClient";
+import { useRole } from "@/hooks/use-role";
 
 const formSchema = insertProductSchema.extend({
   purchasePrice: z.coerce.number(),
@@ -73,13 +74,14 @@ const CATEGORIES = [
 
 export default function Products() {
   const { data: products, isLoading } = useProducts();
+  const { canSeePurchasePrice } = useRole();
   const [search, setSearch] = useState("");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [inflowProduct, setInflowProduct] = useState<Product | null>(null);
   const { toast } = useToast();
 
-  const filteredProducts = products?.filter(p => 
+  const filteredProducts = products?.filter((p: any) => 
     p.name.toLowerCase().includes(search.toLowerCase()) || 
     p.sku.toLowerCase().includes(search.toLowerCase())
   );
@@ -122,7 +124,7 @@ export default function Products() {
                   <DialogTitle>Добавить новый товар</DialogTitle>
                   <DialogDescription>Заполните информацию о товаре</DialogDescription>
                 </DialogHeader>
-                <ProductForm onSuccess={() => setIsCreateOpen(false)} />
+                <ProductForm onSuccess={() => setIsCreateOpen(false)} canSeePurchasePrice={canSeePurchasePrice} />
               </DialogContent>
             </Dialog>
           </div>
@@ -147,7 +149,7 @@ export default function Products() {
               <TableRow className="bg-muted/30">
                 <TableHead>Товар</TableHead>
                 <TableHead>Артикул</TableHead>
-                <TableHead className="text-right">Закупка</TableHead>
+                {canSeePurchasePrice && <TableHead className="text-right">Закупка</TableHead>}
                 <TableHead className="text-right">Продажа</TableHead>
                 <TableHead className="text-center">Остаток</TableHead>
                 <TableHead>Распределение</TableHead>
@@ -157,17 +159,17 @@ export default function Products() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-24 text-center">Загрузка товаров...</TableCell>
+                  <TableCell colSpan={canSeePurchasePrice ? 7 : 6} className="h-24 text-center">Загрузка товаров...</TableCell>
                 </TableRow>
               ) : filteredProducts?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                  <TableCell colSpan={canSeePurchasePrice ? 7 : 6} className="h-32 text-center text-muted-foreground">
                     Товары не найдены. Добавьте первый товар.
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredProducts?.map((product) => (
-                  <ProductRow key={product.id} product={product} onInflow={() => setInflowProduct(product)} />
+                filteredProducts?.map((product: any) => (
+                  <ProductRow key={product.id} product={product} onInflow={() => setInflowProduct(product)} canSeePurchasePrice={canSeePurchasePrice} />
                 ))
               )}
             </TableBody>
@@ -191,7 +193,7 @@ export default function Products() {
   );
 }
 
-function ProductForm({ onSuccess }: { onSuccess: () => void }) {
+function ProductForm({ onSuccess, canSeePurchasePrice = true }: { onSuccess: () => void; canSeePurchasePrice?: boolean }) {
   const { mutate, isPending } = useCreateProduct();
   const { toast } = useToast();
   const [markup, setMarkup] = useState(0);
@@ -345,29 +347,33 @@ function ProductForm({ onSuccess }: { onSuccess: () => void }) {
           <Percent className="w-4 h-4" />
           Ценообразование
         </Label>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="grid gap-1">
-            <Label htmlFor="purchasePrice" className="text-xs text-muted-foreground">Закупка, ₽</Label>
-            <Input 
-              id="purchasePrice" 
-              type="number" 
-              step="0.01" 
-              {...form.register("purchasePrice")} 
-              data-testid="input-purchase-price"
-            />
-          </div>
-          <div className="grid gap-1">
-            <Label htmlFor="markup" className="text-xs text-muted-foreground">Наценка, %</Label>
-            <Input 
-              id="markup" 
-              type="number" 
-              step="1"
-              value={markup}
-              onChange={(e) => setMarkup(Number(e.target.value))}
-              placeholder="50"
-              data-testid="input-markup-percent"
-            />
-          </div>
+        <div className={`grid ${canSeePurchasePrice ? 'grid-cols-3' : 'grid-cols-1'} gap-3`}>
+          {canSeePurchasePrice ? (
+            <>
+              <div className="grid gap-1">
+                <Label htmlFor="purchasePrice" className="text-xs text-muted-foreground">Закупка, ₽</Label>
+                <Input 
+                  id="purchasePrice" 
+                  type="number" 
+                  step="0.01" 
+                  {...form.register("purchasePrice")} 
+                  data-testid="input-purchase-price"
+                />
+              </div>
+              <div className="grid gap-1">
+                <Label htmlFor="markup" className="text-xs text-muted-foreground">Наценка, %</Label>
+                <Input 
+                  id="markup" 
+                  type="number" 
+                  step="1"
+                  value={markup}
+                  onChange={(e) => setMarkup(Number(e.target.value))}
+                  placeholder="50"
+                  data-testid="input-markup-percent"
+                />
+              </div>
+            </>
+          ) : null}
           <div className="grid gap-1">
             <Label htmlFor="sellingPrice" className="text-xs text-muted-foreground">Продажа, ₽</Label>
             <Input 
@@ -379,7 +385,7 @@ function ProductForm({ onSuccess }: { onSuccess: () => void }) {
             />
           </div>
         </div>
-        {markup > 0 && purchasePrice > 0 && (
+        {canSeePurchasePrice && markup > 0 && purchasePrice > 0 && (
           <p className="text-xs text-blue-600">
             Наценка {markup}% от {purchasePrice} ₽ = {Math.round(purchasePrice * (1 + markup / 100) * 100) / 100} ₽
           </p>
@@ -635,7 +641,7 @@ function StockInflowForm({ product, onSuccess }: { product: Product; onSuccess: 
   );
 }
 
-function ProductRow({ product, onInflow }: { product: Product; onInflow: () => void }) {
+function ProductRow({ product, onInflow, canSeePurchasePrice = true }: { product: Product; onInflow: () => void; canSeePurchasePrice?: boolean }) {
   const { mutate: deleteProduct } = useDeleteProduct();
   const { mutate: syncProduct, isPending: isSyncing } = useSyncProduct();
 
@@ -653,7 +659,7 @@ function ProductRow({ product, onInflow }: { product: Product; onInflow: () => v
         </div>
       </TableCell>
       <TableCell className="font-mono text-xs">{product.sku}</TableCell>
-      <TableCell className="text-right text-sm">{formatCurrency(product.purchasePrice || 0)}</TableCell>
+      {canSeePurchasePrice && <TableCell className="text-right text-sm">{formatCurrency(product.purchasePrice || 0)}</TableCell>}
       <TableCell className="text-right font-medium">{formatCurrency(product.sellingPrice || product.price || 0)}</TableCell>
       <TableCell className="text-center">
         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${

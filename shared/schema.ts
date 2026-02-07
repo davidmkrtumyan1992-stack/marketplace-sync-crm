@@ -166,6 +166,18 @@ export const stockInflow = pgTable("stock_inflow", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const syncHistory = pgTable("sync_history", {
+  id: serial("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  storeId: integer("store_id").references(() => stores.id),
+  companyId: integer("company_id").references(() => companies.id),
+  action: text("action").notNull(),
+  status: text("status").notNull().default("success"),
+  details: text("details"),
+  itemsCount: integer("items_count").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // === RELATIONS ===
 
 export const companiesRelations = relations(companies, ({ many }) => ({
@@ -226,6 +238,7 @@ export const insertMarketplaceSettingsSchema = createInsertSchema(marketplaceSet
 export const insertTaxSettingsSchema = createInsertSchema(taxSettings).omit({ id: true, updatedAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLog).omit({ id: true, createdAt: true });
 export const insertStockInflowSchema = createInsertSchema(stockInflow).omit({ id: true, createdAt: true });
+export const insertSyncHistorySchema = createInsertSchema(syncHistory).omit({ id: true, createdAt: true });
 
 // === TYPES ===
 
@@ -253,6 +266,8 @@ export type AuditLogEntry = typeof auditLog.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type StockInflow = typeof stockInflow.$inferSelect;
 export type InsertStockInflow = z.infer<typeof insertStockInflowSchema>;
+export type SyncHistoryEntry = typeof syncHistory.$inferSelect;
+export type InsertSyncHistory = z.infer<typeof insertSyncHistorySchema>;
 
 // API Requests
 export type CreateProductRequest = InsertProduct;
@@ -261,6 +276,30 @@ export type CreateCustomerRequest = InsertCustomer;
 export type UpdateCustomerRequest = Partial<InsertCustomer>;
 export type CreateOrderRequest = InsertOrder & { items: { productId: number; quantity: number; price: number }[] };
 export type UpdateOrderRequest = Partial<InsertOrder>;
+
+// Role type
+export type RoleName = "owner" | "accountant" | "administrator";
+
+// ABC Analysis
+export type ABCProduct = Product & {
+  abcCategory: "A" | "B" | "C";
+  revenue: number;
+  revenueShare: number;
+  cumulativeShare: number;
+};
+
+// Low Stock Alert
+export type LowStockProduct = Product & {
+  companyName: string;
+};
+
+// Sales Data Point
+export type SalesDataPoint = {
+  date: string;
+  revenue: number;
+  companyId: number | null;
+  companyName: string;
+};
 
 // Composite Response
 export type OrderWithDetails = Order & {

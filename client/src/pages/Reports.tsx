@@ -4,6 +4,7 @@ import { useProducts } from "@/hooks/use-products";
 import { useOrders } from "@/hooks/use-orders";
 import { useTaxSettings } from "@/hooks/use-tax-settings";
 import { useAuditLog } from "@/hooks/use-audit-log";
+import { useRole } from "@/hooks/use-role";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -16,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,9 +26,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { formatCurrency, formatQuantity, angleQuote } from "@/lib/format";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
-import { FileText, History, TrendingUp, TrendingDown, Plus, Trash2, Wallet, Building2 } from "lucide-react";
+import { FileText, FileSpreadsheet, History, TrendingUp, TrendingDown, Plus, Trash2, Wallet, Building2, BarChart3 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import type { Expense, Company } from "@shared/schema";
+import type { Expense, Company, ABCProduct } from "@shared/schema";
 
 const INTERNAL_TYPES = [
   { value: "salary", label: "Зарплата" },
@@ -52,6 +54,7 @@ export default function Reports() {
   const { data: auditLog, isLoading: auditLoading } = useAuditLog();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { canSeePnL } = useRole();
 
   const { data: expenses, isLoading: expensesLoading } = useQuery<Expense[]>({
     queryKey: ["/api/expenses"],
@@ -59,6 +62,10 @@ export default function Reports() {
 
   const { data: companies } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
+  });
+
+  const { data: abcProducts, isLoading: abcLoading } = useQuery<ABCProduct[]>({
+    queryKey: ["/api/analytics/abc"],
   });
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -117,6 +124,15 @@ export default function Reports() {
     });
   };
 
+  const handleExport = async (url: string, filename: string) => {
+    const response = await fetch(url, { credentials: "include" });
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
+  };
+
   const internalExpenses = expenses?.filter(e => e.category === "internal") || [];
   const externalExpenses = expenses?.filter(e => e.category === "external") || [];
   const internalTotal = internalExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
@@ -134,12 +150,12 @@ export default function Reports() {
     let marketplaceFees = 0;
     let logistics = 0;
 
-    orders.forEach(order => {
+    orders.forEach((order: any) => {
       const orderRevenue = Number(order.totalAmount);
       grossRevenue += orderRevenue;
 
       order.items?.forEach((item: any) => {
-        const product = products.find(p => p.id === item.productId);
+        const product = products.find((p: any) => p.id === item.productId);
         if (product) {
           cogs += item.quantity * Number(product.purchasePrice || 0);
           const commissionRate = product.marketplaceCommission != null && product.marketplaceCommission !== ""
@@ -275,6 +291,26 @@ export default function Reports() {
     </div>
   );
 
+  const abcCountA = abcProducts?.filter(p => p.abcCategory === "A").length || 0;
+  const abcCountB = abcProducts?.filter(p => p.abcCategory === "B").length || 0;
+  const abcCountC = abcProducts?.filter(p => p.abcCategory === "C").length || 0;
+
+  const getAbcBadgeVariant = (category: "A" | "B" | "C") => {
+    switch (category) {
+      case "A": return "default";
+      case "B": return "secondary";
+      case "C": return "destructive";
+    }
+  };
+
+  const getAbcBadgeClass = (category: "A" | "B" | "C") => {
+    switch (category) {
+      case "A": return "bg-green-600 text-white no-default-hover-elevate no-default-active-elevate";
+      case "B": return "bg-yellow-500 text-white no-default-hover-elevate no-default-active-elevate";
+      case "C": return "bg-red-500 text-white no-default-hover-elevate no-default-active-elevate";
+    }
+  };
+
   return (
     <Layout>
       <div className="space-y-8">
@@ -283,12 +319,14 @@ export default function Reports() {
           <p className="text-muted-foreground mt-2 text-lg">Финансовая отчётность и история изменений</p>
         </div>
 
-        <Tabs defaultValue="pnl" className="space-y-4">
+        <Tabs defaultValue={canSeePnL ? "pnl" : "expenses"} className="space-y-4">
           <TabsList>
-            <TabsTrigger value="pnl" className="gap-2" data-testid="tab-pnl">
-              <FileText className="w-4 h-4" />
-              P&L отчёт
-            </TabsTrigger>
+            {canSeePnL && (
+              <TabsTrigger value="pnl" className="gap-2" data-testid="tab-pnl">
+                <FileText className="w-4 h-4" />
+                P&L отчёт
+              </TabsTrigger>
+            )}
             <TabsTrigger value="expenses" className="gap-2" data-testid="tab-expenses">
               <Wallet className="w-4 h-4" />
               Расходы
@@ -297,164 +335,180 @@ export default function Reports() {
               <History className="w-4 h-4" />
               Аудит-лог
             </TabsTrigger>
+            <TabsTrigger value="abc" className="gap-2" data-testid="tab-abc">
+              <BarChart3 className="w-4 h-4" />
+              ABC-анализ
+            </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="pnl">
-            <Card className="kpi-card">
-              <CardHeader>
-                <CardTitle>Отчёт о прибылях и убытках</CardTitle>
-                <CardDescription>
-                  Финансовые показатели за период. Система налогообложения: {angleQuote(taxSettings?.taxSystem === "usn_15" ? "УСН 15%" : "УСН 6%")}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {pnl ? (
-                  <div className="space-y-6">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="bg-muted/30">
-                          <TableHead className="w-1/2">Показатель</TableHead>
-                          <TableHead className="text-right">Сумма</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        <TableRow>
-                          <TableCell className="font-medium flex items-center gap-2">
-                            <TrendingUp className="w-4 h-4 text-green-500" />
-                            Валовая выручка (Gross Revenue)
-                          </TableCell>
-                          <TableCell className="text-right font-semibold text-green-600" data-testid="text-gross-revenue">
-                            {formatCurrency(pnl.grossRevenue)}
-                          </TableCell>
-                        </TableRow>
-                        <TableRow>
-                          <TableCell className="font-medium pl-8 text-muted-foreground">
-                            − Себестоимость (COGS)
-                          </TableCell>
-                          <TableCell className="text-right text-red-600">
-                            −{formatCurrency(pnl.cogs)}
-                          </TableCell>
-                        </TableRow>
-                        <TableRow>
-                          <TableCell className="font-medium pl-8 text-muted-foreground">
-                            − Комиссии маркетплейсов
-                          </TableCell>
-                          <TableCell className="text-right text-red-600">
-                            −{formatCurrency(pnl.marketplaceFees)}
-                          </TableCell>
-                        </TableRow>
-                        <TableRow>
-                          <TableCell className="font-medium pl-8 text-muted-foreground">
-                            − Логистика
-                          </TableCell>
-                          <TableCell className="text-right text-red-600">
-                            −{formatCurrency(pnl.logistics)}
-                          </TableCell>
-                        </TableRow>
-                        <TableRow>
-                          <TableCell className="font-medium pl-8 text-muted-foreground">
-                            − Налоги ({taxSettings?.taxSystem === "usn_15" ? "УСН 15%" : "УСН 6%"})
-                          </TableCell>
-                          <TableCell className="text-right text-red-600">
-                            −{formatCurrency(pnl.taxes)}
-                          </TableCell>
-                        </TableRow>
-
-                        {(pnl.internalTotal > 0 || pnl.externalTotal > 0) && (
-                          <>
-                            <TableRow className="bg-muted/20">
-                              <TableCell colSpan={2} className="font-semibold text-muted-foreground text-xs uppercase tracking-wider pt-4">
-                                Внутренние расходы
-                              </TableCell>
-                            </TableRow>
-                            {pnl.expInternalSalary > 0 && (
-                              <TableRow>
-                                <TableCell className="font-medium pl-8 text-muted-foreground">− Зарплата</TableCell>
-                                <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expInternalSalary)}</TableCell>
-                              </TableRow>
-                            )}
-                            {pnl.expInternalRent > 0 && (
-                              <TableRow>
-                                <TableCell className="font-medium pl-8 text-muted-foreground">− Аренда</TableCell>
-                                <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expInternalRent)}</TableCell>
-                              </TableRow>
-                            )}
-                            {pnl.expInternalOther > 0 && (
-                              <TableRow>
-                                <TableCell className="font-medium pl-8 text-muted-foreground">− Прочие внутренние</TableCell>
-                                <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expInternalOther)}</TableCell>
-                              </TableRow>
-                            )}
-
-                            <TableRow className="bg-muted/20">
-                              <TableCell colSpan={2} className="font-semibold text-muted-foreground text-xs uppercase tracking-wider pt-4">
-                                Внешние расходы
-                              </TableCell>
-                            </TableRow>
-                            {pnl.expExtCommission > 0 && (
-                              <TableRow>
-                                <TableCell className="font-medium pl-8 text-muted-foreground">− Комиссии</TableCell>
-                                <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expExtCommission)}</TableCell>
-                              </TableRow>
-                            )}
-                            {pnl.expExtLogistics > 0 && (
-                              <TableRow>
-                                <TableCell className="font-medium pl-8 text-muted-foreground">− Логистика (расходы)</TableCell>
-                                <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expExtLogistics)}</TableCell>
-                              </TableRow>
-                            )}
-                            {pnl.expExtTaxes > 0 && (
-                              <TableRow>
-                                <TableCell className="font-medium pl-8 text-muted-foreground">− Налоги (расходы)</TableCell>
-                                <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expExtTaxes)}</TableCell>
-                              </TableRow>
-                            )}
-                          </>
-                        )}
-
-                        <TableRow className="bg-muted border-t-2">
-                          <TableCell className="font-bold flex items-center gap-2">
-                            {pnl.netProfit >= 0 ? (
+          {canSeePnL && (
+            <TabsContent value="pnl">
+              <Card className="kpi-card">
+                <CardHeader className="flex flex-row items-center justify-between gap-4 flex-wrap">
+                  <div>
+                    <CardTitle>Отчёт о прибылях и убытках</CardTitle>
+                    <CardDescription>
+                      Финансовые показатели за период. Система налогообложения: {angleQuote(taxSettings?.taxSystem === "usn_15" ? "УСН 15%" : "УСН 6%")}
+                    </CardDescription>
+                  </div>
+                  <Button
+                    variant="outline"
+                    data-testid="button-export-pnl"
+                    onClick={() => handleExport("/api/export/pnl", "pnl-report.xlsx")}
+                  >
+                    <FileSpreadsheet className="w-4 h-4 mr-2" />
+                    Экспорт в Excel
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  {pnl ? (
+                    <div className="space-y-6">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/30">
+                            <TableHead className="w-1/2">Показатель</TableHead>
+                            <TableHead className="text-right">Сумма</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          <TableRow>
+                            <TableCell className="font-medium flex items-center gap-2">
                               <TrendingUp className="w-4 h-4 text-green-500" />
-                            ) : (
-                              <TrendingDown className="w-4 h-4 text-red-500" />
-                            )}
-                            Чистая прибыль (Net Profit)
-                          </TableCell>
-                          <TableCell className={`text-right font-bold text-lg ${pnl.netProfit >= 0 ? "text-green-600" : "text-red-600"}`} data-testid="text-net-profit">
-                            {formatCurrency(pnl.netProfit)}
-                          </TableCell>
-                        </TableRow>
-                      </TableBody>
-                    </Table>
+                              Валовая выручка (Gross Revenue)
+                            </TableCell>
+                            <TableCell className="text-right font-semibold text-green-600" data-testid="text-gross-revenue">
+                              {formatCurrency(pnl.grossRevenue)}
+                            </TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell className="font-medium pl-8 text-muted-foreground">
+                              − Себестоимость (COGS)
+                            </TableCell>
+                            <TableCell className="text-right text-red-600">
+                              −{formatCurrency(pnl.cogs)}
+                            </TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell className="font-medium pl-8 text-muted-foreground">
+                              − Комиссии маркетплейсов
+                            </TableCell>
+                            <TableCell className="text-right text-red-600">
+                              −{formatCurrency(pnl.marketplaceFees)}
+                            </TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell className="font-medium pl-8 text-muted-foreground">
+                              − Логистика
+                            </TableCell>
+                            <TableCell className="text-right text-red-600">
+                              −{formatCurrency(pnl.logistics)}
+                            </TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell className="font-medium pl-8 text-muted-foreground">
+                              − Налоги ({taxSettings?.taxSystem === "usn_15" ? "УСН 15%" : "УСН 6%"})
+                            </TableCell>
+                            <TableCell className="text-right text-red-600">
+                              −{formatCurrency(pnl.taxes)}
+                            </TableCell>
+                          </TableRow>
 
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t">
-                      <div className="text-center p-4 rounded-lg" style={{ background: '#0FC2C020' }}>
-                        <p className="text-sm text-muted-foreground">Выручка</p>
-                        <p className="text-xl font-bold text-green-600" data-testid="text-summary-revenue">{formatCurrency(pnl.grossRevenue)}</p>
-                      </div>
-                      <div className="text-center p-4 rounded-lg bg-muted">
-                        <p className="text-sm text-muted-foreground">Расходы</p>
-                        <p className="text-xl font-bold text-red-600" data-testid="text-summary-expenses">{formatCurrency(pnl.totalExpenses)}</p>
-                      </div>
-                      <div className="text-center p-4 rounded-lg bg-muted">
-                        <p className="text-sm text-muted-foreground">Налоги</p>
-                        <p className="text-xl font-bold" data-testid="text-summary-taxes">{formatCurrency(pnl.taxes)}</p>
-                      </div>
-                      <div className="text-center p-4 rounded-lg" style={{ background: pnl.netProfit >= 0 ? '#0FC2C015' : '#ef444415' }}>
-                        <p className="text-sm text-muted-foreground">Прибыль</p>
-                        <p className={`text-xl font-bold ${pnl.netProfit >= 0 ? "text-green-600" : "text-red-600"}`} data-testid="text-summary-profit">
-                          {formatCurrency(pnl.netProfit)}
-                        </p>
+                          {(pnl.internalTotal > 0 || pnl.externalTotal > 0) && (
+                            <>
+                              <TableRow className="bg-muted/20">
+                                <TableCell colSpan={2} className="font-semibold text-muted-foreground text-xs uppercase tracking-wider pt-4">
+                                  Внутренние расходы
+                                </TableCell>
+                              </TableRow>
+                              {pnl.expInternalSalary > 0 && (
+                                <TableRow>
+                                  <TableCell className="font-medium pl-8 text-muted-foreground">− Зарплата</TableCell>
+                                  <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expInternalSalary)}</TableCell>
+                                </TableRow>
+                              )}
+                              {pnl.expInternalRent > 0 && (
+                                <TableRow>
+                                  <TableCell className="font-medium pl-8 text-muted-foreground">− Аренда</TableCell>
+                                  <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expInternalRent)}</TableCell>
+                                </TableRow>
+                              )}
+                              {pnl.expInternalOther > 0 && (
+                                <TableRow>
+                                  <TableCell className="font-medium pl-8 text-muted-foreground">− Прочие внутренние</TableCell>
+                                  <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expInternalOther)}</TableCell>
+                                </TableRow>
+                              )}
+
+                              <TableRow className="bg-muted/20">
+                                <TableCell colSpan={2} className="font-semibold text-muted-foreground text-xs uppercase tracking-wider pt-4">
+                                  Внешние расходы
+                                </TableCell>
+                              </TableRow>
+                              {pnl.expExtCommission > 0 && (
+                                <TableRow>
+                                  <TableCell className="font-medium pl-8 text-muted-foreground">− Комиссии</TableCell>
+                                  <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expExtCommission)}</TableCell>
+                                </TableRow>
+                              )}
+                              {pnl.expExtLogistics > 0 && (
+                                <TableRow>
+                                  <TableCell className="font-medium pl-8 text-muted-foreground">− Логистика (расходы)</TableCell>
+                                  <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expExtLogistics)}</TableCell>
+                                </TableRow>
+                              )}
+                              {pnl.expExtTaxes > 0 && (
+                                <TableRow>
+                                  <TableCell className="font-medium pl-8 text-muted-foreground">− Налоги (расходы)</TableCell>
+                                  <TableCell className="text-right text-red-600">−{formatCurrency(pnl.expExtTaxes)}</TableCell>
+                                </TableRow>
+                              )}
+                            </>
+                          )}
+
+                          <TableRow className="bg-muted border-t-2">
+                            <TableCell className="font-bold flex items-center gap-2">
+                              {pnl.netProfit >= 0 ? (
+                                <TrendingUp className="w-4 h-4 text-green-500" />
+                              ) : (
+                                <TrendingDown className="w-4 h-4 text-red-500" />
+                              )}
+                              Чистая прибыль (Net Profit)
+                            </TableCell>
+                            <TableCell className={`text-right font-bold text-lg ${pnl.netProfit >= 0 ? "text-green-600" : "text-red-600"}`} data-testid="text-net-profit">
+                              {formatCurrency(pnl.netProfit)}
+                            </TableCell>
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t">
+                        <div className="text-center p-4 rounded-lg" style={{ background: '#0FC2C020' }}>
+                          <p className="text-sm text-muted-foreground">Выручка</p>
+                          <p className="text-xl font-bold text-green-600" data-testid="text-summary-revenue">{formatCurrency(pnl.grossRevenue)}</p>
+                        </div>
+                        <div className="text-center p-4 rounded-lg bg-muted">
+                          <p className="text-sm text-muted-foreground">Расходы</p>
+                          <p className="text-xl font-bold text-red-600" data-testid="text-summary-expenses">{formatCurrency(pnl.totalExpenses)}</p>
+                        </div>
+                        <div className="text-center p-4 rounded-lg bg-muted">
+                          <p className="text-sm text-muted-foreground">Налоги</p>
+                          <p className="text-xl font-bold" data-testid="text-summary-taxes">{formatCurrency(pnl.taxes)}</p>
+                        </div>
+                        <div className="text-center p-4 rounded-lg" style={{ background: pnl.netProfit >= 0 ? '#0FC2C015' : '#ef444415' }}>
+                          <p className="text-sm text-muted-foreground">Прибыль</p>
+                          <p className={`text-xl font-bold ${pnl.netProfit >= 0 ? "text-green-600" : "text-red-600"}`} data-testid="text-summary-profit">
+                            {formatCurrency(pnl.netProfit)}
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : (
-                  <p className="text-center text-muted-foreground py-8">Нет данных для отображения</p>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
+                  ) : (
+                    <p className="text-center text-muted-foreground py-8">Нет данных для отображения</p>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
 
           <TabsContent value="expenses">
             <Card className="kpi-card">
@@ -463,99 +517,109 @@ export default function Reports() {
                   <CardTitle>Расходы</CardTitle>
                   <CardDescription>Внутренние и внешние расходы компании</CardDescription>
                 </div>
-                <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                  <DialogTrigger asChild>
-                    <Button data-testid="button-add-expense">
-                      <Plus className="w-4 h-4 mr-2" />
-                      Добавить расход
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Новый расход</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-4 py-4">
-                      <div className="space-y-2">
-                        <Label>Категория</Label>
-                        <Select
-                          value={newCategory}
-                          onValueChange={(v) => {
-                            setNewCategory(v as "internal" | "external");
-                            setNewType("");
-                          }}
-                        >
-                          <SelectTrigger data-testid="select-category">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="internal">Внутренние</SelectItem>
-                            <SelectItem value="external">Внешние</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Тип расхода</Label>
-                        <Select value={newType} onValueChange={setNewType}>
-                          <SelectTrigger data-testid="select-type">
-                            <SelectValue placeholder="Выберите тип" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {typeOptions.map((t) => (
-                              <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Описание</Label>
-                        <Input
-                          data-testid="input-description"
-                          value={newDescription}
-                          onChange={(e) => setNewDescription(e.target.value)}
-                          placeholder="Описание расхода"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Сумма</Label>
-                        <Input
-                          data-testid="input-amount"
-                          type="number"
-                          value={newAmount}
-                          onChange={(e) => setNewAmount(e.target.value)}
-                          placeholder="0"
-                          min="0"
-                          step="0.01"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Компания</Label>
-                        <Select value={newCompanyId} onValueChange={setNewCompanyId}>
-                          <SelectTrigger data-testid="select-company">
-                            <SelectValue placeholder="Выберите компанию" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {companies?.map((c) => (
-                              <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button
-                        data-testid="button-submit-expense"
-                        onClick={handleCreateExpense}
-                        disabled={!newType || !newAmount || createExpenseMutation.isPending}
-                      >
-                        {createExpenseMutation.isPending ? "Сохранение..." : "Сохранить"}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    variant="outline"
+                    data-testid="button-export-expenses"
+                    onClick={() => handleExport("/api/export/pnl", "expenses-report.xlsx")}
+                  >
+                    <FileSpreadsheet className="w-4 h-4 mr-2" />
+                    Экспорт в Excel
+                  </Button>
+                  <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                    <DialogTrigger asChild>
+                      <Button data-testid="button-add-expense">
+                        <Plus className="w-4 h-4 mr-2" />
+                        Добавить расход
                       </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Новый расход</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-4 py-4">
+                        <div className="space-y-2">
+                          <Label>Категория</Label>
+                          <Select
+                            value={newCategory}
+                            onValueChange={(v) => {
+                              setNewCategory(v as "internal" | "external");
+                              setNewType("");
+                            }}
+                          >
+                            <SelectTrigger data-testid="select-category">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="internal">Внутренние</SelectItem>
+                              <SelectItem value="external">Внешние</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Тип расхода</Label>
+                          <Select value={newType} onValueChange={setNewType}>
+                            <SelectTrigger data-testid="select-type">
+                              <SelectValue placeholder="Выберите тип" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {typeOptions.map((t) => (
+                                <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Описание</Label>
+                          <Input
+                            data-testid="input-description"
+                            value={newDescription}
+                            onChange={(e) => setNewDescription(e.target.value)}
+                            placeholder="Описание расхода"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Сумма</Label>
+                          <Input
+                            data-testid="input-amount"
+                            type="number"
+                            value={newAmount}
+                            onChange={(e) => setNewAmount(e.target.value)}
+                            placeholder="0"
+                            min="0"
+                            step="0.01"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Компания</Label>
+                          <Select value={newCompanyId} onValueChange={setNewCompanyId}>
+                            <SelectTrigger data-testid="select-company">
+                              <SelectValue placeholder="Выберите компанию" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {companies?.map((c) => (
+                                <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button
+                          data-testid="button-submit-expense"
+                          onClick={handleCreateExpense}
+                          disabled={!newType || !newAmount || createExpenseMutation.isPending}
+                        >
+                          {createExpenseMutation.isPending ? "Сохранение..." : "Сохранить"}
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </div>
               </CardHeader>
               <CardContent>
                 {expensesLoading ? (
@@ -648,6 +712,71 @@ export default function Reports() {
                 </Table>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="abc">
+            <div data-testid="section-abc-analysis" className="space-y-4">
+              <Card className="kpi-card">
+                <CardHeader>
+                  <CardTitle>ABC-анализ товаров</CardTitle>
+                  <CardDescription>Классификация товаров по вкладу в выручку</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div className="text-center p-4 rounded-lg" style={{ background: '#16a34a15' }}>
+                      <p className="text-sm text-muted-foreground">Категория A</p>
+                      <p className="text-2xl font-bold text-green-600" data-testid="text-abc-count-a">{abcCountA}</p>
+                      <p className="text-xs text-muted-foreground">товаров</p>
+                    </div>
+                    <div className="text-center p-4 rounded-lg" style={{ background: '#eab30815' }}>
+                      <p className="text-sm text-muted-foreground">Категория B</p>
+                      <p className="text-2xl font-bold text-yellow-600" data-testid="text-abc-count-b">{abcCountB}</p>
+                      <p className="text-xs text-muted-foreground">товаров</p>
+                    </div>
+                    <div className="text-center p-4 rounded-lg" style={{ background: '#ef444415' }}>
+                      <p className="text-sm text-muted-foreground">Категория C</p>
+                      <p className="text-2xl font-bold text-red-600" data-testid="text-abc-count-c">{abcCountC}</p>
+                      <p className="text-xs text-muted-foreground">товаров</p>
+                    </div>
+                  </div>
+
+                  {abcLoading ? (
+                    <p className="text-center text-muted-foreground py-8">Загрузка...</p>
+                  ) : !abcProducts || abcProducts.length === 0 ? (
+                    <p className="text-center text-muted-foreground py-8">Нет данных для анализа</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/30">
+                          <TableHead>Название</TableHead>
+                          <TableHead>SKU</TableHead>
+                          <TableHead>Категория ABC</TableHead>
+                          <TableHead className="text-right">Выручка</TableHead>
+                          <TableHead className="text-right">Доля выручки, %</TableHead>
+                          <TableHead className="text-right">Накопительная доля, %</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {abcProducts.map((product) => (
+                          <TableRow key={product.id} data-testid={`row-abc-${product.id}`}>
+                            <TableCell className="font-medium">{product.name}</TableCell>
+                            <TableCell className="text-muted-foreground">{product.sku}</TableCell>
+                            <TableCell>
+                              <Badge className={getAbcBadgeClass(product.abcCategory)}>
+                                {product.abcCategory}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right font-semibold">{formatCurrency(product.revenue)}</TableCell>
+                            <TableCell className="text-right">{product.revenueShare.toFixed(1)}%</TableCell>
+                            <TableCell className="text-right">{product.cumulativeShare.toFixed(1)}%</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
         </Tabs>
       </div>

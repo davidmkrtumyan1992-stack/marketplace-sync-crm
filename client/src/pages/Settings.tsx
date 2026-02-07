@@ -7,12 +7,25 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertMarketplaceSettingsSchema, type InsertMarketplaceSetting, type InsertTaxSetting } from "@shared/schema";
-import { RefreshCw, CheckCircle2, Calculator, Percent, Truck } from "lucide-react";
+import { insertMarketplaceSettingsSchema, type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store } from "@shared/schema";
+import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History } from "lucide-react";
 import { useEffect } from "react";
 import { z } from "zod";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { format } from "date-fns";
+import { ru } from "date-fns/locale";
+
+const ACTION_LABELS: Record<string, string> = {
+  stock_sync: "Синхронизация остатков",
+  order_status_push: "Статус заказа",
+};
 
 export default function Settings() {
   const { data: settings } = useMarketplaceSettings();
@@ -20,8 +33,8 @@ export default function Settings() {
   const { mutate: syncAll, isPending: isSyncing } = useSyncAllMarketplaces();
   const { mutate: saveTax, isPending: savingTax } = useSaveTaxSettings();
 
-  const ozonSettings = settings?.find(s => s.marketplace === "ozon");
-  const wbSettings = settings?.find(s => s.marketplace === "wildberries");
+  const ozonSettings = settings?.find((s: any) => s.marketplace === "ozon");
+  const wbSettings = settings?.find((s: any) => s.marketplace === "wildberries");
 
   return (
     <Layout>
@@ -31,39 +44,178 @@ export default function Settings() {
             <h1 className="text-4xl font-bold tracking-tight">Настройки</h1>
             <p className="text-muted-foreground mt-2 text-lg">Интеграции и налоговые параметры</p>
           </div>
-          <Button onClick={() => syncAll()} disabled={isSyncing} variant="outline">
+          <Button onClick={() => syncAll()} disabled={isSyncing} variant="outline" data-testid="button-sync-all-header">
             <RefreshCw className={`w-4 h-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
             Синхронизировать всё
           </Button>
         </div>
 
-        {/* Tax Settings Card */}
-        <TaxSettingsCard 
-          settings={taxSettings || undefined} 
-          isLoading={taxLoading}
-          onSave={saveTax}
-          isSaving={savingTax}
-        />
+        <Tabs defaultValue="settings">
+          <TabsList>
+            <TabsTrigger value="settings" data-testid="tab-settings">Настройки</TabsTrigger>
+            <TabsTrigger value="sync-history" data-testid="tab-sync-history">Синхронизация</TabsTrigger>
+          </TabsList>
 
-        <div className="grid gap-6">
-          <MarketplaceCard 
-            title="Ozon" 
-            marketplace="ozon"
-            description="Синхронизация товаров и заказов через Ozon Seller API."
-            existingSettings={ozonSettings}
-            logoColor="text-blue-600"
-          />
-          
-          <MarketplaceCard 
-            title="Wildberries" 
-            marketplace="wildberries"
-            description="Подключите ваш партнёрский аккаунт WB через API ключ."
-            existingSettings={wbSettings}
-            logoColor="text-purple-600"
-          />
-        </div>
+          <TabsContent value="settings" className="space-y-6 mt-6">
+            <TaxSettingsCard 
+              settings={taxSettings || undefined} 
+              isLoading={taxLoading}
+              onSave={saveTax}
+              isSaving={savingTax}
+            />
+
+            <div className="grid gap-6">
+              <MarketplaceCard 
+                title="Ozon" 
+                marketplace="ozon"
+                description="Синхронизация товаров и заказов через Ozon Seller API."
+                existingSettings={ozonSettings}
+                logoColor="text-blue-600"
+              />
+              
+              <MarketplaceCard 
+                title="Wildberries" 
+                marketplace="wildberries"
+                description="Подключите ваш партнёрский аккаунт WB через API ключ."
+                existingSettings={wbSettings}
+                logoColor="text-purple-600"
+              />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="sync-history" className="mt-6">
+            <SyncHistorySection />
+          </TabsContent>
+        </Tabs>
       </div>
     </Layout>
+  );
+}
+
+function SyncHistorySection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: syncHistory, isLoading } = useQuery<SyncHistoryEntry[]>({
+    queryKey: ["/api/sync-history"],
+  });
+
+  const { data: stores } = useQuery<Store[]>({
+    queryKey: ["/api/stores"],
+  });
+
+  const { mutate: syncAll, isPending: isSyncingAll } = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/marketplace/sync");
+    },
+    onSuccess: () => {
+      toast({ title: "Синхронизация запущена", description: "Полная синхронизация всех маркетплейсов" });
+      queryClient.invalidateQueries({ queryKey: ["/api/sync-history"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const { mutate: syncStore, isPending: isSyncingStore } = useMutation({
+    mutationFn: async (storeId: number) => {
+      await apiRequest("POST", `/api/marketplace/sync-store/${storeId}`);
+    },
+    onSuccess: () => {
+      toast({ title: "Синхронизация запущена", description: "Синхронизация магазина запущена" });
+      queryClient.invalidateQueries({ queryKey: ["/api/sync-history"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-6" data-testid="section-sync-history">
+      <Card>
+        <CardHeader className="bg-muted/50 border-b">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-card rounded-lg border shadow-sm text-primary">
+                <History className="w-6 h-6" />
+              </div>
+              <div>
+                <CardTitle>История синхронизации</CardTitle>
+                <CardDescription>Журнал операций синхронизации с маркетплейсами</CardDescription>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {stores && stores.length > 0 && stores.map((store) => (
+                <Button
+                  key={store.id}
+                  variant="outline"
+                  size="sm"
+                  disabled={isSyncingStore}
+                  onClick={() => syncStore(store.id)}
+                  data-testid={`button-sync-store-${store.id}`}
+                >
+                  <RefreshCw className={`w-3 h-3 mr-1 ${isSyncingStore ? "animate-spin" : ""}`} />
+                  {store.name}
+                </Button>
+              ))}
+              <Button onClick={() => syncAll()} disabled={isSyncingAll} data-testid="button-sync-all">
+                <RefreshCw className={`w-4 h-4 mr-2 ${isSyncingAll ? "animate-spin" : ""}`} />
+                Синхронизировать всё
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="text-center py-8 text-muted-foreground">Загрузка...</div>
+          ) : !syncHistory || syncHistory.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">Нет записей синхронизации</div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Дата</TableHead>
+                  <TableHead>Магазин</TableHead>
+                  <TableHead>Действие</TableHead>
+                  <TableHead>Статус</TableHead>
+                  <TableHead>Детали</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {syncHistory.map((entry) => (
+                  <TableRow key={entry.id} data-testid={`row-sync-${entry.id}`}>
+                    <TableCell data-testid={`text-sync-date-${entry.id}`}>
+                      {entry.createdAt
+                        ? format(new Date(entry.createdAt), "dd MMM yyyy, HH:mm", { locale: ru })
+                        : "—"}
+                    </TableCell>
+                    <TableCell data-testid={`text-sync-store-${entry.id}`}>
+                      {entry.details || "—"}
+                    </TableCell>
+                    <TableCell data-testid={`text-sync-action-${entry.id}`}>
+                      {ACTION_LABELS[entry.action] || entry.action}
+                    </TableCell>
+                    <TableCell data-testid={`text-sync-status-${entry.id}`}>
+                      <Badge
+                        variant={entry.status === "success" ? "default" : "destructive"}
+                        className={entry.status === "success" ? "bg-green-600 text-white no-default-hover-elevate no-default-active-elevate" : ""}
+                      >
+                        {entry.status === "success" ? "Успешно" : "Ошибка"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell data-testid={`text-sync-details-${entry.id}`}>
+                      {entry.itemsCount != null && entry.itemsCount > 0
+                        ? `${entry.itemsCount} элементов`
+                        : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 

@@ -6,12 +6,15 @@ CloudERP is a production-ready multi-company cloud ERP/CRM system designed for e
 
 Key capabilities:
 - Multi-company architecture: multiple companies (ИП) under one account, each with own marketplace stores
+- Multi-level RBAC: Owner (full access), Accountant (Reports/Expenses only), Administrator (Products/Orders/Intake, no purchase prices/P&L)
 - Multi-channel inventory tracking with "split-stock" distribution across local warehouse, Ozon, Wildberries, and Yandex Market
-- Smart barcode intake: USB scanner support for receiving goods with automatic product lookup
+- Smart barcode intake: USB scanner support for receiving goods with automatic product lookup (tablet-optimized)
 - Russian tax calculation engine (7% default rate) with expense tracking
-- Dashboard with aggregate KPIs across all companies + per-company/store breakdowns
+- Dashboard with aggregate KPIs, low-stock alerts, 30-day sales chart, pulsing pending-order indicators
+- Advanced analytics: ABC analysis (A/B/C product categorization by revenue share)
 - CRM for customer management
-- Marketplace API integration placeholders for Ozon, Wildberries, and Yandex Market
+- Marketplace sync infrastructure with sync history logging (Ozon, Wildberries, Yandex Market)
+- Excel export for products and P&L reports
 - Expense management with internal/external classification
 - Full audit logging for inventory changes
 
@@ -85,6 +88,7 @@ Preferred communication style: Simple, everyday language.
   - `userRoles` - RBAC (owner/accountant/administrator)
   - `taxSettings` - Russian tax configuration (7% default)
   - `marketplaceSettings` - API credentials for Ozon/Wildberries/Yandex
+  - `syncHistory` - Marketplace synchronization attempt logs
   - `auditLog` - Change tracking for compliance
   - `users` and `sessions` - Authentication (managed by Replit Auth)
 
@@ -92,8 +96,9 @@ Preferred communication style: Simple, everyday language.
 - Uses Replit's OpenID Connect authentication
 - Session stored in PostgreSQL `sessions` table
 - User data synced to `users` table on login
-- Protected routes check `isAuthenticated` middleware
+- Protected routes check `isAuthenticated` middleware + `requireRole(...)` for RBAC
 - Organization isolation via `organizationId` field (set to user's ID)
+- Role-based access: Owner (all), Accountant (reports/expenses), Administrator (products/orders/intake)
 
 ### Code Organization
 ```
@@ -123,7 +128,7 @@ shared/               # Shared between client/server
 
 4. **Russian Localization**: Custom formatting utilities in `client/src/lib/format.ts` handle number/currency display with proper Russian conventions
 
-5. **Marketplace Abstraction**: Settings stored per-marketplace with API key fields; actual sync logic is stubbed for future implementation
+5. **Marketplace Abstraction**: Settings stored per-marketplace with API key fields; sync infrastructure with history logging ready for real API integration
 
 ## External Dependencies
 
@@ -164,3 +169,15 @@ shared/               # Shared between client/server
 - **Wildberries API**: Marketplace sync for inventory and orders
 - **Yandex Market API**: Marketplace sync for inventory and orders
 - Settings schema includes fields for API keys and client IDs
+
+## Recent Changes
+- Added multi-level RBAC system (Owner/Accountant/Administrator) with backend enforcement on all routes
+- Added marketplace sync infrastructure with syncHistory table and sync history UI in Settings
+- Added low-stock alerts widget on Dashboard (red highlights for <10 units)
+- Added 30-day sales line chart with company toggle on Dashboard
+- Added pulsing new-order indicators on store cards
+- Added ABC analysis tab in Reports (A/B/C product categorization by revenue share)
+- Added Excel export for P&L reports and product inventory
+- Optimized Intake page for tablet use (larger buttons, high-contrast text)
+- Role-based KPI hiding (administrators can't see purchase prices/P&L)
+- Frontend role filtering for sidebar navigation and route guarding

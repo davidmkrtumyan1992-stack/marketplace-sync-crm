@@ -1,6 +1,6 @@
 import { 
   companies, stores, userRoles, expenses,
-  products, customers, orders, orderItems, marketplaceSettings, taxSettings, auditLog, stockInflow,
+  products, customers, orders, orderItems, marketplaceSettings, taxSettings, auditLog, stockInflow, syncHistory,
   type Company, type InsertCompany,
   type Store, type InsertStore,
   type UserRole, type InsertUserRole,
@@ -12,7 +12,9 @@ import {
   type TaxSetting, type InsertTaxSetting,
   type AuditLogEntry, type InsertAuditLog,
   type StockInflow, type InsertStockInflow,
-  type DashboardKPI, type CompanyWithStores, type StoreWithStats
+  type SyncHistoryEntry, type InsertSyncHistory,
+  type DashboardKPI, type CompanyWithStores, type StoreWithStats,
+  type ABCProduct, type LowStockProduct, type SalesDataPoint
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
@@ -79,6 +81,15 @@ export interface IStorage {
 
   // Dashboard KPI
   getDashboardKPI(organizationId: string): Promise<DashboardKPI>;
+
+  // Sync History
+  getSyncHistory(organizationId: string): Promise<SyncHistoryEntry[]>;
+  createSyncHistory(entry: InsertSyncHistory): Promise<SyncHistoryEntry>;
+
+  // Analytics
+  getABCAnalysis(organizationId: string): Promise<ABCProduct[]>;
+  getLowStockProducts(organizationId: string, threshold?: number): Promise<LowStockProduct[]>;
+  getSalesData(organizationId: string, days?: number): Promise<SalesDataPoint[]>;
   
   // Seed
   seedData(organizationId: string): Promise<void>;
@@ -562,6 +573,115 @@ export class DatabaseStorage implements IStorage {
       stockDistribution: { local: stockLocal, ozon: stockOzon, wb: stockWb, yandex: stockYandex },
       companies: companiesWithStores
     };
+  }
+
+  // Sync History
+  async getSyncHistory(organizationId: string): Promise<SyncHistoryEntry[]> {
+    return await db.select().from(syncHistory)
+      .where(eq(syncHistory.organizationId, organizationId))
+      .orderBy(desc(syncHistory.createdAt))
+      .limit(100);
+  }
+
+  async createSyncHistory(entry: InsertSyncHistory): Promise<SyncHistoryEntry> {
+    const [created] = await db.insert(syncHistory).values(entry).returning();
+    return created;
+  }
+
+  // Analytics
+  async getABCAnalysis(organizationId: string): Promise<ABCProduct[]> {
+    const productsList = await this.getProducts(organizationId);
+    const ordersList = await db.select().from(orders).where(eq(orders.organizationId, organizationId));
+    const allItems = await db.select().from(orderItems);
+    
+    const orderIdSet = new Set(ordersList.map(o => o.id));
+    const relevantItems = allItems.filter(item => {
+      const order = ordersList.find(o => o.id === item.orderId);
+      return order !== undefined;
+    });
+
+    const revenueByProduct: Record<number, number> = {};
+    for (const item of relevantItems) {
+      const pid = item.productId;
+      revenueByProduct[pid] = (revenueByProduct[pid] || 0) + item.quantity * Number(item.price);
+    }
+
+    for (const p of productsList) {
+      if (!revenueByProduct[p.id]) {
+        revenueByProduct[p.id] = p.stockQuantity * Number(p.sellingPrice || p.price || 0);
+      }
+    }
+
+    const totalRevenue = Object.values(revenueByProduct).reduce((sum, v) => sum + v, 0) || 1;
+
+    const sorted = productsList
+      .map(p => ({
+        ...p,
+        revenue: revenueByProduct[p.id] || 0,
+        revenueShare: ((revenueByProduct[p.id] || 0) / totalRevenue) * 100,
+        cumulativeShare: 0,
+        abcCategory: "C" as "A" | "B" | "C",
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+
+    let cumulative = 0;
+    for (const item of sorted) {
+      cumulative += item.revenueShare;
+      item.cumulativeShare = cumulative;
+      if (cumulative <= 80) {
+        item.abcCategory = "A";
+      } else if (cumulative <= 95) {
+        item.abcCategory = "B";
+      } else {
+        item.abcCategory = "C";
+      }
+    }
+
+    return sorted;
+  }
+
+  async getLowStockProducts(organizationId: string, threshold: number = 10): Promise<LowStockProduct[]> {
+    const productsList = await this.getProducts(organizationId);
+    const companyList = await this.getCompanies(organizationId);
+    const companyMap = new Map(companyList.map(c => [c.id, c.name]));
+
+    return productsList
+      .filter(p => p.stockQuantity < threshold)
+      .map(p => ({
+        ...p,
+        companyName: companyMap.get(p.companyId || 0) || "—",
+      }))
+      .sort((a, b) => a.stockQuantity - b.stockQuantity);
+  }
+
+  async getSalesData(organizationId: string, days: number = 30): Promise<SalesDataPoint[]> {
+    const companyList = await this.getCompanies(organizationId);
+    const companyMap = new Map(companyList.map(c => [c.id, c.name]));
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days);
+
+    const ordersList = await db.select().from(orders)
+      .where(eq(orders.organizationId, organizationId));
+
+    const recentOrders = ordersList.filter(o => o.createdAt && new Date(o.createdAt) >= cutoffDate);
+
+    const dataByDateCompany: Record<string, SalesDataPoint> = {};
+
+    for (const order of recentOrders) {
+      const dateStr = order.createdAt ? new Date(order.createdAt).toISOString().split("T")[0] : "unknown";
+      const key = `${dateStr}_${order.companyId || 0}`;
+      if (!dataByDateCompany[key]) {
+        dataByDateCompany[key] = {
+          date: dateStr,
+          revenue: 0,
+          companyId: order.companyId,
+          companyName: companyMap.get(order.companyId || 0) || "—",
+        };
+      }
+      dataByDateCompany[key].revenue += Number(order.totalAmount || 0);
+    }
+
+    return Object.values(dataByDateCompany).sort((a, b) => a.date.localeCompare(b.date));
   }
 
   async seedData(orgId: string): Promise<void> {

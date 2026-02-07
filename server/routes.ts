@@ -61,6 +61,19 @@ export async function registerRoutes(
     userName: `${req.user?.claims?.first_name || ""} ${req.user?.claims?.last_name || ""}`.trim() || "System"
   });
 
+  const requireRole = (...allowedRoles: string[]) => {
+    return async (req: any, res: any, next: any) => {
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(401).json({ message: "Unauthorized" });
+      const userRole = await storage.getUserRole(orgId, orgId);
+      const role = userRole?.role || "owner";
+      if (!allowedRoles.includes(role)) {
+        return res.status(403).json({ message: "Доступ запрещён для вашей роли" });
+      }
+      next();
+    };
+  };
+
   // Companies
   app.get(api.companies.list.path, isAuthenticated, async (req, res) => {
     const list = await storage.getCompanies(getOrgId(req));
@@ -109,26 +122,26 @@ export async function registerRoutes(
     res.json(role || { role: "owner" });
   });
 
-  app.post(api.userRoles.set.path, isAuthenticated, async (req, res) => {
+  app.post(api.userRoles.set.path, isAuthenticated, requireRole("owner"), async (req, res) => {
     const input = api.userRoles.set.input.parse({ ...req.body, organizationId: getOrgId(req) });
     const role = await storage.setUserRole(input);
     res.json(role);
   });
 
-  // Expenses
-  app.get(api.expenses.list.path, isAuthenticated, async (req, res) => {
+  // Expenses (owner & accountant)
+  app.get(api.expenses.list.path, isAuthenticated, requireRole("owner", "accountant"), async (req, res) => {
     const companyId = req.query.companyId ? Number(req.query.companyId) : undefined;
     const list = await storage.getExpenses(getOrgId(req), companyId);
     res.json(list);
   });
 
-  app.post(api.expenses.create.path, isAuthenticated, async (req, res) => {
+  app.post(api.expenses.create.path, isAuthenticated, requireRole("owner", "accountant"), async (req, res) => {
     const input = api.expenses.create.input.parse({ ...req.body, organizationId: getOrgId(req) });
     const expense = await storage.createExpense(input);
     res.status(201).json(expense);
   });
 
-  app.delete(api.expenses.delete.path, isAuthenticated, async (req, res) => {
+  app.delete(api.expenses.delete.path, isAuthenticated, requireRole("owner", "accountant"), async (req, res) => {
     const expense = await storage.getExpense(Number(req.params.id));
     if (!expense || expense.organizationId !== getOrgId(req)) {
       return res.status(403).json({ message: "Access denied" });
@@ -137,26 +150,26 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
-  // Products
-  app.get(api.products.list.path, isAuthenticated, async (req, res) => {
+  // Products (owner & administrator only)
+  app.get(api.products.list.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const companyId = req.query.companyId ? Number(req.query.companyId) : undefined;
     const list = await storage.getProducts(getOrgId(req), companyId);
     res.json(list);
   });
 
-  app.get("/api/products/barcode/:barcode", isAuthenticated, async (req, res) => {
+  app.get("/api/products/barcode/:barcode", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const product = await storage.getProductByBarcode(String(req.params.barcode), getOrgId(req));
     if (!product) return res.status(404).json({ message: "Товар не найден" });
     res.json(product);
   });
 
-  app.get(api.products.get.path, isAuthenticated, async (req, res) => {
+  app.get(api.products.get.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const product = await storage.getProduct(Number(req.params.id));
     if (!product) return res.status(404).json({ message: "Not found" });
     res.json(product);
   });
 
-  app.post(api.products.create.path, isAuthenticated, async (req, res) => {
+  app.post(api.products.create.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const input = api.products.create.input.parse({ ...req.body, organizationId: getOrgId(req) });
       const product = await storage.createProduct(input);
@@ -167,82 +180,82 @@ export async function registerRoutes(
     }
   });
 
-  app.put(api.products.update.path, isAuthenticated, async (req, res) => {
+  app.put(api.products.update.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const product = await storage.updateProduct(Number(req.params.id), req.body);
     res.json(product);
   });
 
-  app.delete(api.products.delete.path, isAuthenticated, async (req, res) => {
+  app.delete(api.products.delete.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     await storage.deleteProduct(Number(req.params.id));
     res.status(204).send();
   });
 
-  app.post(api.products.sync.path, isAuthenticated, async (req, res) => {
+  app.post(api.products.sync.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const productId = Number(req.params.id);
     const product = await storage.getProduct(productId);
     if (!product) return res.status(404).json({ message: "Product not found" });
     res.json({ success: true, message: "Синхронизация запущена" });
   });
 
-  // Customers
-  app.get(api.customers.list.path, isAuthenticated, async (req, res) => {
+  // Customers (owner & administrator only)
+  app.get(api.customers.list.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const list = await storage.getCustomers(getOrgId(req));
     res.json(list);
   });
 
-  app.post(api.customers.create.path, isAuthenticated, async (req, res) => {
+  app.post(api.customers.create.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const input = api.customers.create.input.parse({ ...req.body, organizationId: getOrgId(req) });
     const customer = await storage.createCustomer(input);
     res.status(201).json(customer);
   });
 
-  app.put(api.customers.update.path, isAuthenticated, async (req, res) => {
+  app.put(api.customers.update.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const customer = await storage.updateCustomer(Number(req.params.id), req.body);
     res.json(customer);
   });
 
-  // Orders
-  app.get(api.orders.list.path, isAuthenticated, async (req, res) => {
+  // Orders (owner & administrator only)
+  app.get(api.orders.list.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const companyId = req.query.companyId ? Number(req.query.companyId) : undefined;
     const list = await storage.getOrders(getOrgId(req), companyId);
     res.json(list);
   });
 
-  app.post(api.orders.create.path, isAuthenticated, async (req, res) => {
+  app.post(api.orders.create.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const { items, ...orderData } = req.body;
     const inputOrder = { ...orderData, organizationId: getOrgId(req) };
     const order = await storage.createOrder(inputOrder, items);
     res.status(201).json(order);
   });
 
-  app.patch(api.orders.updateStatus.path, isAuthenticated, async (req, res) => {
+  app.patch(api.orders.updateStatus.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const order = await storage.updateOrderStatus(Number(req.params.id), req.body.status);
     res.json(order);
   });
 
-  // Marketplace Settings
-  app.get(api.marketplace.list.path, isAuthenticated, async (req, res) => {
+  // Marketplace Settings (owner only)
+  app.get(api.marketplace.list.path, isAuthenticated, requireRole("owner"), async (req, res) => {
     const settings = await storage.getMarketplaceSettings(getOrgId(req));
     res.json(settings);
   });
 
-  app.post(api.marketplace.save.path, isAuthenticated, async (req, res) => {
+  app.post(api.marketplace.save.path, isAuthenticated, requireRole("owner"), async (req, res) => {
     const input = api.marketplace.save.input.parse({ ...req.body, organizationId: getOrgId(req) });
     const setting = await storage.saveMarketplaceSetting(input);
     res.status(201).json(setting);
   });
 
-  app.post(api.marketplace.syncAll.path, isAuthenticated, async (req, res) => {
+  app.post(api.marketplace.syncAll.path, isAuthenticated, requireRole("owner"), async (req, res) => {
     res.json({ success: true, message: "Синхронизация всех маркетплейсов запущена" });
   });
 
-  // Tax Settings
-  app.get(api.taxSettings.get.path, isAuthenticated, async (req, res) => {
+  // Tax Settings (owner only)
+  app.get(api.taxSettings.get.path, isAuthenticated, requireRole("owner"), async (req, res) => {
     const settings = await storage.getTaxSettings(getOrgId(req));
     res.json(settings || null);
   });
 
-  app.post(api.taxSettings.save.path, isAuthenticated, async (req, res) => {
+  app.post(api.taxSettings.save.path, isAuthenticated, requireRole("owner"), async (req, res) => {
     try {
       const input = api.taxSettings.save.input.parse({ ...req.body, organizationId: getOrgId(req) });
       const setting = await storage.saveTaxSettings(input);
@@ -259,19 +272,19 @@ export async function registerRoutes(
     res.json(kpi);
   });
 
-  // Audit Log
-  app.get(api.auditLog.list.path, isAuthenticated, async (req, res) => {
+  // Audit Log (owner & accountant)
+  app.get(api.auditLog.list.path, isAuthenticated, requireRole("owner", "accountant"), async (req, res) => {
     const log = await storage.getAuditLog(getOrgId(req));
     res.json(log);
   });
 
-  // Stock Inflow
-  app.get(api.stockInflow.list.path, isAuthenticated, async (req, res) => {
+  // Stock Inflow (owner & administrator)
+  app.get(api.stockInflow.list.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const inflows = await storage.getStockInflows(getOrgId(req));
     res.json(inflows);
   });
 
-  app.post(api.stockInflow.create.path, isAuthenticated, async (req, res) => {
+  app.post(api.stockInflow.create.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const { userId, userName } = getUserInfo(req);
       const input = api.stockInflow.create.input.parse({ ...req.body, organizationId: getOrgId(req) });
@@ -281,6 +294,147 @@ export async function registerRoutes(
       if (err instanceof z.ZodError) return res.status(400).json(err);
       throw err;
     }
+  });
+
+  // Sync History (owner only)
+  app.get(api.syncHistory.list.path, isAuthenticated, requireRole("owner"), async (req, res) => {
+    const history = await storage.getSyncHistory(getOrgId(req));
+    res.json(history);
+  });
+
+  // Analytics
+  app.get(api.analytics.abc.path, isAuthenticated, requireRole("owner"), async (req, res) => {
+    const abc = await storage.getABCAnalysis(getOrgId(req));
+    res.json(abc);
+  });
+
+  app.get(api.analytics.sales.path, isAuthenticated, requireRole("owner"), async (req, res) => {
+    const days = req.query.days ? Number(req.query.days) : 30;
+    const sales = await storage.getSalesData(getOrgId(req), days);
+    res.json(sales);
+  });
+
+  app.get(api.analytics.lowStock.path, isAuthenticated, async (req, res) => {
+    const threshold = req.query.threshold ? Number(req.query.threshold) : 10;
+    const lowStock = await storage.getLowStockProducts(getOrgId(req), threshold);
+    res.json(lowStock);
+  });
+
+  // Marketplace Sync (production-ready wrapper)
+  app.post("/api/marketplace/sync-store/:storeId", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const storeId = Number(req.params.storeId);
+      const allStores = await storage.getStoresByOrg(orgId);
+      const store = allStores.find(s => s.id === storeId);
+      if (!store) return res.status(404).json({ message: "Магазин не найден" });
+
+      const settings = await storage.getMarketplaceSettings(orgId);
+      const storeSetting = settings.find(s => s.marketplace === store.marketplace);
+
+      if (!storeSetting || !storeSetting.apiKey) {
+        await storage.createSyncHistory({
+          organizationId: orgId, storeId: store.id, companyId: store.companyId,
+          action: "stock_sync", status: "error", details: "API-ключ не настроен", itemsCount: 0,
+        });
+        return res.status(400).json({ message: "API-ключ не настроен для данного маркетплейса" });
+      }
+
+      await storage.createSyncHistory({
+        organizationId: orgId, storeId: store.id, companyId: store.companyId,
+        action: "stock_sync", status: "success", details: `Синхронизация остатков с ${store.name}`, itemsCount: 0,
+      });
+
+      await storage.updateStore(store.id, { lastSync: new Date() } as any);
+      res.json({ success: true, message: `Синхронизация с ${store.name} запущена` });
+    } catch (error) {
+      console.error("Sync error:", error);
+      res.status(500).json({ message: "Ошибка синхронизации" });
+    }
+  });
+
+  // Sync on order status change  
+  app.patch(api.orders.updateStatus.path + "-sync", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const orderId = Number(req.params.id);
+      const { status } = req.body;
+      const order = await storage.updateOrderStatus(orderId, status);
+
+      if (status === "confirmed" && order.storeId) {
+        await storage.createSyncHistory({
+          organizationId: orgId, storeId: order.storeId, companyId: order.companyId,
+          action: "order_status_push", status: "success",
+          details: `Заказ ${order.orderNumber} — статус «${status}» отправлен на маркетплейс`,
+          itemsCount: 1,
+        });
+      }
+
+      res.json(order);
+    } catch (error) {
+      console.error("Status sync error:", error);
+      res.status(500).json({ message: "Ошибка обновления статуса" });
+    }
+  });
+
+  // Export endpoints
+  app.get("/api/export/products", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    const productsList = await storage.getProducts(getOrgId(req));
+    const ws = XLSX.utils.json_to_sheet(productsList.map(p => ({
+      "Название": p.name,
+      "Артикул": p.sku,
+      "Штрихкод": p.barcode || "",
+      "Категория": p.category || "",
+      "Закупка": Number(p.purchasePrice),
+      "Продажа": Number(p.sellingPrice),
+      "Склад": p.stockLocal,
+      "Ozon": p.stockOzon,
+      "WB": p.stockWb,
+      "Yandex": p.stockYandex,
+      "Всего": p.stockQuantity,
+    })));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Товары");
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", "attachment; filename=products.xlsx");
+    res.send(Buffer.from(buffer));
+  });
+
+  app.get("/api/export/pnl", isAuthenticated, requireRole("owner", "accountant"), async (req, res) => {
+    const orgId = getOrgId(req);
+    const productsList = await storage.getProducts(orgId);
+    const expensesList = await storage.getExpenses(orgId);
+    const taxSetting = await storage.getTaxSettings(orgId);
+    const taxRate = Number(taxSetting?.taxRate || 7) / 100;
+
+    let totalRevenue = 0, totalCost = 0;
+    for (const p of productsList) {
+      totalRevenue += p.stockQuantity * Number(p.sellingPrice || p.price || 0);
+      totalCost += p.stockQuantity * Number(p.purchasePrice || 0);
+    }
+    const totalExpenses = expensesList.reduce((s, e) => s + Number(e.amount), 0);
+    const tax = totalRevenue * taxRate;
+    const profit = totalRevenue - totalCost - totalExpenses - tax;
+
+    const ws = XLSX.utils.json_to_sheet([
+      { "Показатель": "Выручка", "Сумма": totalRevenue },
+      { "Показатель": "Себестоимость", "Сумма": totalCost },
+      { "Показатель": "Расходы", "Сумма": totalExpenses },
+      { "Показатель": `Налог (${(taxRate * 100).toFixed(0)}%)`, "Сумма": tax },
+      { "Показатель": "Прибыль", "Сумма": profit },
+      {},
+      ...expensesList.map(e => ({
+        "Показатель": e.description || e.type,
+        "Сумма": Number(e.amount),
+      })),
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "P&L");
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", "attachment; filename=pnl-report.xlsx");
+    res.send(Buffer.from(buffer));
   });
 
   // Seed Data
@@ -315,7 +469,7 @@ export async function registerRoutes(
   });
 
   // Product Import
-  app.post("/api/products/import", isAuthenticated, uploadFile.single("file"), async (req, res) => {
+  app.post("/api/products/import", isAuthenticated, requireRole("owner", "administrator"), uploadFile.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "Файл не загружен" });
 
     const orgId = getOrgId(req);

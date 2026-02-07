@@ -1,16 +1,20 @@
+import { useState, useMemo } from "react";
 import { Layout } from "@/components/Layout";
 import { useProducts } from "@/hooks/use-products";
 import { useOrders } from "@/hooks/use-orders";
 import { useKPI } from "@/hooks/use-kpi";
-import { Package, Warehouse, TrendingUp, Coins, ArrowUpRight, Building2, Store, ShoppingCart, ExternalLink, Database } from "lucide-react";
+import { useRole } from "@/hooks/use-role";
+import { useQuery } from "@tanstack/react-query";
+import { Package, Warehouse, TrendingUp, Coins, ArrowUpRight, Building2, Store, ShoppingCart, ExternalLink, Database, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatCurrency, formatQuantity, formatNumber } from "@/lib/format";
-import type { DashboardKPI } from "@shared/schema";
+import type { DashboardKPI, LowStockProduct, SalesDataPoint } from "@shared/schema";
 import { Link } from "wouter";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 const CHART_COLORS = ['#0FC2C0', '#0CABA8', '#008F8C', '#015958'];
 
@@ -23,8 +27,44 @@ const MARKETPLACE_STYLES: Record<string, { label: string; bg: string; color: str
 export default function Dashboard() {
   const { data: products } = useProducts();
   const { data: kpi, isLoading: kpiLoading } = useKPI();
+  const { canSeePurchasePrice, canSeePnL } = useRole();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const { data: lowStockProducts } = useQuery<LowStockProduct[]>({
+    queryKey: ["/api/analytics/low-stock"],
+  });
+
+  const { data: salesData } = useQuery<SalesDataPoint[]>({
+    queryKey: ["/api/analytics/sales"],
+  });
+
+  const [salesFilter, setSalesFilter] = useState<string>("all");
+
+  const companyNames = useMemo(() => {
+    if (!salesData) return [];
+    const names = new Set<string>();
+    salesData.forEach((p) => {
+      if (p.companyName) names.add(p.companyName);
+    });
+    return Array.from(names);
+  }, [salesData]);
+
+  const chartData = useMemo(() => {
+    if (!salesData) return [];
+    const filtered = salesFilter === "all"
+      ? salesData
+      : salesData.filter((p) => p.companyName === salesFilter);
+
+    const grouped: Record<string, number> = {};
+    filtered.forEach((p) => {
+      grouped[p.date] = (grouped[p.date] || 0) + p.revenue;
+    });
+
+    return Object.entries(grouped)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, revenue]) => ({ date, revenue }));
+  }, [salesData, salesFilter]);
 
   const seedMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/seed"),
@@ -94,24 +134,26 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="kpi-card hover-elevate" data-testid="card-capitalization">
-            <CardContent className="pt-6">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                    Капитализация
-                  </p>
-                  <p className="text-3xl font-extrabold tracking-tight">
-                    {kpiLoading ? "..." : formatCurrency(kpi?.capitalization || 0)}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-3">по закупочной цене</p>
+          {canSeePnL && (
+            <Card className="kpi-card hover-elevate" data-testid="card-capitalization">
+              <CardContent className="pt-6">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
+                      Капитализация
+                    </p>
+                    <p className="text-3xl font-extrabold tracking-tight">
+                      {kpiLoading ? "..." : formatCurrency(kpi?.capitalization || 0)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-3">по закупочной цене</p>
+                  </div>
+                  <div className="icon-box icon-box-lg">
+                    <Coins className="w-7 h-7 text-primary" />
+                  </div>
                 </div>
-                <div className="icon-box icon-box-lg">
-                  <Coins className="w-7 h-7 text-primary" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="kpi-card hover-elevate" data-testid="card-revenue">
             <CardContent className="pt-6">
@@ -132,36 +174,83 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="stat-card-premium hover-elevate" data-testid="card-profit">
-            <CardContent className="pt-6">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p
-                    className="text-sm font-medium uppercase tracking-wide"
-                    style={{ color: "hsl(175 30% 70%)" }}
+          {canSeePnL && (
+            <Card className="stat-card-premium hover-elevate" data-testid="card-profit">
+              <CardContent className="pt-6">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p
+                      className="text-sm font-medium uppercase tracking-wide"
+                      style={{ color: "hsl(175 30% 70%)" }}
+                    >
+                      Прогноз прибыли
+                    </p>
+                    <p className="stat-number mt-2">
+                      {kpiLoading ? "..." : formatCurrency(kpi?.expectedProfit || 0)}
+                    </p>
+                    <p className="text-xs mt-3" style={{ color: "hsl(175 20% 55%)" }}>
+                      с учётом 7% налога
+                    </p>
+                  </div>
+                  <div
+                    className="icon-box icon-box-lg"
+                    style={{
+                      background:
+                        "linear-gradient(135deg, hsl(175 98% 41% / 0.3) 0%, hsl(175 85% 35% / 0.2) 100%)",
+                    }}
                   >
-                    Прогноз прибыли
-                  </p>
-                  <p className="stat-number mt-2">
-                    {kpiLoading ? "..." : formatCurrency(kpi?.expectedProfit || 0)}
-                  </p>
-                  <p className="text-xs mt-3" style={{ color: "hsl(175 20% 55%)" }}>
-                    с учётом 7% налога
-                  </p>
+                    <ArrowUpRight className="w-7 h-7 text-primary" />
+                  </div>
                 </div>
-                <div
-                  className="icon-box icon-box-lg"
-                  style={{
-                    background:
-                      "linear-gradient(135deg, hsl(175 98% 41% / 0.3) 0%, hsl(175 85% 35% / 0.2) 100%)",
-                  }}
-                >
-                  <ArrowUpRight className="w-7 h-7 text-primary" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
         </div>
+
+        {lowStockProducts && lowStockProducts.length > 0 && (
+          <div data-testid="section-low-stock">
+            <Card className="border-destructive/30 bg-destructive/5 dark:bg-destructive/10">
+              <CardHeader className="flex flex-row items-center gap-3 pb-4 flex-wrap">
+                <div className="icon-box" style={{ background: "hsl(0 84% 60% / 0.15)" }}>
+                  <AlertTriangle className="w-5 h-5 text-destructive" />
+                </div>
+                <CardTitle className="text-lg font-bold text-destructive">
+                  Критический остаток
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-destructive/20">
+                        <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Товар</th>
+                        <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Компания</th>
+                        <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Артикул</th>
+                        <th className="text-right py-2 font-medium text-muted-foreground">Остаток</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lowStockProducts.map((product) => (
+                        <tr
+                          key={product.id}
+                          className="border-b border-destructive/10 last:border-0"
+                          data-testid={`row-low-stock-${product.id}`}
+                        >
+                          <td className="py-2 pr-4 font-medium">{product.name}</td>
+                          <td className="py-2 pr-4 text-muted-foreground">{product.companyName}</td>
+                          <td className="py-2 pr-4 text-muted-foreground font-mono text-xs">{product.sku}</td>
+                          <td className="py-2 text-right font-bold text-destructive">
+                            {formatNumber(product.stockQuantity)} шт.
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {kpi?.companies && kpi.companies.length > 0 && (
           <div className="space-y-6">
@@ -203,10 +292,12 @@ export default function Dashboard() {
                       <Warehouse className="w-3.5 h-3.5" />
                       {formatNumber(company.totalStock)} шт.
                     </div>
-                    <div className="counter-badge" data-testid={`badge-company-value-${company.id}`}>
-                      <Coins className="w-3.5 h-3.5" />
-                      {formatCurrency(company.totalValue)}
-                    </div>
+                    {canSeePurchasePrice && (
+                      <div className="counter-badge" data-testid={`badge-company-value-${company.id}`}>
+                        <Coins className="w-3.5 h-3.5" />
+                        {formatCurrency(company.totalValue)}
+                      </div>
+                    )}
                   </div>
                 </CardHeader>
 
@@ -270,6 +361,13 @@ export default function Dashboard() {
                                 <span className="counter-badge">
                                   {store.pendingOrders}
                                 </span>
+                                {store.pendingOrders > 0 && (
+                                  <span
+                                    className="inline-block w-2.5 h-2.5 rounded-full animate-pulse"
+                                    style={{ backgroundColor: "#ef4444", boxShadow: "0 0 6px 2px rgba(239,68,68,0.4)" }}
+                                    data-testid={`indicator-pending-${store.id}`}
+                                  />
+                                )}
                                 <span className="text-muted-foreground">в обработке</span>
                               </div>
                             </div>
@@ -292,6 +390,78 @@ export default function Dashboard() {
                 </CardContent>
               </Card>
             ))}
+          </div>
+        )}
+
+        {salesData && salesData.length > 0 && (
+          <div className="space-y-4" data-testid="section-sales-chart">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <h2 className="text-2xl font-bold tracking-tight">
+                Выручка за последние 30 дней
+              </h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  variant={salesFilter === "all" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSalesFilter("all")}
+                  data-testid="button-sales-filter-all"
+                >
+                  Все
+                </Button>
+                {companyNames.map((name) => (
+                  <Button
+                    key={name}
+                    variant={salesFilter === name ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setSalesFilter(name)}
+                    data-testid={`button-sales-filter-${name}`}
+                  >
+                    {name}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <Card className="kpi-card">
+              <CardContent className="pt-6">
+                <ResponsiveContainer width="100%" height={320}>
+                  <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(175 15% 88%)" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 12 }}
+                      tickFormatter={(v: string) => {
+                        const parts = v.split("-");
+                        return parts.length >= 3 ? `${parts[2]}.${parts[1]}` : v;
+                      }}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 12 }}
+                      tickFormatter={(v: number) => formatNumber(v)}
+                    />
+                    <Tooltip
+                      formatter={(value: number) => [formatCurrency(value), "Выручка"]}
+                      labelFormatter={(label: string) => {
+                        const parts = label.split("-");
+                        return parts.length >= 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : label;
+                      }}
+                      contentStyle={{
+                        borderRadius: "8px",
+                        border: "1px solid hsl(175 15% 88%)",
+                        boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="revenue"
+                      stroke="#0FC2C0"
+                      strokeWidth={2.5}
+                      dot={{ fill: "#0CABA8", r: 3 }}
+                      activeDot={{ fill: "#0FC2C0", r: 5, strokeWidth: 2, stroke: "#fff" }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
           </div>
         )}
 

@@ -1,5 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
+import { useRole } from "@/hooks/use-role";
 import {
   LayoutDashboard,
   Package,
@@ -10,9 +11,10 @@ import {
   Menu,
   X,
   FileBarChart,
-  ScanLine
+  ScanLine,
+  Shield
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -20,10 +22,18 @@ import { useProducts } from "@/hooks/use-products";
 import { useOrders } from "@/hooks/use-orders";
 import { useQuery } from "@tanstack/react-query";
 import { Customer } from "@shared/schema";
+import { Badge } from "@/components/ui/badge";
+
+const ROLE_LABELS: Record<string, string> = {
+  owner: "Владелец",
+  accountant: "Бухгалтер",
+  administrator: "Администратор",
+};
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
+  const { role, canAccessProducts, canAccessOrders, canAccessIntake, canAccessCustomers, canAccessReports, canAccessSettings } = useRole();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
   const { data: products } = useProducts();
@@ -34,21 +44,23 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const totalOrders = orders?.length || 0;
   const totalCustomers = customers?.length || 0;
 
-  const navItems = [
-    { href: "/", label: "Панель", icon: LayoutDashboard },
-    { href: "/products", label: "Товары", icon: Package },
-    { href: "/orders", label: "Заказы", icon: ShoppingCart },
-    { href: "/customers", label: "Клиенты", icon: Users },
-    { href: "/intake", label: "Приёмка", icon: ScanLine },
-    { href: "/reports", label: "Отчёты", icon: FileBarChart },
-    { href: "/settings", label: "Настройки", icon: Settings },
+  const allNavItems = [
+    { href: "/", label: "Панель", icon: LayoutDashboard, visible: true },
+    { href: "/products", label: "Товары", icon: Package, visible: canAccessProducts },
+    { href: "/orders", label: "Заказы", icon: ShoppingCart, visible: canAccessOrders },
+    { href: "/customers", label: "Клиенты", icon: Users, visible: canAccessCustomers },
+    { href: "/intake", label: "Приёмка", icon: ScanLine, visible: canAccessIntake },
+    { href: "/reports", label: "Отчёты", icon: FileBarChart, visible: canAccessReports },
+    { href: "/settings", label: "Настройки", icon: Settings, visible: canAccessSettings },
   ];
 
+  const navItems = useMemo(() => allNavItems.filter(item => item.visible), [canAccessProducts, canAccessOrders, canAccessIntake, canAccessCustomers, canAccessReports, canAccessSettings]);
+
   const stats = [
-    { icon: Package, value: totalProducts, label: "Товаров", color: "from-primary to-accent" },
-    { icon: ShoppingCart, value: totalOrders, label: "Заказов", color: "from-accent to-primary" },
-    { icon: Users, value: totalCustomers, label: "Клиентов", color: "from-primary/80 to-accent/80" },
-  ];
+    { icon: Package, value: totalProducts, label: "Товаров", color: "from-primary to-accent", visible: canAccessProducts },
+    { icon: ShoppingCart, value: totalOrders, label: "Заказов", color: "from-accent to-primary", visible: canAccessOrders },
+    { icon: Users, value: totalCustomers, label: "Клиентов", color: "from-primary/80 to-accent/80", visible: canAccessCustomers },
+  ].filter(s => s.visible);
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -117,7 +129,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </Avatar>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{user?.firstName} {user?.lastName}</p>
-              <p className="text-xs text-sidebar-foreground/50 truncate">{user?.email}</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0" data-testid="badge-role">
+                  <Shield className="w-2.5 h-2.5 mr-0.5" />
+                  {ROLE_LABELS[role] || role}
+                </Badge>
+              </div>
             </div>
             <Button 
               variant="ghost" 
