@@ -291,6 +291,8 @@ export async function registerRoutes(
     }
   });
 
+  // Standard order creation (marketplace orders). Does NOT create customer records —
+  // marketplace buyers are anonymous. Only direct sales (/api/orders/direct) create CRM customers.
   app.post(api.orders.create.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
@@ -518,6 +520,9 @@ export async function registerRoutes(
   });
 
   // Marketplace Sync (production-ready wrapper)
+  // IMPORTANT: Marketplace sync must NEVER create or import customer records into the CRM.
+  // CRM customers are exclusively created via direct sales or manual entry.
+  // Marketplace orders (Ozon, Wildberries, Yandex) are anonymous/marketplace-owned transactions.
   app.post("/api/marketplace/sync-store/:storeId", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);

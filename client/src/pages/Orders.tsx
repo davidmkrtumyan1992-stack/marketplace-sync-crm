@@ -286,7 +286,10 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
 
         <div className="space-y-6">
           <div className="flex flex-wrap items-center gap-3">
-            {getSourceBadge(order.source)}
+            <div className="flex items-center gap-2" data-testid="badge-order-source-prominent">
+              {getSourceBadge(order.source)}
+              <span className="text-sm font-medium">{getSourceLabel(order.source)}</span>
+            </div>
             <Badge className={`${getStatusColor(order.status)}`}>
               {getStatusLabel(order.status)}
             </Badge>
@@ -363,52 +366,58 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
             <span className="text-2xl font-bold" data-testid="text-order-total">{formatCurrency(totalAmount)}</span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                <User className="w-4 h-4" />
-                Покупатель
-              </h4>
-              {order.customer ? (
-                <Card>
-                  <CardContent className="py-3">
-                    <p className="font-medium" data-testid="text-order-customer-name">{order.customer.name}</p>
-                    {order.customer.phone && (
-                      <p className="text-sm text-muted-foreground flex items-center gap-1.5 mt-1">
-                        <Phone className="w-3.5 h-3.5" />
-                        {order.customer.phone}
-                      </p>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-2"
-                      onClick={() => { onOpenChange(false); navigate("/customers"); }}
-                      data-testid="button-view-customer"
-                    >
-                      <Eye className="w-3.5 h-3.5 mr-1.5" />
-                      Профиль клиента
-                    </Button>
-                  </CardContent>
-                </Card>
-              ) : (
-                <p className="text-sm text-muted-foreground" data-testid="text-order-customer-guest">Гость (без привязки)</p>
-              )}
+          {order.source === "direct" ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <User className="w-4 h-4" />
+                  Покупатель
+                </h4>
+                {order.customer ? (
+                  <Card>
+                    <CardContent className="py-3">
+                      <p className="font-medium" data-testid="text-order-customer-name">{order.customer.name}</p>
+                      {order.customer.phone && (
+                        <p className="text-sm text-muted-foreground flex items-center gap-1.5 mt-1">
+                          <Phone className="w-3.5 h-3.5" />
+                          {order.customer.phone}
+                        </p>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2"
+                        onClick={() => { onOpenChange(false); navigate("/customers"); }}
+                        data-testid="button-view-customer"
+                      >
+                        <Eye className="w-3.5 h-3.5 mr-1.5" />
+                        Профиль клиента
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <p className="text-sm text-muted-foreground" data-testid="text-order-customer-guest">Гость (без привязки)</p>
+                )}
+              </div>
+              <div>
+                {order.notes && (
+                  <div>
+                    <h4 className="text-sm font-medium mb-1">Примечание</h4>
+                    <p className="text-sm text-muted-foreground">{order.notes}</p>
+                  </div>
+                )}
+              </div>
             </div>
-            <div>
-              <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                <Store className="w-4 h-4" />
-                Источник
-              </h4>
-              <p className="text-sm" data-testid="text-order-source">{getSourceLabel(order.source)}</p>
+          ) : (
+            <>
               {order.notes && (
-                <div className="mt-3">
+                <div>
                   <h4 className="text-sm font-medium mb-1">Примечание</h4>
                   <p className="text-sm text-muted-foreground">{order.notes}</p>
                 </div>
               )}
-            </div>
-          </div>
+            </>
+          )}
         </div>
 
         <DialogFooter>
