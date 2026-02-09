@@ -1,0 +1,51 @@
+System Upgrade: Unified Warehouse, Virtual Inventory & Direct Sales (Omnichannel Logic)
+
+Objective: Redesign the inventory and sales engine to support a «Single Warehouse — Multiple Storefronts» model, including direct offline sales.
+
+1. Centralized Warehouse Logic (The Source of Truth):
+
+Single Pool: Maintain one «Physical Warehouse» balance for each SKU. All goods received via «Приёмка» (Acceptance) must be added to this central stock.
+
+Intake: Support barcode scanning (increment quantity on each scan). After confirmation, the total amount goes to the Central Warehouse Stock.
+
+Dashboard: The «Total Stock» indicator must show the sum of Central Warehouse quantities (e.g., 23 items total: 10 shampoos + 5 gels + 8 perfumes).
+
+2. Virtual Inventory Mirroring (The 1-to-6 Rule):
+
+Logic: The system must treat the Central Warehouse quantity as the available stock for ALL 6 connected stores (2x Ozon, 2x WB, 2x Yandex).
+
+Manual Sync: Add a button «Синхронизировать всё» to force-push the central stock to all stores.
+
+Selective Sync: Add a toggle in the product card to «Exclude from Store X» if a specific product shouldn't be sold in a certain shop.
+
+3. Unified Real-time Deduction (Marketplaces & Direct Sales):
+
+Trigger A (Marketplace Order): When an order is fetched via API from ANY of the 6 stores:
+
+Immediately decrease «Central Warehouse» stock by the order quantity.
+
+Automatically trigger a broadcast API update to the other 5 stores to match the new warehouse balance.
+
+Trigger B (Direct Sale / Прямая продажа):
+
+Add a «Create Direct Order» button for phone/offline sales.
+
+Allow manual price override (e.g., change 1 500 руб. to 1 000 руб.). Store both original and sale prices.
+
+Upon confirmation, decrease «Central Warehouse» stock and trigger a broadcast sync to ALL 6 marketplace stores.
+
+4. CRM & History Integration:
+
+Customer Link: For «Direct Sales», allow selecting an existing customer or creating a new one (Name/Company, Phone, Note).
+
+History: Save the purchase details (Product, SKU, Final Price) in the Customer’s profile.
+
+Logs: In «Лог синхронизации», mark these updates as «Direct Sale / Самовывоз».
+
+5. Technical Requirements & Formatting:
+
+Race Conditions: Ensure stock updates are atomic to prevent overselling if two orders (one from Ozon, one Direct) happen simultaneously.
+
+Formatting: Strictly follow the rules: space as a thousand separator («1 450 000 руб.») and use angle quotes « ».
+
+Action: Update the Inventory and Order controllers to implement this synchronized mirroring logic.
