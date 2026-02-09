@@ -37,12 +37,14 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Building2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { formatCurrency, formatQuantity } from "@/lib/format";
 import { queryClient } from "@/lib/queryClient";
 import { useRole } from "@/hooks/use-role";
+import { useQuery } from "@tanstack/react-query";
+import type { Company } from "@shared/schema";
 
 const formSchema = insertProductSchema.extend({
   purchasePrice: z.coerce.number(),
@@ -57,6 +59,7 @@ const formSchema = insertProductSchema.extend({
   weight: z.coerce.number().optional(),
   logisticsCost: z.coerce.number().optional(),
   marketplaceCommission: z.coerce.number().optional(),
+  companyId: z.coerce.number({ required_error: "Выберите компанию" }).min(1, "Выберите компанию"),
 });
 
 const CATEGORIES = [
@@ -199,6 +202,10 @@ function ProductForm({ onSuccess, canSeePurchasePrice = true }: { onSuccess: () 
   const [markup, setMarkup] = useState(0);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+
+  const { data: companies = [] } = useQuery<Company[]>({
+    queryKey: ["/api/companies"],
+  });
   
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -218,9 +225,16 @@ function ProductForm({ onSuccess, canSeePurchasePrice = true }: { onSuccess: () 
       weight: 0,
       logisticsCost: 0,
       marketplaceCommission: 15,
-      organizationId: "1",
+      companyId: 0,
     }
   });
+
+  useEffect(() => {
+    const currentVal = form.getValues("companyId");
+    if (companies.length === 1 && (!currentVal || currentVal === 0)) {
+      form.setValue("companyId", companies[0].id, { shouldValidate: true });
+    }
+  }, [companies, form]);
 
   const stockLocal = form.watch("stockLocal") || 0;
   const stockOzon = form.watch("stockOzon") || 0;
@@ -309,6 +323,29 @@ function ProductForm({ onSuccess, canSeePurchasePrice = true }: { onSuccess: () 
             <p className="text-xs text-muted-foreground mt-1">JPG, PNG, WebP до 10 МБ</p>
           </div>
         </div>
+      </div>
+
+      <div className="grid gap-2">
+        <Label className="flex items-center gap-2">
+          <Building2 className="w-4 h-4" />
+          Компания (ИП)
+        </Label>
+        <Select
+          value={form.watch("companyId") ? String(form.watch("companyId")) : ""}
+          onValueChange={(val) => form.setValue("companyId", Number(val), { shouldValidate: true })}
+        >
+          <SelectTrigger data-testid="select-company">
+            <SelectValue placeholder="Выберите компанию" />
+          </SelectTrigger>
+          <SelectContent>
+            {companies.map((company: Company) => (
+              <SelectItem key={company.id} value={String(company.id)} data-testid={`select-company-option-${company.id}`}>
+                {company.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {form.formState.errors.companyId && <span className="text-xs text-red-500">{form.formState.errors.companyId.message}</span>}
       </div>
 
       <div className="grid gap-2">
@@ -435,7 +472,13 @@ function ProductForm({ onSuccess, canSeePurchasePrice = true }: { onSuccess: () 
         <Input id="desc" {...form.register("description")} />
       </div>
 
-      <Button type="submit" className="w-full mt-2" disabled={isPending || isUploading} data-testid="button-create-product">
+      {companies.length === 0 && (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          Сначала добавьте компанию (ИП) в разделе «Настройки», чтобы создавать товары.
+        </p>
+      )}
+
+      <Button type="submit" className="w-full mt-2" disabled={isPending || isUploading || companies.length === 0} data-testid="button-create-product">
         {isPending ? "Создание..." : "Создать товар"}
       </Button>
     </form>

@@ -172,11 +172,19 @@ export async function registerRoutes(
 
   app.post(api.products.create.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
-      const input = api.products.create.input.parse({ ...req.body, organizationId: getOrgId(req) });
+      const orgId = getOrgId(req);
+      const input = api.products.create.input.parse({ ...req.body, organizationId: orgId });
+      if (input.companyId) {
+        const orgCompanies = await storage.getCompanies(orgId);
+        const validCompany = orgCompanies.find(c => c.id === input.companyId);
+        if (!validCompany) {
+          return res.status(403).json({ message: "Компания не принадлежит вашей организации" });
+        }
+      }
       const product = await storage.createProduct(input);
       res.status(201).json(product);
     } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json(err);
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Проверьте правильность заполнения полей" });
       throw err;
     }
   });
