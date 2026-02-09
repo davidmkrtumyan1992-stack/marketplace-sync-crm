@@ -5,14 +5,15 @@ import { useOrders } from "@/hooks/use-orders";
 import { useKPI } from "@/hooks/use-kpi";
 import { useRole } from "@/hooks/use-role";
 import { useQuery } from "@tanstack/react-query";
-import { Package, Warehouse, TrendingUp, Coins, ArrowUpRight, Building2, Store, ShoppingCart, ExternalLink, Database, AlertTriangle } from "lucide-react";
+import { Package, Warehouse, TrendingUp, Coins, ArrowUpRight, Building2, Store, ShoppingCart, ExternalLink, Database, AlertTriangle, RefreshCw, CheckCircle2, XCircle, Shield } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatCurrency, formatQuantity, formatNumber } from "@/lib/format";
-import type { DashboardKPI, LowStockProduct, SalesDataPoint } from "@shared/schema";
+import type { DashboardKPI, LowStockProduct, SalesDataPoint, SyncStatusSummary } from "@shared/schema";
 import { Link } from "wouter";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -37,6 +38,11 @@ export default function Dashboard() {
 
   const { data: salesData } = useQuery<SalesDataPoint[]>({
     queryKey: ["/api/analytics/sales"],
+  });
+
+  const { data: syncStatus } = useQuery<SyncStatusSummary>({
+    queryKey: ["/api/inventory-sync/status"],
+    refetchInterval: 15000,
   });
 
   const [salesFilter, setSalesFilter] = useState<string>("all");
@@ -206,6 +212,81 @@ export default function Dashboard() {
             </Card>
           )}
         </div>
+
+        {syncStatus && (syncStatus.totalSyncsToday > 0 || syncStatus.lastSyncAt) && (
+          <Card className="kpi-card" data-testid="card-sync-status">
+            <CardHeader className="flex flex-row items-center justify-between gap-4 pb-4 flex-wrap">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="icon-box" style={{ background: "hsl(175 98% 41% / 0.15)" }}>
+                  <RefreshCw className="w-5 h-5 text-primary" />
+                </div>
+                <CardTitle className="text-lg font-bold">
+                  Статус синхронизации
+                </CardTitle>
+              </div>
+              {syncStatus.lastSyncStatus && (
+                <Badge
+                  variant={syncStatus.lastSyncStatus === "success" ? "default" : "destructive"}
+                  data-testid="badge-sync-status"
+                >
+                  {syncStatus.lastSyncStatus === "success" ? "Успешно" : syncStatus.lastSyncStatus === "partial" ? "Частично" : "Ошибка"}
+                </Badge>
+              )}
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="flex items-center gap-3">
+                  <RefreshCw className="w-4 h-4 text-muted-foreground" />
+                  <div>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Синхронизаций сегодня</p>
+                    <p className="text-lg font-bold" data-testid="text-sync-total-today">{formatNumber(syncStatus.totalSyncsToday)}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="w-4 h-4 text-green-500" />
+                  <div>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Успешных</p>
+                    <p className="text-lg font-bold text-green-600 dark:text-green-400" data-testid="text-sync-success">{formatNumber(syncStatus.successCount)}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <XCircle className="w-4 h-4 text-destructive" />
+                  <div>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">С ошибками</p>
+                    <p className="text-lg font-bold text-destructive" data-testid="text-sync-fail">{formatNumber(syncStatus.failCount)}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Shield className="w-4 h-4 text-amber-500" />
+                  <div>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Резервный остаток</p>
+                    <p className="text-lg font-bold text-amber-600 dark:text-amber-400" data-testid="text-sync-safety">{formatNumber(syncStatus.safetyStockTriggeredCount)}</p>
+                  </div>
+                </div>
+              </div>
+              {syncStatus.lastSyncAt && (
+                <p className="text-xs text-muted-foreground mt-4" data-testid="text-last-sync-time">
+                  Последняя синхронизация: {new Date(syncStatus.lastSyncAt).toLocaleString("ru-RU")}
+                </p>
+              )}
+              {syncStatus.recentLogs && syncStatus.recentLogs.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Последние события</p>
+                  {syncStatus.recentLogs.slice(0, 3).map((log: any) => (
+                    <div key={log.id} className="flex items-start gap-2 text-xs p-2 rounded-md bg-muted/50" data-testid={`row-sync-log-${log.id}`}>
+                      {log.status === "success" ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 text-green-500 shrink-0" />
+                      ) : (
+                        <XCircle className="w-3.5 h-3.5 mt-0.5 text-destructive shrink-0" />
+                      )}
+                      <span className="text-foreground">{log.details}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {lowStockProducts && lowStockProducts.length > 0 && (
           <div data-testid="section-low-stock">

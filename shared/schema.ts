@@ -76,6 +76,7 @@ export const products = pgTable("products", {
   wbId: text("wb_id"),
   yandexId: text("yandex_id"),
   imageUrl: text("image_url"),
+  safetyStock: integer("safety_stock").notNull().default(0),
   companyId: integer("company_id").references(() => companies.id),
   organizationId: text("organization_id").notNull(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -178,6 +179,34 @@ export const syncHistory = pgTable("sync_history", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const stockSyncLog = pgTable("stock_sync_log", {
+  id: serial("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  orderId: integer("order_id").references(() => orders.id),
+  productId: integer("product_id").references(() => products.id),
+  productName: text("product_name"),
+  sku: text("sku"),
+  sourceStoreId: integer("source_store_id").references(() => stores.id),
+  sourceStoreName: text("source_store_name"),
+  action: text("action").notNull(),
+  previousStock: integer("previous_stock").notNull().default(0),
+  newStock: integer("new_stock").notNull().default(0),
+  quantityChanged: integer("quantity_changed").notNull().default(0),
+  safetyStockTriggered: boolean("safety_stock_triggered").default(false),
+  syncResults: jsonb("sync_results"),
+  status: text("status").notNull().default("success"),
+  details: text("details"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const inventorySyncSettings = pgTable("inventory_sync_settings", {
+  id: serial("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  defaultSafetyStock: integer("default_safety_stock").notNull().default(2),
+  syncEnabled: boolean("sync_enabled").default(true),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // === RELATIONS ===
 
 export const companiesRelations = relations(companies, ({ many }) => ({
@@ -239,6 +268,8 @@ export const insertTaxSettingsSchema = createInsertSchema(taxSettings).omit({ id
 export const insertAuditLogSchema = createInsertSchema(auditLog).omit({ id: true, createdAt: true });
 export const insertStockInflowSchema = createInsertSchema(stockInflow).omit({ id: true, createdAt: true });
 export const insertSyncHistorySchema = createInsertSchema(syncHistory).omit({ id: true, createdAt: true });
+export const insertStockSyncLogSchema = createInsertSchema(stockSyncLog).omit({ id: true, createdAt: true });
+export const insertInventorySyncSettingsSchema = createInsertSchema(inventorySyncSettings).omit({ id: true, updatedAt: true });
 
 // === TYPES ===
 
@@ -268,6 +299,10 @@ export type StockInflow = typeof stockInflow.$inferSelect;
 export type InsertStockInflow = z.infer<typeof insertStockInflowSchema>;
 export type SyncHistoryEntry = typeof syncHistory.$inferSelect;
 export type InsertSyncHistory = z.infer<typeof insertSyncHistorySchema>;
+export type StockSyncLogEntry = typeof stockSyncLog.$inferSelect;
+export type InsertStockSyncLog = z.infer<typeof insertStockSyncLogSchema>;
+export type InventorySyncSetting = typeof inventorySyncSettings.$inferSelect;
+export type InsertInventorySyncSettings = z.infer<typeof insertInventorySyncSettingsSchema>;
 
 // API Requests
 export type CreateProductRequest = InsertProduct;
@@ -299,6 +334,17 @@ export type SalesDataPoint = {
   revenue: number;
   companyId: number | null;
   companyName: string;
+};
+
+// Sync Status
+export type SyncStatusSummary = {
+  lastSyncAt: string | null;
+  lastSyncStatus: string | null;
+  totalSyncsToday: number;
+  successCount: number;
+  failCount: number;
+  safetyStockTriggeredCount: number;
+  recentLogs: StockSyncLogEntry[];
 };
 
 // Composite Response

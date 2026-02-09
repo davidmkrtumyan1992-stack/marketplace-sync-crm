@@ -1,6 +1,7 @@
 import { 
   companies, stores, userRoles, expenses,
   products, customers, orders, orderItems, marketplaceSettings, taxSettings, auditLog, stockInflow, syncHistory,
+  stockSyncLog, inventorySyncSettings,
   type Company, type InsertCompany,
   type Store, type InsertStore,
   type UserRole, type InsertUserRole,
@@ -13,8 +14,11 @@ import {
   type AuditLogEntry, type InsertAuditLog,
   type StockInflow, type InsertStockInflow,
   type SyncHistoryEntry, type InsertSyncHistory,
+  type StockSyncLogEntry, type InsertStockSyncLog,
+  type InventorySyncSetting, type InsertInventorySyncSettings,
   type DashboardKPI, type CompanyWithStores, type StoreWithStats,
-  type ABCProduct, type LowStockProduct, type SalesDataPoint
+  type ABCProduct, type LowStockProduct, type SalesDataPoint,
+  type SyncStatusSummary,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
@@ -91,6 +95,14 @@ export interface IStorage {
   getLowStockProducts(organizationId: string, threshold?: number): Promise<LowStockProduct[]>;
   getSalesData(organizationId: string, days?: number): Promise<SalesDataPoint[]>;
   
+  // Stock Sync Log
+  getStockSyncLogs(organizationId: string, limit?: number): Promise<StockSyncLogEntry[]>;
+  createStockSyncLog(entry: InsertStockSyncLog): Promise<StockSyncLogEntry>;
+
+  // Inventory Sync Settings
+  getInventorySyncSettings(organizationId: string): Promise<InventorySyncSetting | undefined>;
+  saveInventorySyncSettings(organizationId: string, settings: Partial<InsertInventorySyncSettings>): Promise<InventorySyncSetting>;
+
   // Seed
   seedData(organizationId: string): Promise<void>;
 
@@ -682,6 +694,43 @@ export class DatabaseStorage implements IStorage {
     }
 
     return Object.values(dataByDateCompany).sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  // Stock Sync Log
+  async getStockSyncLogs(organizationId: string, limit: number = 100): Promise<StockSyncLogEntry[]> {
+    return await db.select().from(stockSyncLog)
+      .where(eq(stockSyncLog.organizationId, organizationId))
+      .orderBy(desc(stockSyncLog.createdAt))
+      .limit(limit);
+  }
+
+  async createStockSyncLog(entry: InsertStockSyncLog): Promise<StockSyncLogEntry> {
+    const [created] = await db.insert(stockSyncLog).values(entry).returning();
+    return created;
+  }
+
+  // Inventory Sync Settings
+  async getInventorySyncSettings(organizationId: string): Promise<InventorySyncSetting | undefined> {
+    const [settings] = await db.select().from(inventorySyncSettings)
+      .where(eq(inventorySyncSettings.organizationId, organizationId));
+    return settings;
+  }
+
+  async saveInventorySyncSettings(organizationId: string, updates: Partial<InsertInventorySyncSettings>): Promise<InventorySyncSetting> {
+    const existing = await this.getInventorySyncSettings(organizationId);
+    if (existing) {
+      const [updated] = await db.update(inventorySyncSettings)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(eq(inventorySyncSettings.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(inventorySyncSettings).values({
+      organizationId,
+      defaultSafetyStock: updates.defaultSafetyStock ?? 2,
+      syncEnabled: updates.syncEnabled ?? true,
+    }).returning();
+    return created;
   }
 
   async seedData(orgId: string): Promise<void> {

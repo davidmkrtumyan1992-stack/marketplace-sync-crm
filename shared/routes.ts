@@ -10,6 +10,7 @@ import {
   insertStoreSchema,
   insertExpenseSchema,
   insertUserRoleSchema,
+  insertInventorySyncSettingsSchema,
 } from './schema';
 
 export const errorSchemas = {
@@ -107,6 +108,17 @@ export const api = {
     abc: { method: 'GET' as const, path: '/api/analytics/abc' },
     sales: { method: 'GET' as const, path: '/api/analytics/sales' },
     lowStock: { method: 'GET' as const, path: '/api/analytics/low-stock' },
+  },
+  inventorySync: {
+    status: { method: 'GET' as const, path: '/api/inventory-sync/status' },
+    logs: { method: 'GET' as const, path: '/api/inventory-sync/logs' },
+    settings: { method: 'GET' as const, path: '/api/inventory-sync/settings' },
+    saveSettings: { method: 'POST' as const, path: '/api/inventory-sync/settings', input: insertInventorySyncSettingsSchema },
+    updateProductSafetyStock: { 
+      method: 'PATCH' as const, 
+      path: '/api/inventory-sync/product/:id/safety-stock',
+      input: z.object({ safetyStock: z.number().min(0) })
+    },
   },
 };
 

@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { inventorySyncEngine } from "./inventory-sync";
 import { api } from "@shared/routes";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { z } from "zod";
@@ -222,10 +223,36 @@ export async function registerRoutes(
   });
 
   app.post(api.orders.create.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
-    const { items, ...orderData } = req.body;
-    const inputOrder = { ...orderData, organizationId: getOrgId(req) };
-    const order = await storage.createOrder(inputOrder, items);
-    res.status(201).json(order);
+    try {
+      const orgId = getOrgId(req);
+      const { items, ...orderData } = req.body;
+      const inputOrder = { ...orderData, organizationId: orgId };
+      const order = await storage.createOrder(inputOrder, items);
+
+      const allStores = await storage.getStoresByOrg(orgId);
+      const sourceStore = allStores.find(s => s.id === order.storeId);
+      const sourceStoreName = sourceStore?.name || orderData.source || "Ручной заказ";
+
+      for (const item of items) {
+        try {
+          await inventorySyncEngine.processOrderStockUpdate({
+            organizationId: orgId,
+            orderId: order.id,
+            productId: item.productId,
+            quantity: item.quantity,
+            sourceStoreId: order.storeId,
+            sourceStoreName,
+          });
+        } catch (syncError) {
+          console.error("Inventory sync error for product", item.productId, syncError);
+        }
+      }
+
+      res.status(201).json(order);
+    } catch (err: any) {
+      console.error("Order creation error:", err);
+      res.status(400).json({ message: err.message || "Ошибка создания заказа" });
+    }
   });
 
   app.patch(api.orders.updateStatus.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
@@ -435,6 +462,65 @@ export async function registerRoutes(
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", "attachment; filename=pnl-report.xlsx");
     res.send(Buffer.from(buffer));
+  });
+
+  // Inventory Sync Endpoints
+  app.get(api.inventorySync.status.path, isAuthenticated, async (req, res) => {
+    try {
+      const status = await inventorySyncEngine.getSyncStatus(getOrgId(req));
+      res.json(status);
+    } catch (error) {
+      console.error("Sync status error:", error);
+      res.status(500).json({ message: "Ошибка получения статуса синхронизации" });
+    }
+  });
+
+  app.get(api.inventorySync.logs.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const limit = req.query.limit ? Number(req.query.limit) : 100;
+      const logs = await inventorySyncEngine.getSyncLogs(getOrgId(req), limit);
+      res.json(logs);
+    } catch (error) {
+      console.error("Sync logs error:", error);
+      res.status(500).json({ message: "Ошибка получения логов синхронизации" });
+    }
+  });
+
+  app.get(api.inventorySync.settings.path, isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const settings = await inventorySyncEngine.getSyncSettings(getOrgId(req));
+      res.json(settings || { defaultSafetyStock: 2, syncEnabled: true });
+    } catch (error) {
+      console.error("Sync settings error:", error);
+      res.status(500).json({ message: "Ошибка получения настроек синхронизации" });
+    }
+  });
+
+  app.post(api.inventorySync.saveSettings.path, isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const { defaultSafetyStock, syncEnabled } = req.body;
+      const settings = await inventorySyncEngine.saveSyncSettings(
+        getOrgId(req),
+        defaultSafetyStock ?? 2,
+        syncEnabled ?? true
+      );
+      res.json(settings);
+    } catch (error) {
+      console.error("Save sync settings error:", error);
+      res.status(500).json({ message: "Ошибка сохранения настроек синхронизации" });
+    }
+  });
+
+  app.patch(api.inventorySync.updateProductSafetyStock.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const productId = Number(req.params.id);
+      const { safetyStock } = req.body;
+      const product = await storage.updateProduct(productId, { safetyStock });
+      res.json(product);
+    } catch (error) {
+      console.error("Update product safety stock error:", error);
+      res.status(500).json({ message: "Ошибка обновления резервного остатка" });
+    }
   });
 
   // Seed Data

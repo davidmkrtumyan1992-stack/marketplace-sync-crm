@@ -12,15 +12,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertMarketplaceSettingsSchema, type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store } from "@shared/schema";
-import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History } from "lucide-react";
-import { useEffect } from "react";
+import { insertMarketplaceSettingsSchema, type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store, type StockSyncLogEntry, type InventorySyncSetting } from "@shared/schema";
+import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText } from "lucide-react";
+import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
+import { formatNumber } from "@/lib/format";
 
 const ACTION_LABELS: Record<string, string> = {
   stock_sync: "Синхронизация остатков",
@@ -53,6 +54,8 @@ export default function Settings() {
         <Tabs defaultValue="settings">
           <TabsList>
             <TabsTrigger value="settings" data-testid="tab-settings">Настройки</TabsTrigger>
+            <TabsTrigger value="safety-stock" data-testid="tab-safety-stock">Резервный остаток</TabsTrigger>
+            <TabsTrigger value="sync-log" data-testid="tab-sync-log">Лог синхронизации</TabsTrigger>
             <TabsTrigger value="sync-history" data-testid="tab-sync-history">Синхронизация</TabsTrigger>
           </TabsList>
 
@@ -81,6 +84,14 @@ export default function Settings() {
                 logoColor="text-purple-600"
               />
             </div>
+          </TabsContent>
+
+          <TabsContent value="safety-stock" className="mt-6">
+            <SafetyStockSection />
+          </TabsContent>
+
+          <TabsContent value="sync-log" className="mt-6">
+            <StockSyncLogSection />
           </TabsContent>
 
           <TabsContent value="sync-history" className="mt-6">
@@ -448,5 +459,249 @@ function MarketplaceCard({
         </form>
       </CardContent>
     </Card>
+  );
+}
+
+function SafetyStockSection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: syncSettings, isLoading } = useQuery<InventorySyncSetting>({
+    queryKey: ["/api/inventory-sync/settings"],
+  });
+
+  const [defaultSafetyStock, setDefaultSafetyStock] = useState(2);
+  const [syncEnabled, setSyncEnabled] = useState(true);
+
+  useEffect(() => {
+    if (syncSettings) {
+      setDefaultSafetyStock(syncSettings.defaultSafetyStock ?? 2);
+      setSyncEnabled(syncSettings.syncEnabled ?? true);
+    }
+  }, [syncSettings]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/inventory-sync/settings", {
+        defaultSafetyStock,
+        syncEnabled,
+      });
+    },
+    onSuccess: () => {
+      toast({ title: "Сохранено", description: "Настройки резервного остатка обновлены" });
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/settings"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-6" data-testid="section-safety-stock">
+      <Card>
+        <CardHeader className="bg-muted/50 border-b">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-card rounded-lg border shadow-sm text-primary">
+              <Shield className="w-6 h-6" />
+            </div>
+            <div>
+              <CardTitle>Резервный остаток</CardTitle>
+              <CardDescription>
+                Когда остаток товара достигает резервного уровня, маркетплейсам отправляется 0 единиц для предотвращения пересортицы
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-6">
+          {isLoading ? (
+            <div className="text-center py-4 text-muted-foreground">Загрузка...</div>
+          ) : (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <Label className="text-base font-medium">Автоматическая синхронизация</Label>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    При создании заказа остатки автоматически обновляются на всех маркетплейсах
+                  </p>
+                </div>
+                <Switch
+                  checked={syncEnabled}
+                  onCheckedChange={setSyncEnabled}
+                  data-testid="switch-sync-enabled"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-base font-medium flex items-center gap-2">
+                  <Shield className="w-4 h-4" />
+                  Резервный остаток по умолчанию (шт.)
+                </Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={defaultSafetyStock}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    setDefaultSafetyStock(isNaN(val) ? 0 : Math.max(0, Math.min(100, val)));
+                  }}
+                  className="max-w-[200px]"
+                  data-testid="input-default-safety-stock"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Применяется ко всем товарам, у которых не задан индивидуальный резервный остаток.
+                  Рекомендуется: 2-5 шт.
+                </p>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <Button
+                  onClick={() => saveMutation.mutate()}
+                  disabled={saveMutation.isPending}
+                  data-testid="button-save-safety-stock"
+                >
+                  {saveMutation.isPending ? "Сохранение..." : "Сохранить настройки"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function StockSyncLogSection() {
+  const { toast } = useToast();
+  const [limit, setLimit] = useState(50);
+
+  const { data: syncLogs, isLoading, isError } = useQuery<StockSyncLogEntry[]>({
+    queryKey: [`/api/inventory-sync/logs?limit=${limit}`],
+  });
+
+  return (
+    <div className="space-y-6" data-testid="section-stock-sync-log">
+      <Card>
+        <CardHeader className="bg-muted/50 border-b">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-card rounded-lg border shadow-sm text-primary">
+                <FileText className="w-6 h-6" />
+              </div>
+              <div>
+                <CardTitle>Лог синхронизации остатков</CardTitle>
+                <CardDescription>Подробная история всех операций синхронизации между складами и маркетплейсами</CardDescription>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-sm text-muted-foreground whitespace-nowrap">Показать:</Label>
+              <Button
+                variant={limit === 50 ? "default" : "outline"}
+                size="sm"
+                onClick={() => setLimit(50)}
+                data-testid="button-log-limit-50"
+              >
+                50
+              </Button>
+              <Button
+                variant={limit === 100 ? "default" : "outline"}
+                size="sm"
+                onClick={() => setLimit(100)}
+                data-testid="button-log-limit-100"
+              >
+                100
+              </Button>
+              <Button
+                variant={limit === 200 ? "default" : "outline"}
+                size="sm"
+                onClick={() => setLimit(200)}
+                data-testid="button-log-limit-200"
+              >
+                200
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="text-center py-8 text-muted-foreground">Загрузка...</div>
+          ) : isError ? (
+            <div className="text-center py-8 text-destructive">Ошибка загрузки логов синхронизации</div>
+          ) : !syncLogs || syncLogs.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">Нет записей синхронизации</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Дата</TableHead>
+                    <TableHead>Товар</TableHead>
+                    <TableHead>Артикул</TableHead>
+                    <TableHead>Действие</TableHead>
+                    <TableHead className="text-right">Было</TableHead>
+                    <TableHead className="text-right">Стало</TableHead>
+                    <TableHead className="text-right">Изменение</TableHead>
+                    <TableHead>Буфер</TableHead>
+                    <TableHead>Статус</TableHead>
+                    <TableHead>Детали</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {syncLogs.map((log) => (
+                    <TableRow key={log.id} data-testid={`row-stock-sync-log-${log.id}`}>
+                      <TableCell className="whitespace-nowrap text-xs" data-testid={`text-log-date-${log.id}`}>
+                        {log.createdAt
+                          ? format(new Date(log.createdAt), "dd.MM.yy HH:mm", { locale: ru })
+                          : "—"}
+                      </TableCell>
+                      <TableCell className="font-medium max-w-[180px] truncate" data-testid={`text-log-product-${log.id}`}>
+                        {log.productName || "—"}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs" data-testid={`text-log-sku-${log.id}`}>
+                        {log.sku || "—"}
+                      </TableCell>
+                      <TableCell className="text-xs" data-testid={`text-log-action-${log.id}`}>
+                        {log.action === "order_stock_decrement" ? "Заказ" : log.action === "manual_sync" ? "Ручная" : log.action}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums" data-testid={`text-log-prev-stock-${log.id}`}>
+                        {formatNumber(log.previousStock)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums" data-testid={`text-log-new-stock-${log.id}`}>
+                        {formatNumber(log.newStock)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums" data-testid={`text-log-qty-change-${log.id}`}>
+                        <span className={log.quantityChanged < 0 ? "text-destructive" : "text-green-600 dark:text-green-400"}>
+                          {log.quantityChanged > 0 ? "+" : ""}{formatNumber(log.quantityChanged)}
+                        </span>
+                      </TableCell>
+                      <TableCell data-testid={`text-log-safety-${log.id}`}>
+                        {log.safetyStockTriggered && (
+                          <Badge variant="outline" className="text-amber-600 border-amber-400">
+                            <Shield className="w-3 h-3 mr-1" />
+                            Да
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell data-testid={`text-log-status-${log.id}`}>
+                        {log.status === "success" ? (
+                          <CheckCircle2 className="w-4 h-4 text-green-500" />
+                        ) : log.status === "partial" ? (
+                          <RefreshCw className="w-4 h-4 text-amber-500" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-destructive" />
+                        )}
+                      </TableCell>
+                      <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground" data-testid={`text-log-details-${log.id}`}>
+                        {log.details || "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
