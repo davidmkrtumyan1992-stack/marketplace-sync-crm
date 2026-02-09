@@ -7,7 +7,8 @@ CloudERP is a production-ready multi-company cloud ERP/CRM system designed for e
 Key capabilities:
 - Multi-company architecture: multiple companies (ИП) under one account, each with own marketplace stores
 - Multi-level RBAC: Owner (full access), Accountant (Reports/Expenses only), Administrator (Products/Orders/Intake, no purchase prices/P&L)
-- Multi-channel inventory tracking with "split-stock" distribution across local warehouse, Ozon, Wildberries, and Yandex Market
+- Centralized warehouse architecture: single `centralStock` pool with virtual mirroring to 6 storefronts (replaces old split-stock model)
+- Per-product store exclusions: toggle which stores receive stock broadcasts via `productStoreExclusions` table
 - Smart barcode intake: USB scanner support for receiving goods with automatic product lookup (tablet-optimized)
 - Russian tax calculation engine (7% default rate) with expense tracking
 - Dashboard with aggregate KPIs, low-stock alerts, 30-day sales chart, pulsing pending-order indicators
@@ -157,7 +158,7 @@ shared/               # Shared between client/server
 
 ### Pages
 - **Dashboard** (`/`) - Aggregate KPIs + per-company/store breakdown cards
-- **Products** (`/products`) - Product CRUD with barcode, 4-channel stock distribution
+- **Products** (`/products`) - Product CRUD with barcode, centralized warehouse stock
 - **Orders** (`/orders`) - Order management with Ozon/WB/Yandex/Manual sources
 - **Customers** (`/customers`) - CRM data
 - **Intake** (`/intake`) - Smart barcode scanning intake with batch receipt
@@ -171,6 +172,12 @@ shared/               # Shared between client/server
 - Settings schema includes fields for API keys and client IDs
 
 ## Recent Changes
+- **Centralized warehouse migration**: Replaced per-channel stock (stockLocal/stockOzon/stockWb/stockYandex) with single `centralStock` field. All stock operations use atomic `SELECT FOR UPDATE` locking.
+- **Store exclusion system**: Per-product store exclusions via `productStoreExclusions` table with GET/PUT API routes
+- **Security hardening**: Org ownership validation on all ID-based product/store endpoints, preventing cross-tenant access
+- **Products page**: Single centralStock field, simplified stock display
+- **Intake page**: Streamlined to direct warehouse intake (no per-channel distribution)
+- **Excel export**: Updated to show centralStock instead of per-channel breakdown
 - Added multi-level RBAC system (Owner/Accountant/Administrator) with backend enforcement on all routes
 - Added marketplace sync infrastructure with syncHistory table and sync history UI in Settings
 - Added low-stock alerts widget on Dashboard (red highlights for <10 units)
