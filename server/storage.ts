@@ -32,6 +32,7 @@ export interface IStorage {
   createCompany(company: InsertCompany): Promise<Company>;
 
   // Stores
+  getStore(id: number): Promise<Store | undefined>;
   getStores(companyId: number): Promise<Store[]>;
   getStoresByOrg(organizationId: string): Promise<Store[]>;
   createStore(store: InsertStore): Promise<Store>;
@@ -134,6 +135,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Stores
+  async getStore(id: number): Promise<Store | undefined> {
+    const [store] = await db.select().from(stores).where(eq(stores.id, id));
+    return store;
+  }
+
   async getStores(companyId: number): Promise<Store[]> {
     return await db.select().from(stores).where(eq(stores.companyId, companyId)).orderBy(stores.id);
   }
@@ -242,17 +248,21 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateProduct(id: number, updates: UpdateProductRequest): Promise<Product> {
-    const [existingProduct] = await db.select().from(products).where(eq(products.id, id));
-    
-    const centralStock = updates.centralStock !== undefined ? updates.centralStock : (existingProduct?.centralStock || 0);
-    
-    const [product] = await db.update(products).set({ 
-      ...updates, 
-      centralStock,
-      stockQuantity: centralStock,
-      updatedAt: new Date() 
-    }).where(eq(products.id, id)).returning();
-    return product;
+    return await db.transaction(async (tx) => {
+      const [existingProduct] = await tx.select().from(products)
+        .where(eq(products.id, id))
+        .for("update");
+      
+      const centralStock = updates.centralStock !== undefined ? updates.centralStock : (existingProduct?.centralStock || 0);
+      
+      const [product] = await tx.update(products).set({ 
+        ...updates, 
+        centralStock,
+        stockQuantity: centralStock,
+        updatedAt: new Date() 
+      }).where(eq(products.id, id)).returning();
+      return product;
+    });
   }
 
   async deleteProduct(id: number): Promise<void> {

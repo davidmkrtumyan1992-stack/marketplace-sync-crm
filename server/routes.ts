@@ -112,6 +112,10 @@ export async function registerRoutes(
   });
 
   app.put(api.stores.update.path, isAuthenticated, async (req, res) => {
+    const existing = await storage.getStore(Number(req.params.id));
+    if (!existing) return res.status(404).json({ message: "Магазин не найден" });
+    const company = await storage.getCompany(existing.companyId);
+    if (!company || company.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
     const store = await storage.updateStore(Number(req.params.id), req.body);
     res.json(store);
   });
@@ -190,11 +194,17 @@ export async function registerRoutes(
   });
 
   app.put(api.products.update.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    const existing = await storage.getProduct(Number(req.params.id));
+    if (!existing) return res.status(404).json({ message: "Товар не найден" });
+    if (existing.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
     const product = await storage.updateProduct(Number(req.params.id), req.body);
     res.json(product);
   });
 
   app.delete(api.products.delete.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    const existing = await storage.getProduct(Number(req.params.id));
+    if (!existing) return res.status(404).json({ message: "Товар не найден" });
+    if (existing.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
     await storage.deleteProduct(Number(req.params.id));
     res.status(204).send();
   });
@@ -202,11 +212,15 @@ export async function registerRoutes(
   app.post(api.products.sync.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const productId = Number(req.params.id);
     const product = await storage.getProduct(productId);
-    if (!product) return res.status(404).json({ message: "Product not found" });
+    if (!product) return res.status(404).json({ message: "Товар не найден" });
+    if (product.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
     res.json({ success: true, message: "Синхронизация запущена" });
   });
 
   app.get("/api/products/:id/exclusions", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    const product = await storage.getProduct(Number(req.params.id));
+    if (!product) return res.status(404).json({ message: "Товар не найден" });
+    if (product.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
     const exclusions = await storage.getProductStoreExclusions(Number(req.params.id));
     res.json(exclusions);
   });
@@ -214,6 +228,13 @@ export async function registerRoutes(
   app.put("/api/products/:id/exclusions", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const { storeIds } = req.body;
     if (!Array.isArray(storeIds)) return res.status(400).json({ message: "storeIds must be an array" });
+    const product = await storage.getProduct(Number(req.params.id));
+    if (!product) return res.status(404).json({ message: "Товар не найден" });
+    if (product.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
+    const orgStores = await storage.getStores(getOrgId(req));
+    const orgStoreIds = new Set(orgStores.map(s => s.id));
+    const invalidIds = storeIds.filter((id: number) => !orgStoreIds.has(id));
+    if (invalidIds.length > 0) return res.status(400).json({ message: "Некорректные ID магазинов" });
     const exclusions = await storage.setProductStoreExclusions(Number(req.params.id), storeIds, getOrgId(req));
     res.json(exclusions);
   });
@@ -452,10 +473,7 @@ export async function registerRoutes(
       "Категория": p.category || "",
       "Закупка": Number(p.purchasePrice),
       "Продажа": Number(p.sellingPrice),
-      "Склад": p.stockLocal,
-      "Ozon": p.stockOzon,
-      "WB": p.stockWb,
-      "Yandex": p.stockYandex,
+      "Центральный склад": p.centralStock || 0,
       "Всего": p.stockQuantity,
     })));
     const wb = XLSX.utils.book_new();
@@ -662,7 +680,7 @@ export async function registerRoutes(
       for (const p of parsedProducts) {
         try {
           const product = await storage.createProduct({
-            ...p, price: p.sellingPrice, stockOzon: 0, stockWb: 0, stockYandex: 0,
+            ...p, price: p.sellingPrice,
             organizationId: orgId, companyId,
           });
           created.push(product);
