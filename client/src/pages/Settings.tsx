@@ -107,6 +107,33 @@ function SyncHistorySection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
+  const { data: syncSettings } = useQuery<InventorySyncSetting>({
+    queryKey: ["/api/inventory-sync/settings"],
+  });
+
+  const demoMode = syncSettings?.demoMode ?? false;
+
+  const toggleDemoMutation = useMutation({
+    mutationFn: async (newDemoMode: boolean) => {
+      await apiRequest("POST", "/api/inventory-sync/settings", {
+        defaultSafetyStock: syncSettings?.defaultSafetyStock ?? 2,
+        syncEnabled: syncSettings?.syncEnabled ?? true,
+        demoMode: newDemoMode,
+      });
+      return newDemoMode;
+    },
+    onSuccess: (newDemoMode: boolean) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/settings"] });
+      toast({
+        title: newDemoMode ? "Демо-режим включён" : "Демо-режим выключен",
+        description: newDemoMode ? "API-запросы будут имитироваться без обращения к маркетплейсам" : "API-запросы будут отправляться на реальные серверы",
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+
   const { data: syncHistory, isLoading } = useQuery<SyncHistoryEntry[]>({
     queryKey: ["/api/sync-history"],
   });
@@ -120,8 +147,11 @@ function SyncHistorySection() {
       await apiRequest("POST", "/api/marketplace/sync");
     },
     onSuccess: () => {
-      toast({ title: "Синхронизация запущена", description: "Полная синхронизация всех маркетплейсов" });
+      const msg = demoMode ? "[ДЕМО] Синхронизация завершена" : "Полная синхронизация всех маркетплейсов";
+      toast({ title: "Синхронизация запущена", description: msg });
       queryClient.invalidateQueries({ queryKey: ["/api/sync-history"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/logs"] });
     },
     onError: (error: Error) => {
       toast({ title: "Ошибка", description: error.message, variant: "destructive" });
@@ -133,8 +163,11 @@ function SyncHistorySection() {
       await apiRequest("POST", `/api/marketplace/sync-store/${storeId}`);
     },
     onSuccess: () => {
-      toast({ title: "Синхронизация запущена", description: "Синхронизация магазина запущена" });
+      const msg = demoMode ? "[ДЕМО] Синхронизация магазина завершена" : "Синхронизация магазина запущена";
+      toast({ title: "Синхронизация запущена", description: msg });
       queryClient.invalidateQueries({ queryKey: ["/api/sync-history"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/logs"] });
     },
     onError: (error: Error) => {
       toast({ title: "Ошибка", description: error.message, variant: "destructive" });
@@ -143,6 +176,37 @@ function SyncHistorySection() {
 
   return (
     <div className="space-y-6" data-testid="section-sync-history">
+      <Card>
+        <CardHeader className="bg-muted/50 border-b">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-card rounded-lg border shadow-sm text-amber-500">
+                <RefreshCw className="w-6 h-6" />
+              </div>
+              <div>
+                <CardTitle>Демо-режим</CardTitle>
+                <CardDescription>
+                  В демо-режиме API-запросы к маркетплейсам имитируются без обращения к реальным серверам
+                </CardDescription>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {demoMode && (
+                <Badge variant="outline" className="text-amber-600 border-amber-400" data-testid="badge-demo-active">
+                  Демо
+                </Badge>
+              )}
+              <Switch
+                checked={demoMode}
+                onCheckedChange={(val) => toggleDemoMutation.mutate(val)}
+                disabled={toggleDemoMutation.isPending}
+                data-testid="switch-demo-mode"
+              />
+            </div>
+          </div>
+        </CardHeader>
+      </Card>
+
       <Card>
         <CardHeader className="bg-muted/50 border-b">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

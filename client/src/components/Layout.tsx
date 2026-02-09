@@ -12,7 +12,8 @@ import {
   X,
   FileBarChart,
   ScanLine,
-  Shield
+  Shield,
+  Radio
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
@@ -21,7 +22,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { useProducts } from "@/hooks/use-products";
 import { useOrders } from "@/hooks/use-orders";
 import { useQuery } from "@tanstack/react-query";
-import { Customer } from "@shared/schema";
+import { Customer, InventorySyncSetting } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -39,6 +40,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { data: products } = useProducts();
   const { data: orders } = useOrders();
   const { data: customers } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+  const { data: syncSettings } = useQuery<InventorySyncSetting>({
+    queryKey: ["/api/inventory-sync/settings"],
+  });
+  const isDemoMode = syncSettings?.demoMode ?? false;
 
   const totalProducts = products?.length || 0;
   const totalOrders = orders?.length || 0;
@@ -150,6 +155,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
+        {isDemoMode && (
+          <div
+            className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-1.5 flex items-center justify-center gap-2 text-xs font-medium text-amber-700 dark:text-amber-400"
+            data-testid="banner-demo-mode"
+          >
+            <Radio className="w-3.5 h-3.5 animate-pulse" />
+            <span>Работает в демо-режиме</span>
+          </div>
+        )}
         <header className="h-16 bg-card/80 backdrop-blur-xl border-b border-border/50 flex items-center justify-between px-4 md:px-8 sticky top-0 z-50">
           <div className="lg:hidden">
             <span className="font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">

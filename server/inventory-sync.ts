@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { products, stores, stockSyncLog, inventorySyncSettings, companies } from "@shared/schema";
+import { products, stores, stockSyncLog, inventorySyncSettings, companies, syncHistory } from "@shared/schema";
 import type { Store, StockSyncLogEntry, InsertStockSyncLog, InventorySyncSetting } from "@shared/schema";
 import { eq, and, desc, sql, inArray, gte } from "drizzle-orm";
 
@@ -167,11 +167,14 @@ export class InventorySyncEngine {
     return settings || null;
   }
 
-  async saveSyncSettings(organizationId: string, defaultSafetyStock: number, syncEnabled: boolean): Promise<InventorySyncSetting> {
+  async saveSyncSettings(organizationId: string, defaultSafetyStock: number, syncEnabled: boolean, demoMode?: boolean): Promise<InventorySyncSetting> {
     const existing = await this.getSyncSettings(organizationId);
+    const updateData: any = { defaultSafetyStock, syncEnabled, updatedAt: new Date() };
+    if (demoMode !== undefined) updateData.demoMode = demoMode;
+
     if (existing) {
       const [updated] = await db.update(inventorySyncSettings)
-        .set({ defaultSafetyStock, syncEnabled, updatedAt: new Date() })
+        .set(updateData)
         .where(eq(inventorySyncSettings.id, existing.id))
         .returning();
       return updated;
@@ -180,8 +183,147 @@ export class InventorySyncEngine {
       organizationId,
       defaultSafetyStock,
       syncEnabled,
+      demoMode: demoMode ?? false,
     }).returning();
     return created;
+  }
+
+  async isDemoMode(organizationId: string): Promise<boolean> {
+    const settings = await this.getSyncSettings(organizationId);
+    return settings?.demoMode ?? false;
+  }
+
+  private randomDelay(): Promise<void> {
+    const delay = 500 + Math.random() * 1000;
+    return new Promise(resolve => setTimeout(resolve, delay));
+  }
+
+  private randomStock(): number {
+    return Math.floor(5 + Math.random() * 45);
+  }
+
+  private formatNum(n: number): string {
+    return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  }
+
+  async demoSyncAllStores(organizationId: string): Promise<StockSyncLogEntry[]> {
+    const companyList = await db.select().from(companies)
+      .where(eq(companies.organizationId, organizationId));
+    const companyIds = companyList.map(c => c.id);
+
+    let allStores: Store[] = [];
+    if (companyIds.length > 0) {
+      allStores = await db.select().from(stores)
+        .where(inArray(stores.companyId, companyIds));
+    }
+
+    const activeStores = allStores.filter(s => s.isActive);
+    const logEntries: StockSyncLogEntry[] = [];
+
+    for (const store of activeStores) {
+      await this.randomDelay();
+
+      const stockUpdated = this.randomStock();
+      const itemsCount = Math.floor(3 + Math.random() * 15);
+      const syncResults: StoreSyncResult[] = [{
+        storeId: store.id,
+        storeName: store.name,
+        marketplace: store.marketplace,
+        status: "success",
+        sentStock: stockUpdated,
+      }];
+
+      const details = `[ДЕМО] Остатки обновлены на «${store.name}»: ${this.formatNum(stockUpdated)} шт. (${this.formatNum(itemsCount)} позиций) → синхронизация SUCCESS`;
+
+      const [logEntry] = await db.insert(stockSyncLog).values({
+        organizationId,
+        productName: "Все товары",
+        sourceStoreName: store.name,
+        sourceStoreId: store.id,
+        action: "demo_sync",
+        previousStock: stockUpdated + Math.floor(Math.random() * 10),
+        newStock: stockUpdated,
+        quantityChanged: 0,
+        safetyStockTriggered: false,
+        syncResults: syncResults as any,
+        status: "success",
+        details,
+      }).returning();
+
+      await db.insert(syncHistory).values({
+        organizationId,
+        storeId: store.id,
+        companyId: store.companyId,
+        action: "stock_sync",
+        status: "success",
+        details: `[ДЕМО] Синхронизация остатков с «${store.name}»`,
+        itemsCount,
+      });
+
+      await db.update(stores).set({ lastSync: new Date() }).where(eq(stores.id, store.id));
+
+      logEntries.push(logEntry);
+    }
+
+    return logEntries;
+  }
+
+  async demoSyncStore(organizationId: string, storeId: number): Promise<StockSyncLogEntry> {
+    const allStoreList = await this.getStoresByOrg(organizationId);
+    const store = allStoreList.find(s => s.id === storeId);
+    if (!store) throw new Error("Магазин не найден");
+
+    await this.randomDelay();
+
+    const stockUpdated = this.randomStock();
+    const itemsCount = Math.floor(3 + Math.random() * 15);
+    const syncResults: StoreSyncResult[] = [{
+      storeId: store.id,
+      storeName: store.name,
+      marketplace: store.marketplace,
+      status: "success",
+      sentStock: stockUpdated,
+    }];
+
+    const details = `[ДЕМО] Остатки обновлены на «${store.name}»: ${this.formatNum(stockUpdated)} шт. (${this.formatNum(itemsCount)} позиций) → синхронизация SUCCESS`;
+
+    const [logEntry] = await db.insert(stockSyncLog).values({
+      organizationId,
+      productName: "Все товары",
+      sourceStoreName: store.name,
+      sourceStoreId: store.id,
+      action: "demo_sync",
+      previousStock: stockUpdated + Math.floor(Math.random() * 10),
+      newStock: stockUpdated,
+      quantityChanged: 0,
+      safetyStockTriggered: false,
+      syncResults: syncResults as any,
+      status: "success",
+      details,
+    }).returning();
+
+    await db.insert(syncHistory).values({
+      organizationId,
+      storeId: store.id,
+      companyId: store.companyId,
+      action: "stock_sync",
+      status: "success",
+      details: `[ДЕМО] Синхронизация остатков с «${store.name}»`,
+      itemsCount,
+    });
+
+    await db.update(stores).set({ lastSync: new Date() }).where(eq(stores.id, store.id));
+
+    return logEntry;
+  }
+
+  private async getStoresByOrg(organizationId: string): Promise<Store[]> {
+    const companyList = await db.select().from(companies)
+      .where(eq(companies.organizationId, organizationId));
+    const companyIds = companyList.map(c => c.id);
+    if (companyIds.length === 0) return [];
+    return await db.select().from(stores)
+      .where(inArray(stores.companyId, companyIds));
   }
 
   async getSyncLogs(organizationId: string, limit: number = 100): Promise<StockSyncLogEntry[]> {

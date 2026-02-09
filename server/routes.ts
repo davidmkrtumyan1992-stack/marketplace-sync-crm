@@ -273,7 +273,18 @@ export async function registerRoutes(
   });
 
   app.post(api.marketplace.syncAll.path, isAuthenticated, requireRole("owner"), async (req, res) => {
-    res.json({ success: true, message: "Синхронизация всех маркетплейсов запущена" });
+    try {
+      const orgId = getOrgId(req);
+      const isDemo = await inventorySyncEngine.isDemoMode(orgId);
+      if (isDemo) {
+        const logs = await inventorySyncEngine.demoSyncAllStores(orgId);
+        return res.json({ success: true, message: `[ДЕМО] Синхронизация завершена: ${logs.length} магазинов`, demoMode: true, logs });
+      }
+      res.json({ success: true, message: "Синхронизация всех маркетплейсов запущена" });
+    } catch (error) {
+      console.error("Sync all error:", error);
+      res.status(500).json({ message: "Ошибка синхронизации" });
+    }
   });
 
   // Tax Settings (owner only)
@@ -352,6 +363,13 @@ export async function registerRoutes(
     try {
       const orgId = getOrgId(req);
       const storeId = Number(req.params.storeId);
+
+      const isDemo = await inventorySyncEngine.isDemoMode(orgId);
+      if (isDemo) {
+        const logEntry = await inventorySyncEngine.demoSyncStore(orgId, storeId);
+        return res.json({ success: true, message: `[ДЕМО] Синхронизация завершена`, demoMode: true, log: logEntry });
+      }
+
       const allStores = await storage.getStoresByOrg(orgId);
       const store = allStores.find(s => s.id === storeId);
       if (!store) return res.status(404).json({ message: "Магазин не найден" });
@@ -489,7 +507,7 @@ export async function registerRoutes(
   app.get(api.inventorySync.settings.path, isAuthenticated, requireRole("owner"), async (req, res) => {
     try {
       const settings = await inventorySyncEngine.getSyncSettings(getOrgId(req));
-      res.json(settings || { defaultSafetyStock: 2, syncEnabled: true });
+      res.json(settings || { defaultSafetyStock: 2, syncEnabled: true, demoMode: false });
     } catch (error) {
       console.error("Sync settings error:", error);
       res.status(500).json({ message: "Ошибка получения настроек синхронизации" });
@@ -498,11 +516,12 @@ export async function registerRoutes(
 
   app.post(api.inventorySync.saveSettings.path, isAuthenticated, requireRole("owner"), async (req, res) => {
     try {
-      const { defaultSafetyStock, syncEnabled } = req.body;
+      const { defaultSafetyStock, syncEnabled, demoMode } = req.body;
       const settings = await inventorySyncEngine.saveSyncSettings(
         getOrgId(req),
         defaultSafetyStock ?? 2,
-        syncEnabled ?? true
+        syncEnabled ?? true,
+        demoMode
       );
       res.json(settings);
     } catch (error) {
