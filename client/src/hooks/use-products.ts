@@ -9,7 +9,7 @@ export function useProducts() {
     queryFn: async () => {
       const res = await fetch(api.products.list.path, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch products");
-      return api.products.list.responses[200].parse(await res.json());
+      return res.json();
     },
   });
 }
@@ -22,7 +22,7 @@ export function useProduct(id: number) {
       const res = await fetch(url, { credentials: "include" });
       if (res.status === 404) return null;
       if (!res.ok) throw new Error("Failed to fetch product");
-      return api.products.get.responses[200].parse(await res.json());
+      return res.json();
     },
     enabled: !!id,
   });
@@ -42,9 +42,9 @@ export function useCreateProduct() {
       });
       if (!res.ok) {
         const error = await res.json();
-        throw new Error(error.message || "Failed to create product");
+        throw new Error(error.message || "Ошибка создания товара");
       }
-      return api.products.create.responses[201].parse(await res.json());
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.products.list.path] });
@@ -71,7 +71,7 @@ export function useUpdateProduct() {
         credentials: "include",
       });
       if (!res.ok) throw new Error("Failed to update product");
-      return api.products.update.responses[200].parse(await res.json());
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.products.list.path] });
