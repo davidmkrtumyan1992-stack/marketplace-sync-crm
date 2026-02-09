@@ -206,6 +206,18 @@ export async function registerRoutes(
     res.json({ success: true, message: "Синхронизация запущена" });
   });
 
+  app.get("/api/products/:id/exclusions", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    const exclusions = await storage.getProductStoreExclusions(Number(req.params.id));
+    res.json(exclusions);
+  });
+
+  app.put("/api/products/:id/exclusions", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    const { storeIds } = req.body;
+    if (!Array.isArray(storeIds)) return res.status(400).json({ message: "storeIds must be an array" });
+    const exclusions = await storage.setProductStoreExclusions(Number(req.params.id), storeIds, getOrgId(req));
+    res.json(exclusions);
+  });
+
   // Customers (owner & administrator only)
   app.get(api.customers.list.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const list = await storage.getCustomers(getOrgId(req));

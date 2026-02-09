@@ -12,15 +12,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { formatCurrency } from "@/lib/format";
 import type { Product, Company } from "@shared/schema";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Barcode, ScanLine, Package, Plus, Minus, Trash2, Check, Building2, FileSpreadsheet } from "lucide-react";
+import { Barcode, ScanLine, Package, Plus, Minus, Trash2, Check, Building2, FileSpreadsheet, Warehouse } from "lucide-react";
 
 interface BatchItem {
   product: Product;
   quantity: number;
-  toLocal: number;
-  toOzon: number;
-  toWb: number;
-  toYandex: number;
 }
 
 const CATEGORIES = [
@@ -70,7 +66,7 @@ export default function Intake() {
       if (existing) {
         return prev.map((item) =>
           item.product.id === product.id
-            ? { ...item, quantity: item.quantity + 1, toLocal: item.toLocal + 1 }
+            ? { ...item, quantity: item.quantity + 1 }
             : item
         );
       }
@@ -79,10 +75,6 @@ export default function Intake() {
         {
           product,
           quantity: 1,
-          toLocal: 1,
-          toOzon: 0,
-          toWb: 0,
-          toYandex: 0,
         },
       ];
     });
@@ -149,17 +141,11 @@ export default function Intake() {
 
   const updateQuantity = (productId: number, delta: number) => {
     setBatch((prev) =>
-      prev
-        .map((item) => {
-          if (item.product.id !== productId) return item;
-          const newQty = Math.max(1, item.quantity + delta);
-          const diff = newQty - item.quantity;
-          return {
-            ...item,
-            quantity: newQty,
-            toLocal: Math.max(0, item.toLocal + diff),
-          };
-        })
+      prev.map((item) => {
+        if (item.product.id !== productId) return item;
+        const newQty = Math.max(1, item.quantity + delta);
+        return { ...item, quantity: newQty };
+      })
     );
   };
 
@@ -168,12 +154,7 @@ export default function Intake() {
     setBatch((prev) =>
       prev.map((item) => {
         if (item.product.id !== productId) return item;
-        const diff = newQty - item.quantity;
-        return {
-          ...item,
-          quantity: newQty,
-          toLocal: Math.max(0, item.toLocal + diff),
-        };
+        return { ...item, quantity: newQty };
       })
     );
   };
@@ -181,26 +162,6 @@ export default function Intake() {
   const removeFromBatch = (productId: number) => {
     setBatch((prev) => prev.filter((item) => item.product.id !== productId));
   };
-
-  const updateDistribution = (
-    productId: number,
-    field: "toLocal" | "toOzon" | "toWb" | "toYandex",
-    value: number
-  ) => {
-    setBatch((prev) =>
-      prev.map((item) => {
-        if (item.product.id !== productId) return item;
-        return { ...item, [field]: Math.max(0, value) };
-      })
-    );
-  };
-
-  const getDistributionSum = (item: BatchItem) =>
-    item.toLocal + item.toOzon + item.toWb + item.toYandex;
-
-  const isDistributionValid = batch.every(
-    (item) => getDistributionSum(item) === item.quantity
-  );
 
   const totalItems = batch.reduce((sum, item) => sum + item.quantity, 0);
   const totalCost = batch.reduce(
@@ -239,6 +200,7 @@ export default function Intake() {
       purchasePrice: newProductPurchasePrice || "0",
       sellingPrice: newProductSellingPrice || "0",
       price: newProductSellingPrice || "0",
+      centralStock: 0,
       stockQuantity: 0,
       stockLocal: 0,
       stockOzon: 0,
@@ -252,15 +214,6 @@ export default function Intake() {
   const handleConfirmReceipt = async () => {
     if (batch.length === 0) return;
 
-    if (!isDistributionValid) {
-      toast({
-        title: "Ошибка распределения",
-        description: "Сумма распределения должна совпадать с количеством для каждого товара",
-        variant: "destructive",
-      });
-      return;
-    }
-
     setIsSubmitting(true);
     let successCount = 0;
     let errorCount = 0;
@@ -270,10 +223,10 @@ export default function Intake() {
         await apiRequest("POST", "/api/stock-inflow", {
           productId: item.product.id,
           quantity: item.quantity,
-          toLocal: item.toLocal,
-          toOzon: item.toOzon,
-          toWb: item.toWb,
-          toYandex: item.toYandex,
+          toLocal: item.quantity,
+          toOzon: 0,
+          toWb: 0,
+          toYandex: 0,
           companyId: selectedCompanyId ? Number(selectedCompanyId) : null,
           organizationId: "1",
         });
@@ -292,7 +245,7 @@ export default function Intake() {
       setBatch([]);
       toast({
         title: "Приёмка завершена",
-        description: `Оприходовано ${successCount} позиций${errorCount > 0 ? `, ошибок: ${errorCount}` : ""}`,
+        description: `Оприходовано ${successCount} позиций на центральный склад${errorCount > 0 ? `, ошибок: ${errorCount}` : ""}`,
       });
     } else {
       toast({
@@ -314,7 +267,7 @@ export default function Intake() {
               Приёмка товаров
             </h1>
             <p className="text-muted-foreground mt-2 text-lg">
-              Сканируйте штрихкоды для быстрого оприходования
+              Сканируйте штрихкоды для быстрого оприходования на центральный склад
             </p>
           </div>
           <Button
@@ -421,6 +374,7 @@ export default function Intake() {
                         <TableHead className="text-lg">Название</TableHead>
                         <TableHead className="text-lg">Артикул</TableHead>
                         <TableHead className="text-lg">Штрихкод</TableHead>
+                        <TableHead className="text-center text-lg">Текущий остаток</TableHead>
                         <TableHead className="text-center text-lg">Количество</TableHead>
                         <TableHead className="text-right text-lg">Закупка</TableHead>
                         <TableHead className="w-[50px]"></TableHead>
@@ -437,6 +391,13 @@ export default function Intake() {
                           </TableCell>
                           <TableCell className="font-mono font-bold text-lg" data-testid={`text-product-barcode-${item.product.id}`}>
                             {item.product.barcode || "—"}
+                          </TableCell>
+                          <TableCell className="text-center" data-testid={`text-current-stock-${item.product.id}`}>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                              (item.product.centralStock || 0) < 10 ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" : "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+                            }`}>
+                              {item.product.centralStock || 0} шт.
+                            </span>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center justify-center gap-1">
@@ -490,105 +451,17 @@ export default function Intake() {
                     </TableBody>
                   </Table>
                 </div>
-                <div className="flex items-center justify-end gap-6 mt-4 pt-4 border-t">
-                  <span className="text-muted-foreground">Итого:</span>
-                  <span className="text-lg font-semibold" data-testid="text-batch-total">
-                    {formatCurrency(totalCost)}
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-4">
-                <CardTitle>Распределение по складам</CardTitle>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Укажите, сколько единиц направить на каждый склад / маркетплейс
-                </p>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted/30">
-                        <TableHead className="text-lg">Товар</TableHead>
-                        <TableHead className="text-center text-lg">Всего</TableHead>
-                        <TableHead className="text-center text-lg">Склад</TableHead>
-                        <TableHead className="text-center text-lg">Ozon</TableHead>
-                        <TableHead className="text-center text-lg">Wildberries</TableHead>
-                        <TableHead className="text-center text-lg">Yandex Market</TableHead>
-                        <TableHead className="text-center text-lg">Сумма</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {batch.map((item) => {
-                        const distSum = getDistributionSum(item);
-                        const isValid = distSum === item.quantity;
-                        return (
-                          <TableRow key={item.product.id} data-testid={`row-distribution-${item.product.id}`}>
-                            <TableCell className="font-medium">{item.product.name}</TableCell>
-                            <TableCell className="text-center font-semibold">{item.quantity}</TableCell>
-                            <TableCell>
-                              <Input
-                                type="number"
-                                min={0}
-                                value={item.toLocal}
-                                onChange={(e) =>
-                                  updateDistribution(item.product.id, "toLocal", parseInt(e.target.value) || 0)
-                                }
-                                className="w-20 text-center mx-auto"
-                                data-testid={`input-dist-local-${item.product.id}`}
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                type="number"
-                                min={0}
-                                value={item.toOzon}
-                                onChange={(e) =>
-                                  updateDistribution(item.product.id, "toOzon", parseInt(e.target.value) || 0)
-                                }
-                                className="w-20 text-center mx-auto"
-                                data-testid={`input-dist-ozon-${item.product.id}`}
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                type="number"
-                                min={0}
-                                value={item.toWb}
-                                onChange={(e) =>
-                                  updateDistribution(item.product.id, "toWb", parseInt(e.target.value) || 0)
-                                }
-                                className="w-20 text-center mx-auto"
-                                data-testid={`input-dist-wb-${item.product.id}`}
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                type="number"
-                                min={0}
-                                value={item.toYandex}
-                                onChange={(e) =>
-                                  updateDistribution(item.product.id, "toYandex", parseInt(e.target.value) || 0)
-                                }
-                                className="w-20 text-center mx-auto"
-                                data-testid={`input-dist-yandex-${item.product.id}`}
-                              />
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <span
-                                className={`font-semibold ${isValid ? "text-green-600 dark:text-green-400" : "text-destructive"}`}
-                                data-testid={`text-dist-sum-${item.product.id}`}
-                              >
-                                {distSum} / {item.quantity}
-                              </span>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+                <div className="flex items-center justify-between gap-6 mt-4 pt-4 border-t">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Warehouse className="w-4 h-4" />
+                    Все товары поступят на центральный склад
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span className="text-muted-foreground">Итого:</span>
+                    <span className="text-lg font-semibold" data-testid="text-batch-total">
+                      {formatCurrency(totalCost)}
+                    </span>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -596,17 +469,17 @@ export default function Intake() {
             <div className="flex justify-end">
               <Button
                 size="lg"
-                className="premium-button h-14 text-lg"
+                className="premium-button min-h-14 text-lg px-10"
                 onClick={handleConfirmReceipt}
-                disabled={isSubmitting || !isDistributionValid || batch.length === 0}
+                disabled={isSubmitting || batch.length === 0}
                 data-testid="button-confirm-receipt"
               >
                 {isSubmitting ? (
-                  "Оприходование..."
+                  <>Оприходование...</>
                 ) : (
                   <>
                     <Check className="w-5 h-5 mr-2" />
-                    Подтвердить приёмку
+                    Оприходовать на склад ({totalItems} шт.)
                   </>
                 )}
               </Button>
@@ -641,7 +514,7 @@ export default function Intake() {
                   id="new-sku"
                   value={newProductSku}
                   onChange={(e) => setNewProductSku(e.target.value)}
-                  placeholder="SKU-001"
+                  placeholder="ABC-123"
                   data-testid="input-new-product-sku"
                 />
               </div>
@@ -658,7 +531,7 @@ export default function Intake() {
             </div>
             <div className="grid gap-2">
               <Label>Категория</Label>
-              <Select value={newProductCategory} onValueChange={setNewProductCategory}>
+              <Select onValueChange={(val) => setNewProductCategory(val)}>
                 <SelectTrigger data-testid="select-new-product-category">
                   <SelectValue placeholder="Выберите категорию" />
                 </SelectTrigger>
@@ -673,11 +546,10 @@ export default function Intake() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
-                <Label htmlFor="new-purchase-price">Цена закупки</Label>
+                <Label htmlFor="new-purchase-price">Закупка, ₽</Label>
                 <Input
                   id="new-purchase-price"
                   type="number"
-                  min={0}
                   step="0.01"
                   value={newProductPurchasePrice}
                   onChange={(e) => setNewProductPurchasePrice(e.target.value)}
@@ -686,11 +558,10 @@ export default function Intake() {
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="new-selling-price">Цена продажи</Label>
+                <Label htmlFor="new-selling-price">Продажа, ₽</Label>
                 <Input
                   id="new-selling-price"
                   type="number"
-                  min={0}
                   step="0.01"
                   value={newProductSellingPrice}
                   onChange={(e) => setNewProductSellingPrice(e.target.value)}
@@ -704,15 +575,14 @@ export default function Intake() {
             <Button
               variant="outline"
               onClick={() => setIsCreateModalOpen(false)}
-              data-testid="button-cancel-create-product"
+              data-testid="button-cancel-create"
             >
               Отмена
             </Button>
             <Button
-              className="premium-button"
               onClick={handleCreateProduct}
               disabled={createProductMutation.isPending}
-              data-testid="button-save-new-product"
+              data-testid="button-create-product"
             >
               {createProductMutation.isPending ? "Создание..." : "Создать и добавить"}
             </Button>

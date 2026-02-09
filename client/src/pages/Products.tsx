@@ -51,10 +51,7 @@ const formSchema = insertProductSchema.extend({
   sellingPrice: z.coerce.number(),
   price: z.coerce.number().optional(),
   stockQuantity: z.coerce.number(),
-  stockLocal: z.coerce.number().optional(),
-  stockOzon: z.coerce.number().optional(),
-  stockWb: z.coerce.number().optional(),
-  stockYandex: z.coerce.number().optional(),
+  centralStock: z.coerce.number().optional(),
   barcode: z.string().optional(),
   weight: z.coerce.number().optional(),
   logisticsCost: z.coerce.number().optional(),
@@ -155,7 +152,7 @@ export default function Products() {
                 {canSeePurchasePrice && <TableHead className="text-right">Закупка</TableHead>}
                 <TableHead className="text-right">Продажа</TableHead>
                 <TableHead className="text-center">Остаток</TableHead>
-                <TableHead>Распределение</TableHead>
+                <TableHead>Склад</TableHead>
                 <TableHead className="w-[50px]"></TableHead>
               </TableRow>
             </TableHeader>
@@ -217,10 +214,7 @@ function ProductForm({ onSuccess, canSeePurchasePrice = true }: { onSuccess: () 
       purchasePrice: 0,
       sellingPrice: 0,
       stockQuantity: 0,
-      stockLocal: 0,
-      stockOzon: 0,
-      stockWb: 0,
-      stockYandex: 0,
+      centralStock: 0,
       barcode: "",
       weight: 0,
       logisticsCost: 0,
@@ -236,15 +230,12 @@ function ProductForm({ onSuccess, canSeePurchasePrice = true }: { onSuccess: () 
     }
   }, [companies, form]);
 
-  const stockLocal = form.watch("stockLocal") || 0;
-  const stockOzon = form.watch("stockOzon") || 0;
-  const stockWb = form.watch("stockWb") || 0;
-  const stockYandex = form.watch("stockYandex") || 0;
+  const centralStock = form.watch("centralStock") || 0;
   const purchasePrice = form.watch("purchasePrice") || 0;
 
   useEffect(() => {
-    form.setValue("stockQuantity", stockLocal + stockOzon + stockWb + stockYandex);
-  }, [stockLocal, stockOzon, stockWb, stockYandex, form]);
+    form.setValue("stockQuantity", centralStock);
+  }, [centralStock, form]);
 
   // Auto-calculate selling price from markup
   useEffect(() => {
@@ -287,6 +278,8 @@ function ProductForm({ onSuccess, canSeePurchasePrice = true }: { onSuccess: () 
     <form onSubmit={form.handleSubmit((data) => {
       const submitData = {
         ...data,
+        centralStock: data.centralStock || 0,
+        stockQuantity: data.centralStock || 0,
         price: data.sellingPrice?.toString() || "0",
         purchasePrice: data.purchasePrice?.toString() || "0",
         sellingPrice: data.sellingPrice?.toString() || "0",
@@ -430,26 +423,12 @@ function ProductForm({ onSuccess, canSeePurchasePrice = true }: { onSuccess: () 
       </div>
 
       <div className="border rounded-lg p-4 space-y-3 bg-muted">
-        <Label className="text-sm font-medium">Распределение остатков</Label>
-        <div className="grid grid-cols-4 gap-3">
-          <div className="grid gap-1">
-            <Label htmlFor="stockLocal" className="text-xs text-muted-foreground">На складе</Label>
-            <Input id="stockLocal" type="number" {...form.register("stockLocal")} data-testid="input-stock-local" />
-          </div>
-          <div className="grid gap-1">
-            <Label htmlFor="stockOzon" className="text-xs text-muted-foreground">Ozon</Label>
-            <Input id="stockOzon" type="number" {...form.register("stockOzon")} data-testid="input-stock-ozon" />
-          </div>
-          <div className="grid gap-1">
-            <Label htmlFor="stockWb" className="text-xs text-muted-foreground">Wildberries</Label>
-            <Input id="stockWb" type="number" {...form.register("stockWb")} data-testid="input-stock-wb" />
-          </div>
-          <div className="grid gap-1">
-            <Label htmlFor="stockYandex" className="text-xs text-muted-foreground">Yandex Market</Label>
-            <Input id="stockYandex" type="number" {...form.register("stockYandex")} data-testid="input-stock-yandex" />
-          </div>
+        <Label className="text-sm font-medium">Остатки на центральном складе</Label>
+        <div className="grid gap-1">
+          <Label htmlFor="centralStock" className="text-xs text-muted-foreground">Количество, шт.</Label>
+          <Input id="centralStock" type="number" {...form.register("centralStock")} data-testid="input-central-stock" />
         </div>
-        <p className="text-xs text-muted-foreground">Итого: {stockLocal + stockOzon + stockWb + stockYandex} шт.</p>
+        <p className="text-xs text-muted-foreground">Центральный склад: {centralStock} шт. — зеркалируется на все подключённые магазины</p>
       </div>
 
       <div className="grid grid-cols-3 gap-4">
@@ -582,32 +561,30 @@ function ImportProductsForm({ onSuccess }: { onSuccess: () => void }) {
 function StockInflowForm({ product, onSuccess }: { product: Product; onSuccess: () => void }) {
   const { mutate, isPending } = useCreateStockInflow();
   const [quantity, setQuantity] = useState(0);
-  const [toLocal, setToLocal] = useState(0);
-  const [toOzon, setToOzon] = useState(0);
-  const [toWb, setToWb] = useState(0);
-  const [toYandex, setToYandex] = useState(0);
   const [purchasePrice, setPurchasePrice] = useState(Number(product.purchasePrice) || 0);
-
-  const remaining = quantity - toLocal - toOzon - toWb - toYandex;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (remaining !== 0) return;
+    if (quantity <= 0) return;
 
     mutate({
       organizationId: "1",
       productId: product.id,
       quantity,
-      toLocal,
-      toOzon,
-      toWb,
-      toYandex,
+      toLocal: quantity,
+      toOzon: 0,
+      toWb: 0,
+      toYandex: 0,
       purchasePrice: purchasePrice.toString(),
     }, { onSuccess });
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="bg-muted rounded-lg p-3">
+        <p className="text-sm text-muted-foreground">Текущий остаток на центральном складе: <strong>{product.centralStock || 0} шт.</strong></p>
+      </div>
+
       <div className="grid gap-2">
         <Label>Количество для оприходования</Label>
         <Input 
@@ -615,6 +592,7 @@ function StockInflowForm({ product, onSuccess }: { product: Product; onSuccess: 
           value={quantity} 
           onChange={(e) => setQuantity(Number(e.target.value))}
           min={1}
+          data-testid="input-inflow-quantity"
         />
       </div>
 
@@ -625,59 +603,13 @@ function StockInflowForm({ product, onSuccess }: { product: Product; onSuccess: 
           step="0.01"
           value={purchasePrice} 
           onChange={(e) => setPurchasePrice(Number(e.target.value))}
+          data-testid="input-inflow-purchase-price"
         />
       </div>
 
-      <div className="border rounded-lg p-4 space-y-3 bg-muted">
-        <Label className="text-sm font-medium">Распределить по каналам</Label>
-        <div className="grid gap-3">
-          <div className="flex items-center justify-between">
-            <Label className="text-sm">На склад</Label>
-            <Input 
-              type="number" 
-              className="w-24"
-              value={toLocal} 
-              onChange={(e) => setToLocal(Number(e.target.value))}
-              max={quantity}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label className="text-sm">На Ozon</Label>
-            <Input 
-              type="number" 
-              className="w-24"
-              value={toOzon} 
-              onChange={(e) => setToOzon(Number(e.target.value))}
-              max={quantity}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label className="text-sm">На Wildberries</Label>
-            <Input 
-              type="number" 
-              className="w-24"
-              value={toWb} 
-              onChange={(e) => setToWb(Number(e.target.value))}
-              max={quantity}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label className="text-sm">На Yandex Market</Label>
-            <Input 
-              type="number" 
-              className="w-24"
-              value={toYandex} 
-              onChange={(e) => setToYandex(Number(e.target.value))}
-              max={quantity}
-            />
-          </div>
-        </div>
-        <div className={`text-sm font-medium ${remaining === 0 ? "text-green-600" : "text-red-600"}`}>
-          {remaining === 0 ? "Распределено полностью" : `Осталось распределить: ${remaining} шт.`}
-        </div>
-      </div>
+      <p className="text-xs text-muted-foreground">Товар будет добавлен на центральный склад и автоматически зеркалирован на все подключённые магазины</p>
 
-      <Button type="submit" className="w-full" disabled={isPending || remaining !== 0 || quantity <= 0}>
+      <Button type="submit" className="w-full" disabled={isPending || quantity <= 0} data-testid="button-submit-inflow">
         {isPending ? "Оприходование..." : "Оприходовать"}
       </Button>
     </form>
@@ -706,26 +638,15 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true }: { product
       <TableCell className="text-right font-medium">{formatCurrency(product.sellingPrice || product.price || 0)}</TableCell>
       <TableCell className="text-center">
         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-          product.stockQuantity < 10 ? "bg-red-100 text-red-800" : "bg-green-100 text-green-800"
-        }`}>
-          {product.stockQuantity} шт.
+          (product.centralStock || 0) < 10 ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" : "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+        }`} data-testid={`text-stock-${product.id}`}>
+          {product.centralStock || 0} шт.
         </span>
       </TableCell>
       <TableCell>
-        <div className="flex flex-wrap gap-1 text-xs">
-          <span className="px-1.5 py-0.5 rounded bg-muted border border-border">
-            С:{product.stockLocal || 0}
-          </span>
-          <span className="px-1.5 py-0.5 rounded" style={{ background: '#005BFF20', color: '#005BFF', border: '1px solid #005BFF40' }}>
-            O:{product.stockOzon || 0}
-          </span>
-          <span className="px-1.5 py-0.5 rounded" style={{ background: '#CB11AB20', color: '#CB11AB', border: '1px solid #CB11AB40' }}>
-            W:{product.stockWb || 0}
-          </span>
-          <span className="px-1.5 py-0.5 rounded" style={{ background: '#FFCC0020', color: '#B8860B', border: '1px solid #FFCC0040' }}>
-            Y:{(product as any).stockYandex || 0}
-          </span>
-        </div>
+        <span className="text-xs text-muted-foreground" data-testid={`text-warehouse-${product.id}`}>
+          Центральный склад
+        </span>
       </TableCell>
       <TableCell>
         <DropdownMenu>

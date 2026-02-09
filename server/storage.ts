@@ -1,7 +1,7 @@
 import { 
   companies, stores, userRoles, expenses,
   products, customers, orders, orderItems, marketplaceSettings, taxSettings, auditLog, stockInflow, syncHistory,
-  stockSyncLog, inventorySyncSettings,
+  stockSyncLog, inventorySyncSettings, productStoreExclusions,
   type Company, type InsertCompany,
   type Store, type InsertStore,
   type UserRole, type InsertUserRole,
@@ -16,6 +16,7 @@ import {
   type SyncHistoryEntry, type InsertSyncHistory,
   type StockSyncLogEntry, type InsertStockSyncLog,
   type InventorySyncSetting, type InsertInventorySyncSettings,
+  type ProductStoreExclusion, type InsertProductStoreExclusion,
   type DashboardKPI, type CompanyWithStores, type StoreWithStats,
   type ABCProduct, type LowStockProduct, type SalesDataPoint,
   type SyncStatusSummary,
@@ -102,6 +103,10 @@ export interface IStorage {
   // Inventory Sync Settings
   getInventorySyncSettings(organizationId: string): Promise<InventorySyncSetting | undefined>;
   saveInventorySyncSettings(organizationId: string, settings: Partial<InsertInventorySyncSettings>): Promise<InventorySyncSetting>;
+
+  // Store Exclusions
+  getProductStoreExclusions(productId: number): Promise<ProductStoreExclusion[]>;
+  setProductStoreExclusions(productId: number, storeIds: number[], organizationId: string): Promise<ProductStoreExclusion[]>;
 
   // Seed
   seedData(organizationId: string): Promise<void>;
@@ -223,15 +228,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createProduct(insertProduct: InsertProduct): Promise<Product> {
-    const stockLocal = insertProduct.stockLocal || 0;
-    const stockOzon = insertProduct.stockOzon || 0;
-    const stockWb = insertProduct.stockWb || 0;
-    const stockYandex = insertProduct.stockYandex || 0;
-    const calculatedTotal = stockLocal + stockOzon + stockWb + stockYandex;
-    
+    const centralStock = insertProduct.centralStock || 0;
     const [product] = await db.insert(products).values({
       ...insertProduct,
-      stockQuantity: calculatedTotal
+      centralStock,
+      stockQuantity: centralStock,
+      stockLocal: centralStock,
+      stockOzon: 0,
+      stockWb: 0,
+      stockYandex: 0,
     }).returning();
     return product;
   }
@@ -239,15 +244,12 @@ export class DatabaseStorage implements IStorage {
   async updateProduct(id: number, updates: UpdateProductRequest): Promise<Product> {
     const [existingProduct] = await db.select().from(products).where(eq(products.id, id));
     
-    const stockLocal = updates.stockLocal !== undefined ? updates.stockLocal : (existingProduct?.stockLocal || 0);
-    const stockOzon = updates.stockOzon !== undefined ? updates.stockOzon : (existingProduct?.stockOzon || 0);
-    const stockWb = updates.stockWb !== undefined ? updates.stockWb : (existingProduct?.stockWb || 0);
-    const stockYandex = updates.stockYandex !== undefined ? updates.stockYandex : (existingProduct?.stockYandex || 0);
-    const calculatedTotal = stockLocal + stockOzon + stockWb + stockYandex;
+    const centralStock = updates.centralStock !== undefined ? updates.centralStock : (existingProduct?.centralStock || 0);
     
     const [product] = await db.update(products).set({ 
       ...updates, 
-      stockQuantity: calculatedTotal,
+      centralStock,
+      stockQuantity: centralStock,
       updatedAt: new Date() 
     }).where(eq(products.id, id)).returning();
     return product;
@@ -328,7 +330,7 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async createOrder(orderData: InsertOrder, itemsData: { productId: number; quantity: number; price: number }[]): Promise<Order> {
+  async createOrder(orderData: InsertOrder, itemsData: { productId: number; quantity: number; price: number; originalPrice?: number; salePrice?: number }[]): Promise<Order> {
     return await db.transaction(async (tx) => {
       const [order] = await tx.insert(orders).values(orderData).returning();
       
@@ -337,39 +339,21 @@ export class DatabaseStorage implements IStorage {
           orderId: order.id,
           productId: item.productId,
           quantity: item.quantity,
-          price: item.price.toString()
+          price: item.price.toString(),
+          originalPrice: item.originalPrice?.toString() || null,
+          salePrice: item.salePrice?.toString() || null,
         });
 
-        const [product] = await tx.select().from(products).where(eq(products.id, item.productId));
+        const [product] = await tx.select().from(products)
+          .where(eq(products.id, item.productId))
+          .for("update");
         if (product) {
-          let newStockLocal = product.stockLocal || 0;
-          let newStockOzon = product.stockOzon || 0;
-          let newStockWb = product.stockWb || 0;
-          let newStockYandex = product.stockYandex || 0;
-          
-          const source = orderData.source;
-          if (source === "ozon") {
-            if (newStockOzon < item.quantity) throw new Error(`Недостаточно товара на Ozon: доступно ${newStockOzon}, запрошено ${item.quantity}`);
-            newStockOzon -= item.quantity;
-          } else if (source === "wildberries") {
-            if (newStockWb < item.quantity) throw new Error(`Недостаточно товара на Wildberries: доступно ${newStockWb}, запрошено ${item.quantity}`);
-            newStockWb -= item.quantity;
-          } else if (source === "yandex") {
-            if (newStockYandex < item.quantity) throw new Error(`Недостаточно товара на Yandex Market: доступно ${newStockYandex}, запрошено ${item.quantity}`);
-            newStockYandex -= item.quantity;
-          } else {
-            if (newStockLocal < item.quantity) throw new Error(`Недостаточно товара на складе: доступно ${newStockLocal}, запрошено ${item.quantity}`);
-            newStockLocal -= item.quantity;
-          }
-          
-          const newTotal = newStockLocal + newStockOzon + newStockWb + newStockYandex;
+          const newCentralStock = Math.max(0, (product.centralStock || 0) - item.quantity);
           
           await tx.update(products).set({ 
-            stockQuantity: newTotal,
-            stockLocal: newStockLocal,
-            stockOzon: newStockOzon,
-            stockWb: newStockWb,
-            stockYandex: newStockYandex,
+            centralStock: newCentralStock,
+            stockQuantity: newCentralStock,
+            stockLocal: newCentralStock,
             updatedAt: new Date()
           }).where(eq(products.id, item.productId));
         }
@@ -443,33 +427,25 @@ export class DatabaseStorage implements IStorage {
 
   // Stock Inflow
   async createStockInflow(inflow: InsertStockInflow, userId: string, userName: string): Promise<StockInflow> {
-    const toLocal = inflow.toLocal || 0;
-    const toOzon = inflow.toOzon || 0;
-    const toWb = inflow.toWb || 0;
-    const toYandex = inflow.toYandex || 0;
-    const channelSum = toLocal + toOzon + toWb + toYandex;
-    
-    if (channelSum !== inflow.quantity) {
-      throw new Error(`Stock inflow validation failed: quantity (${inflow.quantity}) must equal sum of channels (${channelSum})`);
-    }
-    
     return await db.transaction(async (tx) => {
-      const [created] = await tx.insert(stockInflow).values(inflow).returning();
+      const [created] = await tx.insert(stockInflow).values({
+        ...inflow,
+        toLocal: inflow.quantity,
+        toOzon: 0,
+        toWb: 0,
+        toYandex: 0,
+      }).returning();
       
-      const [product] = await tx.select().from(products).where(eq(products.id, inflow.productId));
+      const [product] = await tx.select().from(products)
+        .where(eq(products.id, inflow.productId))
+        .for("update");
       if (product) {
-        const newStockLocal = (product.stockLocal || 0) + toLocal;
-        const newStockOzon = (product.stockOzon || 0) + toOzon;
-        const newStockWb = (product.stockWb || 0) + toWb;
-        const newStockYandex = (product.stockYandex || 0) + toYandex;
-        const newTotal = newStockLocal + newStockOzon + newStockWb + newStockYandex;
+        const newCentralStock = (product.centralStock || 0) + inflow.quantity;
         
         await tx.update(products).set({
-          stockQuantity: newTotal,
-          stockLocal: newStockLocal,
-          stockOzon: newStockOzon,
-          stockWb: newStockWb,
-          stockYandex: newStockYandex,
+          centralStock: newCentralStock,
+          stockQuantity: newCentralStock,
+          stockLocal: newCentralStock,
           purchasePrice: inflow.purchasePrice || product.purchasePrice,
           updatedAt: new Date()
         }).where(eq(products.id, inflow.productId));
@@ -485,7 +461,7 @@ export class DatabaseStorage implements IStorage {
         entityId: inflow.productId,
         delta: inflow.quantity,
         details: JSON.stringify({
-          toLocal, toOzon, toWb, toYandex,
+          toCentralWarehouse: inflow.quantity,
           purchasePrice: inflow.purchasePrice
         })
       });
@@ -516,14 +492,14 @@ export class DatabaseStorage implements IStorage {
     let stockYandex = 0;
 
     for (const p of productsList) {
-      const qty = p.stockQuantity;
+      const qty = p.centralStock || 0;
       totalStock += qty;
       capitalization += qty * Number(p.purchasePrice || 0);
       expectedRevenue += qty * Number(p.sellingPrice || p.price || 0);
-      stockLocal += p.stockLocal || 0;
-      stockOzon += p.stockOzon || 0;
-      stockWb += p.stockWb || 0;
-      stockYandex += p.stockYandex || 0;
+      stockLocal += p.centralStock || 0;
+      stockOzon += 0;
+      stockWb += 0;
+      stockYandex += 0;
     }
 
     const taxRate = Number(taxSetting?.taxRate || 7) / 100;
@@ -532,7 +508,7 @@ export class DatabaseStorage implements IStorage {
 
     let expectedProfit = 0;
     for (const p of productsList) {
-      const qty = p.stockQuantity;
+      const qty = p.centralStock || 0;
       const revenue = qty * Number(p.sellingPrice || p.price || 0);
       const cost = qty * Number(p.purchasePrice || 0);
       const commission = revenue * (Number(p.marketplaceCommission || 0) / 100 || defaultCommission);
@@ -551,13 +527,7 @@ export class DatabaseStorage implements IStorage {
         const storeOrders = companyOrders.filter(o => o.storeId === store.id);
         const pendingOrders = storeOrders.filter(o => o.status === "pending").length;
         
-        let productCount = 0;
-        const mp = store.marketplace;
-        for (const p of companyProducts) {
-          if (mp === "ozon" && (p.stockOzon || 0) > 0) productCount++;
-          else if (mp === "wildberries" && (p.stockWb || 0) > 0) productCount++;
-          else if (mp === "yandex" && (p.stockYandex || 0) > 0) productCount++;
-        }
+        const productCount = companyProducts.length;
 
         return { ...store, productCount, pendingOrders };
       });
@@ -565,8 +535,8 @@ export class DatabaseStorage implements IStorage {
       let companyTotalStock = 0;
       let companyTotalValue = 0;
       for (const p of companyProducts) {
-        companyTotalStock += p.stockQuantity;
-        companyTotalValue += p.stockQuantity * Number(p.sellingPrice || p.price || 0);
+        companyTotalStock += p.centralStock || 0;
+        companyTotalValue += (p.centralStock || 0) * Number(p.sellingPrice || p.price || 0);
       }
 
       companiesWithStores.push({
@@ -658,12 +628,12 @@ export class DatabaseStorage implements IStorage {
     const companyMap = new Map(companyList.map(c => [c.id, c.name]));
 
     return productsList
-      .filter(p => p.stockQuantity < threshold)
+      .filter(p => (p.centralStock || 0) < threshold)
       .map(p => ({
         ...p,
         companyName: companyMap.get(p.companyId || 0) || "—",
       }))
-      .sort((a, b) => a.stockQuantity - b.stockQuantity);
+      .sort((a, b) => (a.centralStock || 0) - (b.centralStock || 0));
   }
 
   async getSalesData(organizationId: string, days: number = 30): Promise<SalesDataPoint[]> {
@@ -733,6 +703,26 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async getProductStoreExclusions(productId: number): Promise<ProductStoreExclusion[]> {
+    return await db.select().from(productStoreExclusions)
+      .where(eq(productStoreExclusions.productId, productId));
+  }
+
+  async setProductStoreExclusions(productId: number, storeIds: number[], organizationId: string): Promise<ProductStoreExclusion[]> {
+    await db.delete(productStoreExclusions)
+      .where(eq(productStoreExclusions.productId, productId));
+    
+    if (storeIds.length === 0) return [];
+    
+    const values = storeIds.map(storeId => ({
+      productId,
+      storeId,
+      organizationId,
+    }));
+    
+    return await db.insert(productStoreExclusions).values(values).returning();
+  }
+
   async seedData(orgId: string): Promise<void> {
     const existingCompanies = await this.getCompanies(orgId);
     if (existingCompanies.length > 0) return;
@@ -752,21 +742,21 @@ export class DatabaseStorage implements IStorage {
     const p1 = await this.createProduct({
       name: "Беспроводные наушники Sony WH-1000XM5", sku: "WH-001", barcode: "4548736132573",
       category: "Электроника", purchasePrice: "15000", sellingPrice: "29990", price: "29990",
-      weight: "0.25", stockQuantity: 50, stockLocal: 15, stockOzon: 12, stockWb: 13, stockYandex: 10,
+      weight: "0.25", centralStock: 50, stockQuantity: 50, stockLocal: 50, stockOzon: 0, stockWb: 0, stockYandex: 0,
       logisticsCost: "150", marketplaceCommission: "15", organizationId: orgId, companyId: company1.id,
       description: "Премиальные беспроводные наушники с шумоподавлением",
     });
     const p2 = await this.createProduct({
       name: "Подставка для смартфона алюминиевая", sku: "SS-002", barcode: "4600000000123",
       category: "Аксессуары", purchasePrice: "500", sellingPrice: "1490", price: "1490",
-      weight: "0.15", stockQuantity: 120, stockLocal: 40, stockOzon: 30, stockWb: 25, stockYandex: 25,
+      weight: "0.15", centralStock: 120, stockQuantity: 120, stockLocal: 120, stockOzon: 0, stockWb: 0, stockYandex: 0,
       logisticsCost: "80", marketplaceCommission: "12", organizationId: orgId, companyId: company1.id,
       description: "Регулируемая алюминиевая подставка",
     });
     const p3 = await this.createProduct({
       name: "Умные часы Xiaomi Mi Watch", sku: "SW-003", barcode: "6934177756313",
       category: "Электроника", purchasePrice: "8000", sellingPrice: "14990", price: "14990",
-      weight: "0.05", stockQuantity: 30, stockLocal: 8, stockOzon: 8, stockWb: 7, stockYandex: 7,
+      weight: "0.05", centralStock: 30, stockQuantity: 30, stockLocal: 30, stockOzon: 0, stockWb: 0, stockYandex: 0,
       logisticsCost: "100", marketplaceCommission: "15", organizationId: orgId, companyId: company1.id,
       description: "Фитнес-трекер с уведомлениями",
     });
@@ -774,21 +764,21 @@ export class DatabaseStorage implements IStorage {
     const p4 = await this.createProduct({
       name: "Кроссовки Nike Air Max 90", sku: "NK-001", barcode: "0194500882201",
       category: "Обувь", purchasePrice: "5500", sellingPrice: "12990", price: "12990",
-      weight: "0.8", stockQuantity: 80, stockLocal: 25, stockOzon: 20, stockWb: 20, stockYandex: 15,
+      weight: "0.8", centralStock: 80, stockQuantity: 80, stockLocal: 80, stockOzon: 0, stockWb: 0, stockYandex: 0,
       logisticsCost: "200", marketplaceCommission: "18", organizationId: orgId, companyId: company2.id,
       description: "Культовые кроссовки Nike Air Max 90",
     });
     const p5 = await this.createProduct({
       name: "Сумка женская кожаная", sku: "BG-002", barcode: "2000000001234",
       category: "Аксессуары", purchasePrice: "3000", sellingPrice: "7990", price: "7990",
-      weight: "0.6", stockQuantity: 45, stockLocal: 15, stockOzon: 10, stockWb: 12, stockYandex: 8,
+      weight: "0.6", centralStock: 45, stockQuantity: 45, stockLocal: 45, stockOzon: 0, stockWb: 0, stockYandex: 0,
       logisticsCost: "150", marketplaceCommission: "16", organizationId: orgId, companyId: company2.id,
       description: "Элегантная кожаная сумка",
     });
     const p6 = await this.createProduct({
       name: "Парфюм Chanel No.5 EDP 100ml", sku: "PF-003", barcode: "3145891255300",
       category: "Красота", purchasePrice: "6000", sellingPrice: "15490", price: "15490",
-      weight: "0.35", stockQuantity: 25, stockLocal: 8, stockOzon: 6, stockWb: 6, stockYandex: 5,
+      weight: "0.35", centralStock: 25, stockQuantity: 25, stockLocal: 25, stockOzon: 0, stockWb: 0, stockYandex: 0,
       logisticsCost: "120", marketplaceCommission: "14", organizationId: orgId, companyId: company2.id,
       description: "Легендарный парфюм Chanel",
     });

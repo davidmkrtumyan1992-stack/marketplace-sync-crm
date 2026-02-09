@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { products, stores, stockSyncLog, inventorySyncSettings, companies, syncHistory } from "@shared/schema";
+import { products, stores, stockSyncLog, inventorySyncSettings, companies, syncHistory, productStoreExclusions } from "@shared/schema";
 import type { Store, StockSyncLogEntry, InsertStockSyncLog, InventorySyncSetting } from "@shared/schema";
 import { eq, and, desc, sql, inArray, gte } from "drizzle-orm";
 
@@ -54,19 +54,23 @@ export class InventorySyncEngine {
           throw new Error(`Товар с ID ${productId} не найден`);
         }
 
-        const previousStock = product.stockLocal || 0;
-        const newLocalStock = Math.max(0, previousStock - quantity);
-        const newTotal = newLocalStock + (product.stockOzon || 0) + (product.stockWb || 0) + (product.stockYandex || 0);
+        const previousStock = product.centralStock || 0;
+        const newCentralStock = Math.max(0, previousStock - quantity);
 
         const syncSettings = await this.getSyncSettings(organizationId);
         const safetyThreshold = product.safetyStock > 0 ? product.safetyStock : (syncSettings?.defaultSafetyStock || 2);
-        const safetyTriggered = newLocalStock <= safetyThreshold;
+        const safetyTriggered = newCentralStock <= safetyThreshold;
 
         await tx.update(products).set({
-          stockLocal: newLocalStock,
-          stockQuantity: newTotal,
+          centralStock: newCentralStock,
+          stockQuantity: newCentralStock,
+          stockLocal: newCentralStock,
           updatedAt: new Date(),
         }).where(eq(products.id, productId));
+
+        const exclusions = await tx.select().from(productStoreExclusions)
+          .where(eq(productStoreExclusions.productId, productId));
+        const excludedStoreIds = new Set(exclusions.map(e => e.storeId));
 
         const companyList = await tx.select().from(companies)
           .where(eq(companies.organizationId, organizationId));
@@ -78,22 +82,27 @@ export class InventorySyncEngine {
             .where(inArray(stores.companyId, companyIds));
         }
 
-        const otherStores = allStores.filter(s => s.id !== sourceStoreId && s.isActive);
+        const targetStores = allStores.filter(s => 
+          s.id !== sourceStoreId && s.isActive && !excludedStoreIds.has(s.id)
+        );
 
-        const stockToSend = safetyTriggered ? 0 : newLocalStock;
+        const stockToSend = safetyTriggered ? 0 : newCentralStock;
 
         const syncResults: StoreSyncResult[] = await this.broadcastStockUpdate(
-          otherStores, product.sku, stockToSend, safetyTriggered
+          targetStores, product.sku, stockToSend, safetyTriggered
         );
 
         const allSuccess = syncResults.every(r => r.status === "success");
         const overallStatus = syncResults.length === 0 ? "success" : (allSuccess ? "success" : "partial");
 
-        let details = `Заказ из «${sourceStoreName}» → остаток обновлён: ${previousStock} → ${newLocalStock}`;
+        let details = `Заказ из «${sourceStoreName}» → центральный склад: ${previousStock} → ${newCentralStock}`;
         if (safetyTriggered) {
           details += ` → резервный остаток (${safetyThreshold}) достигнут, остаток на маркетплейсах: 0`;
         }
-        details += ` → синхронизация ${stockToSend} ед. на ${otherStores.length} магазинов: ${allSuccess ? "SUCCESS" : "PARTIAL"}`;
+        if (excludedStoreIds.size > 0) {
+          details += ` → исключено ${excludedStoreIds.size} магазинов`;
+        }
+        details += ` → синхронизация ${stockToSend} ед. на ${targetStores.length} магазинов: ${allSuccess ? "SUCCESS" : "PARTIAL"}`;
 
         const [logEntry] = await tx.insert(stockSyncLog).values({
           organizationId,
@@ -105,7 +114,7 @@ export class InventorySyncEngine {
           sourceStoreName,
           action: "order_stock_decrement",
           previousStock,
-          newStock: newLocalStock,
+          newStock: newCentralStock,
           quantityChanged: quantity,
           safetyStockTriggered: safetyTriggered,
           syncResults: syncResults as any,

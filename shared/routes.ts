@@ -11,6 +11,7 @@ import {
   insertExpenseSchema,
   insertUserRoleSchema,
   insertInventorySyncSettingsSchema,
+  insertProductStoreExclusionSchema,
 } from './schema';
 
 export const errorSchemas = {
@@ -81,6 +82,26 @@ export const api = {
       path: '/api/orders/:id/status',
       input: z.object({ status: z.string() }),
     },
+    createDirect: {
+      method: 'POST' as const,
+      path: '/api/orders/direct',
+      input: z.object({
+        customerId: z.number().nullable().optional(),
+        newCustomer: z.object({
+          name: z.string(),
+          phone: z.string().optional(),
+          notes: z.string().optional(),
+        }).optional(),
+        companyId: z.number().optional(),
+        items: z.array(z.object({
+          productId: z.number(),
+          quantity: z.number().min(1),
+          originalPrice: z.number(),
+          salePrice: z.number(),
+        })),
+        notes: z.string().optional(),
+      }),
+    },
   },
   marketplace: {
     list: { method: 'GET' as const, path: '/api/marketplace/settings' },
@@ -108,6 +129,16 @@ export const api = {
     abc: { method: 'GET' as const, path: '/api/analytics/abc' },
     sales: { method: 'GET' as const, path: '/api/analytics/sales' },
     lowStock: { method: 'GET' as const, path: '/api/analytics/low-stock' },
+  },
+  storeExclusions: {
+    list: { method: 'GET' as const, path: '/api/products/:productId/store-exclusions' },
+    set: { 
+      method: 'POST' as const, 
+      path: '/api/products/:productId/store-exclusions',
+      input: z.object({
+        excludedStoreIds: z.array(z.number()),
+      }),
+    },
   },
   inventorySync: {
     status: { method: 'GET' as const, path: '/api/inventory-sync/status' },

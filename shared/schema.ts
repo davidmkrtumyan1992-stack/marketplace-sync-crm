@@ -65,6 +65,7 @@ export const products = pgTable("products", {
   dimensionLength: decimal("dimension_length", { precision: 10, scale: 2 }),
   dimensionWidth: decimal("dimension_width", { precision: 10, scale: 2 }),
   dimensionHeight: decimal("dimension_height", { precision: 10, scale: 2 }),
+  centralStock: integer("central_stock").notNull().default(0),
   stockQuantity: integer("stock_quantity").notNull().default(0),
   stockLocal: integer("stock_local").notNull().default(0),
   stockOzon: integer("stock_ozon").notNull().default(0),
@@ -113,6 +114,16 @@ export const orderItems = pgTable("order_items", {
   productId: integer("product_id").notNull().references(() => products.id),
   quantity: integer("quantity").notNull(),
   price: decimal("price", { precision: 10, scale: 2 }).notNull(),
+  originalPrice: decimal("original_price", { precision: 10, scale: 2 }),
+  salePrice: decimal("sale_price", { precision: 10, scale: 2 }),
+});
+
+export const productStoreExclusions = pgTable("product_store_exclusions", {
+  id: serial("id").primaryKey(),
+  productId: integer("product_id").notNull().references(() => products.id),
+  storeId: integer("store_id").notNull().references(() => stores.id),
+  organizationId: text("organization_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const marketplaceSettings = pgTable("marketplace_settings", {
@@ -226,6 +237,12 @@ export const productsRelations = relations(products, ({ one, many }) => ({
   company: one(companies, { fields: [products.companyId], references: [companies.id] }),
   orderItems: many(orderItems),
   stockInflows: many(stockInflow),
+  storeExclusions: many(productStoreExclusions),
+}));
+
+export const productStoreExclusionsRelations = relations(productStoreExclusions, ({ one }) => ({
+  product: one(products, { fields: [productStoreExclusions.productId], references: [products.id] }),
+  store: one(stores, { fields: [productStoreExclusions.storeId], references: [stores.id] }),
 }));
 
 export const ordersRelations = relations(orders, ({ one, many }) => ({
@@ -271,6 +288,7 @@ export const insertStockInflowSchema = createInsertSchema(stockInflow).omit({ id
 export const insertSyncHistorySchema = createInsertSchema(syncHistory).omit({ id: true, createdAt: true });
 export const insertStockSyncLogSchema = createInsertSchema(stockSyncLog).omit({ id: true, createdAt: true });
 export const insertInventorySyncSettingsSchema = createInsertSchema(inventorySyncSettings).omit({ id: true, updatedAt: true });
+export const insertProductStoreExclusionSchema = createInsertSchema(productStoreExclusions).omit({ id: true, createdAt: true });
 
 // === TYPES ===
 
@@ -304,13 +322,15 @@ export type StockSyncLogEntry = typeof stockSyncLog.$inferSelect;
 export type InsertStockSyncLog = z.infer<typeof insertStockSyncLogSchema>;
 export type InventorySyncSetting = typeof inventorySyncSettings.$inferSelect;
 export type InsertInventorySyncSettings = z.infer<typeof insertInventorySyncSettingsSchema>;
+export type ProductStoreExclusion = typeof productStoreExclusions.$inferSelect;
+export type InsertProductStoreExclusion = z.infer<typeof insertProductStoreExclusionSchema>;
 
 // API Requests
 export type CreateProductRequest = InsertProduct;
 export type UpdateProductRequest = Partial<InsertProduct>;
 export type CreateCustomerRequest = InsertCustomer;
 export type UpdateCustomerRequest = Partial<InsertCustomer>;
-export type CreateOrderRequest = InsertOrder & { items: { productId: number; quantity: number; price: number }[] };
+export type CreateOrderRequest = InsertOrder & { items: { productId: number; quantity: number; price: number; originalPrice?: number; salePrice?: number }[] };
 export type UpdateOrderRequest = Partial<InsertOrder>;
 
 // Role type
