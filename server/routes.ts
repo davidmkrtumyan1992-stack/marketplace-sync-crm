@@ -429,7 +429,11 @@ export async function registerRoutes(
   });
 
   app.post(api.marketplace.save.path, isAuthenticated, requireRole("owner"), async (req, res) => {
-    const input = api.marketplace.save.input.parse({ ...req.body, organizationId: getOrgId(req) });
+    const body = { ...req.body, organizationId: getOrgId(req) };
+    if (body.apiKey && typeof body.apiKey === "string") body.apiKey = body.apiKey.trim();
+    if (body.clientId && typeof body.clientId === "string") body.clientId = body.clientId.trim();
+    if (body.warehouseId && typeof body.warehouseId === "string") body.warehouseId = body.warehouseId.trim();
+    const input = api.marketplace.save.input.parse(body);
     const setting = await storage.saveMarketplaceSetting(input);
     res.status(201).json(setting);
   });

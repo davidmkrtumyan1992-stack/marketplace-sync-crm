@@ -33,9 +33,11 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 2): P
 
 export async function fetchOzonProducts(apiKey: string, clientId: string): Promise<NormalizedProduct[]> {
   const BASE = "https://api-seller.ozon.ru";
+  const cleanClientId = String(parseInt(clientId.trim(), 10));
+  const cleanApiKey = apiKey.trim();
   const headers: HeadersInit = {
-    "Client-Id": clientId,
-    "Api-Key": apiKey,
+    "Client-Id": cleanClientId,
+    "Api-Key": cleanApiKey,
     "Content-Type": "application/json",
   };
 
