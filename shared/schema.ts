@@ -204,6 +204,7 @@ export const inventorySyncSettings = pgTable("inventory_sync_settings", {
   organizationId: text("organization_id").notNull(),
   defaultSafetyStock: integer("default_safety_stock").notNull().default(2),
   syncEnabled: boolean("sync_enabled").default(true),
+  demoMode: boolean("demo_mode").default(false),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
