@@ -101,11 +101,17 @@ export default function Dashboard() {
               Панель управления
             </h1>
             <p className="text-muted-foreground mt-2 text-lg">
-              Сводка по всем компаниям и магазинам
+              Единый склад и сводка по магазинам
             </p>
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
+            <Link href="/orders">
+              <Button data-testid="button-dashboard-direct-sale">
+                <Store className="w-4 h-4 mr-2" />
+                Прямая продажа
+              </Button>
+            </Link>
             {!hasCompanies && totalProducts === 0 && (
               <Button
                 onClick={() => seedMutation.mutate()}
@@ -131,7 +137,7 @@ export default function Dashboard() {
                   <p className="text-3xl font-extrabold tracking-tight">
                     {kpiLoading ? "..." : formatNumber(kpi?.totalStock || 0)}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-3">шт. на всех складах</p>
+                  <p className="text-xs text-muted-foreground mt-3">шт. на центральном складе</p>
                 </div>
                 <div className="icon-box icon-box-lg">
                   <Package className="w-7 h-7 text-primary" />

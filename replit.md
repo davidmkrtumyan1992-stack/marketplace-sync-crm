@@ -172,11 +172,15 @@ shared/               # Shared between client/server
 - Settings schema includes fields for API keys and client IDs
 
 ## Recent Changes
+- **Unified omnichannel warehouse**: Products belong to organization's central warehouse, `companyId` is optional/nullable. No company selector required for product creation or intake.
+- **Direct Sales (Прямая продажа / Самовывоз)**: Full direct sale flow with product search, customer select/create, price override. Backend at `/api/orders/direct` with atomic stock deduction + broadcast sync to all 6 stores. Audit-logged as "direct_sale".
+- **Orders page**: Direct sale dialog accessible via "Прямая продажа" button. New "direct" source badge (green, with Store icon).
+- **Dashboard**: Quick-action "Прямая продажа" button linking to Orders. Total Stock shows centralStock sum from unified pool.
 - **Centralized warehouse migration**: Replaced per-channel stock (stockLocal/stockOzon/stockWb/stockYandex) with single `centralStock` field. All stock operations use atomic `SELECT FOR UPDATE` locking.
 - **Store exclusion system**: Per-product store exclusions via `productStoreExclusions` table with GET/PUT API routes
 - **Security hardening**: Org ownership validation on all ID-based product/store endpoints, preventing cross-tenant access
-- **Products page**: Single centralStock field, simplified stock display
-- **Intake page**: Streamlined to direct warehouse intake (no per-channel distribution)
+- **Products page**: Single centralStock field, simplified stock display, no company selector
+- **Intake page**: Streamlined to direct warehouse intake (no company selector, no per-channel distribution)
 - **Excel export**: Updated to show centralStock instead of per-channel breakdown
 - Added multi-level RBAC system (Owner/Accountant/Administrator) with backend enforcement on all routes
 - Added marketplace sync infrastructure with syncHistory table and sync history UI in Settings

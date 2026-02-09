@@ -177,7 +177,9 @@ export async function registerRoutes(
   app.post(api.products.create.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const input = api.products.create.input.parse({ ...req.body, organizationId: orgId });
+      const body = { ...req.body, organizationId: orgId };
+      if (!body.companyId) delete body.companyId;
+      const input = api.products.create.input.parse(body);
       if (input.companyId) {
         const orgCompanies = await storage.getCompanies(orgId);
         const validCompany = orgCompanies.find(c => c.id === input.companyId);
@@ -186,7 +188,7 @@ export async function registerRoutes(
         }
       }
       const product = await storage.createProduct(input);
-      res.status(201).json(product);
+      res.json(product);
     } catch (err) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: "Проверьте правильность заполнения полей" });
       throw err;
@@ -299,6 +301,96 @@ export async function registerRoutes(
   app.patch(api.orders.updateStatus.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const order = await storage.updateOrderStatus(Number(req.params.id), req.body.status);
     res.json(order);
+  });
+
+  // Direct Sale endpoint
+  app.post("/api/orders/direct", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { customerId, newCustomer, items, notes } = req.body;
+
+      let finalCustomerId = customerId || null;
+      if (newCustomer && newCustomer.name) {
+        const customer = await storage.createCustomer({
+          name: newCustomer.name,
+          phone: newCustomer.phone || null,
+          email: null,
+          notes: newCustomer.notes || null,
+          organizationId: orgId,
+          companyId: null,
+        });
+        finalCustomerId = customer.id;
+      }
+
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ message: "Добавьте хотя бы один товар" });
+      }
+
+      const totalAmount = items.reduce((sum: number, item: any) => sum + (item.salePrice * item.quantity), 0);
+      const orderNumber = `DS-${Date.now().toString(36).toUpperCase()}`;
+
+      const order = await storage.createOrder(
+        {
+          orderNumber,
+          customerId: finalCustomerId,
+          status: "completed",
+          totalAmount: totalAmount.toString(),
+          source: "direct",
+          organizationId: orgId,
+          companyId: null,
+          storeId: null,
+          externalId: null,
+        },
+        items.map((item: any) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.salePrice,
+          originalPrice: item.originalPrice,
+          salePrice: item.salePrice,
+        }))
+      );
+
+      // Trigger inventory sync for each item - broadcast to ALL stores
+      for (const item of items) {
+        try {
+          await inventorySyncEngine.processOrderStockUpdate({
+            organizationId: orgId,
+            orderId: order.id,
+            productId: item.productId,
+            quantity: item.quantity,
+            sourceStoreId: null,
+            sourceStoreName: "Прямая продажа / Самовывоз",
+          });
+        } catch (syncError) {
+          console.error("Inventory sync error for direct sale product", item.productId, syncError);
+        }
+      }
+
+      // Log to audit
+      const user = req.user as any;
+      await storage.createAuditLog({
+        organizationId: orgId,
+        companyId: null,
+        userId: user?.id || "system",
+        userName: user?.username || user?.email || "system",
+        action: "direct_sale",
+        entityType: "order",
+        entityId: order.id,
+        details: JSON.stringify({
+          type: "Прямая продажа / Самовывоз",
+          items: items.map((i: any) => ({ productId: i.productId, qty: i.quantity, price: i.salePrice })),
+          totalAmount,
+          customerId: finalCustomerId,
+          notes,
+        }),
+        delta: null,
+      });
+
+      res.json(order);
+    } catch (err: any) {
+      console.error("Direct sale error:", err);
+      res.status(400).json({ message: err.message || "Ошибка оформления продажи" });
+    }
   });
 
   // Marketplace Settings (owner only)

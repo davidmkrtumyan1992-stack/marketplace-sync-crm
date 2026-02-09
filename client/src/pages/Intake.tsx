@@ -8,11 +8,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { formatCurrency } from "@/lib/format";
-import type { Product, Company } from "@shared/schema";
+import type { Product } from "@shared/schema";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Barcode, ScanLine, Package, Plus, Minus, Trash2, Check, Building2, FileSpreadsheet, Warehouse } from "lucide-react";
+import { Barcode, ScanLine, Package, Plus, Minus, Trash2, Check, FileSpreadsheet, Warehouse } from "lucide-react";
 
 interface BatchItem {
   product: Product;
@@ -39,7 +39,6 @@ export default function Intake() {
   const lastKeyTime = useRef<number>(0);
   const scanBuffer = useRef<string>("");
 
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
   const [barcodeValue, setBarcodeValue] = useState("");
   const [batch, setBatch] = useState<BatchItem[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -51,10 +50,6 @@ export default function Intake() {
   const [newProductCategory, setNewProductCategory] = useState("");
   const [newProductPurchasePrice, setNewProductPurchasePrice] = useState("");
   const [newProductSellingPrice, setNewProductSellingPrice] = useState("");
-
-  const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
-    queryKey: ["/api/companies"],
-  });
 
   useEffect(() => {
     barcodeInputRef.current?.focus();
@@ -207,7 +202,6 @@ export default function Intake() {
       stockWb: 0,
       stockYandex: 0,
       organizationId: "1",
-      companyId: selectedCompanyId ? Number(selectedCompanyId) : null,
     });
   };
 
@@ -227,7 +221,6 @@ export default function Intake() {
           toOzon: 0,
           toWb: 0,
           toYandex: 0,
-          companyId: selectedCompanyId ? Number(selectedCompanyId) : null,
           organizationId: "1",
         });
         successCount++;
@@ -296,36 +289,6 @@ export default function Intake() {
             Экспорт товаров
           </Button>
         </div>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-4">
-            <CardTitle className="flex items-center gap-2">
-              <Building2 className="w-5 h-5" />
-              Компания
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Select
-              value={selectedCompanyId}
-              onValueChange={setSelectedCompanyId}
-            >
-              <SelectTrigger data-testid="select-company" className="max-w-sm">
-                <SelectValue placeholder={companiesLoading ? "Загрузка..." : "Выберите компанию"} />
-              </SelectTrigger>
-              <SelectContent>
-                {companies?.map((company) => (
-                  <SelectItem
-                    key={company.id}
-                    value={String(company.id)}
-                    data-testid={`select-company-option-${company.id}`}
-                  >
-                    {company.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
 
         <Card className="border-2 border-primary/30">
           <CardContent className="pt-6">

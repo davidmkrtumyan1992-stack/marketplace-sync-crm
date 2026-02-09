@@ -1,9 +1,13 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus } from "@/hooks/use-orders";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale } from "@/hooks/use-orders";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -11,18 +15,41 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ShoppingCart, Package, Calendar, User, CreditCard } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
+import { useQuery } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
+import { useState, useMemo } from "react";
+import type { Product } from "@shared/schema";
+
+interface DirectSaleItem {
+  productId: number;
+  productName: string;
+  quantity: number;
+  originalPrice: number;
+  salePrice: number;
+  maxStock: number;
+}
 
 export default function Orders() {
   const { data: orders, isLoading } = useOrders();
+  const [isDirectSaleOpen, setIsDirectSaleOpen] = useState(false);
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "completed": return "bg-green-100 text-green-800 border-green-200";
-      case "processing": return "bg-blue-100 text-blue-800 border-blue-200";
-      case "pending": return "bg-amber-100 text-amber-800 border-amber-200";
-      case "shipped": return "bg-indigo-100 text-indigo-800 border-indigo-200";
+      case "completed": return "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800";
+      case "processing": return "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800";
+      case "pending": return "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800";
+      case "shipped": return "bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-800";
       case "cancelled": return "bg-muted text-muted-foreground border-border";
       default: return "bg-muted text-muted-foreground";
     }
@@ -41,22 +68,32 @@ export default function Orders() {
 
   const getSourceBadge = (source: string) => {
     switch (source) {
-      case "ozon": return <Badge className="bg-blue-500/20 text-blue-700 border-blue-300">OZON</Badge>;
-      case "wildberries": return <Badge className="bg-purple-500/20 text-purple-700 border-purple-300">WB</Badge>;
-      case "yandex": return <Badge className="bg-yellow-500/20 text-yellow-700 border-yellow-300">Yandex</Badge>;
+      case "ozon": return <Badge className="bg-blue-500/20 text-blue-700 border-blue-300 dark:text-blue-300">OZON</Badge>;
+      case "wildberries": return <Badge className="bg-purple-500/20 text-purple-700 border-purple-300 dark:text-purple-300">WB</Badge>;
+      case "yandex": return <Badge className="bg-yellow-500/20 text-yellow-700 border-yellow-300 dark:text-yellow-300">Yandex</Badge>;
+      case "direct": return <Badge className="bg-emerald-500/20 text-emerald-700 border-emerald-300 dark:text-emerald-300"><Store className="w-3 h-3 mr-1 inline" />Прямая</Badge>;
       default: return <Badge variant="outline" className="text-xs">Вручную</Badge>;
     }
   };
 
-  const pendingCount = orders?.filter(o => o.status === "pending").length || 0;
-  const totalRevenue = orders?.reduce((sum, o) => sum + Number(o.totalAmount), 0) || 0;
+  const pendingCount = orders?.filter((o: any) => o.status === "pending").length || 0;
+  const totalRevenue = orders?.reduce((sum: number, o: any) => sum + Number(o.totalAmount), 0) || 0;
 
   return (
     <Layout>
       <div className="space-y-8">
-        <div>
-          <h1 className="text-4xl font-bold tracking-tight" data-testid="text-orders-title">Заказы</h1>
-          <p className="text-muted-foreground mt-2 text-lg">Отслеживание и выполнение заказов</p>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-bold tracking-tight" data-testid="text-orders-title">Заказы</h1>
+            <p className="text-muted-foreground mt-2 text-lg">Отслеживание и выполнение заказов</p>
+          </div>
+          <Button
+            data-testid="button-direct-sale"
+            onClick={() => setIsDirectSaleOpen(true)}
+          >
+            <Store className="w-4 h-4 mr-2" />
+            Прямая продажа
+          </Button>
         </div>
 
         <div className="flex flex-wrap gap-3">
@@ -65,11 +102,11 @@ export default function Orders() {
             Всего: {orders?.length || 0}
           </span>
           {pendingCount > 0 && (
-            <span className="bg-amber-100 text-amber-800 px-3 py-1.5 rounded-full text-sm font-medium">
+            <span className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 px-3 py-1.5 rounded-full text-sm font-medium">
               Новых: {pendingCount}
             </span>
           )}
-          <span className="bg-green-100 text-green-800 px-3 py-1.5 rounded-full text-sm font-medium">
+          <span className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 px-3 py-1.5 rounded-full text-sm font-medium">
             <CreditCard className="w-4 h-4 mr-1.5 inline" />
             {formatCurrency(totalRevenue)}
           </span>
@@ -107,6 +144,11 @@ export default function Orders() {
           </div>
         )}
       </div>
+
+      <DirectSaleDialog
+        open={isDirectSaleOpen}
+        onOpenChange={setIsDirectSaleOpen}
+      />
     </Layout>
   );
 }
@@ -169,7 +211,7 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge }: {
               disabled={isPending}
             >
               <SelectTrigger 
-                className={`w-[150px] h-10 text-sm font-medium border ${getStatusColor(order.status)}`}
+                className={`w-[150px] text-sm font-medium border ${getStatusColor(order.status)}`}
                 data-testid={`select-status-${order.id}`}
               >
                 <SelectValue>{getStatusLabel(order.status)}</SelectValue>
@@ -186,5 +228,353 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge }: {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function DirectSaleDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
+  const { data: customers } = useQuery<any[]>({ queryKey: ["/api/customers"] });
+  const directSale = useCreateDirectSale();
+  const { toast } = useToast();
+
+  const [items, setItems] = useState<DirectSaleItem[]>([]);
+  const [productSearch, setProductSearch] = useState("");
+  const [showProductList, setShowProductList] = useState(false);
+  const [customerMode, setCustomerMode] = useState<"existing" | "new" | "guest">("guest");
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
+  const [newCustomerName, setNewCustomerName] = useState("");
+  const [newCustomerPhone, setNewCustomerPhone] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const filteredProducts = useMemo(() => {
+    if (!products || !productSearch.trim()) return [];
+    const q = productSearch.toLowerCase();
+    return products
+      .filter((p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        (p.barcode && p.barcode.toLowerCase().includes(q))
+      )
+      .filter((p) => !items.some((i) => i.productId === p.id))
+      .slice(0, 8);
+  }, [products, productSearch, items]);
+
+  const addProduct = (product: Product) => {
+    setItems((prev) => [
+      ...prev,
+      {
+        productId: product.id,
+        productName: product.name,
+        quantity: 1,
+        originalPrice: Number(product.sellingPrice) || Number(product.price) || 0,
+        salePrice: Number(product.sellingPrice) || Number(product.price) || 0,
+        maxStock: product.centralStock || 0,
+      },
+    ]);
+    setProductSearch("");
+    setShowProductList(false);
+  };
+
+  const updateItem = (productId: number, field: keyof DirectSaleItem, value: number) => {
+    setItems((prev) =>
+      prev.map((item) => {
+        if (item.productId !== productId) return item;
+        if (field === "quantity") {
+          return { ...item, quantity: Math.max(1, Math.min(value, item.maxStock || 999)) };
+        }
+        if (field === "salePrice") {
+          return { ...item, salePrice: Math.max(0, value) };
+        }
+        return item;
+      })
+    );
+  };
+
+  const removeItem = (productId: number) => {
+    setItems((prev) => prev.filter((i) => i.productId !== productId));
+  };
+
+  const totalAmount = items.reduce((sum, i) => sum + i.salePrice * i.quantity, 0);
+
+  const handleSubmit = () => {
+    if (items.length === 0) {
+      toast({ title: "Ошибка", description: "Добавьте хотя бы один товар", variant: "destructive" });
+      return;
+    }
+
+    const overStockItems = items.filter((i) => i.quantity > i.maxStock && i.maxStock > 0);
+    if (overStockItems.length > 0) {
+      toast({ title: "Недостаточно товара", description: `${overStockItems[0].productName}: на складе ${overStockItems[0].maxStock} шт.`, variant: "destructive" });
+      return;
+    }
+
+    if (customerMode === "new" && !newCustomerName.trim()) {
+      toast({ title: "Ошибка", description: "Укажите имя покупателя", variant: "destructive" });
+      return;
+    }
+
+    const payload: any = {
+      items: items.map((i) => ({
+        productId: i.productId,
+        quantity: i.quantity,
+        originalPrice: i.originalPrice,
+        salePrice: i.salePrice,
+      })),
+      notes: notes || undefined,
+    };
+
+    if (customerMode === "existing" && selectedCustomerId) {
+      payload.customerId = Number(selectedCustomerId);
+    } else if (customerMode === "new" && newCustomerName.trim()) {
+      payload.newCustomer = {
+        name: newCustomerName.trim(),
+        phone: newCustomerPhone.trim() || undefined,
+      };
+    }
+
+    directSale.mutate(payload, {
+      onSuccess: () => {
+        setItems([]);
+        setProductSearch("");
+        setCustomerMode("guest");
+        setSelectedCustomerId("");
+        setNewCustomerName("");
+        setNewCustomerPhone("");
+        setNotes("");
+        onOpenChange(false);
+      },
+    });
+  };
+
+  const resetDialog = () => {
+    setItems([]);
+    setProductSearch("");
+    setShowProductList(false);
+    setCustomerMode("guest");
+    setSelectedCustomerId("");
+    setNewCustomerName("");
+    setNewCustomerPhone("");
+    setNotes("");
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) resetDialog(); onOpenChange(v); }}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Store className="w-5 h-5" />
+            Прямая продажа / Самовывоз
+          </DialogTitle>
+          <DialogDescription>
+            Оформите продажу с выбором товаров, покупателя и ценой
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-6">
+          <div>
+            <Label className="text-sm font-medium mb-2 block">Товары</Label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                value={productSearch}
+                onChange={(e) => { setProductSearch(e.target.value); setShowProductList(true); }}
+                onFocus={() => setShowProductList(true)}
+                placeholder="Поиск по названию, артикулу или штрихкоду..."
+                className="pl-10"
+                data-testid="input-product-search"
+              />
+              {showProductList && filteredProducts.length > 0 && (
+                <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                  {filteredProducts.map((product) => (
+                    <button
+                      key={product.id}
+                      className="w-full text-left px-3 py-2 hover-elevate flex items-center justify-between gap-2"
+                      onClick={() => addProduct(product)}
+                      data-testid={`button-add-product-${product.id}`}
+                    >
+                      <div>
+                        <p className="font-medium text-sm">{product.name}</p>
+                        <p className="text-xs text-muted-foreground">{product.sku}{product.barcode ? ` | ${product.barcode}` : ""}</p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-sm font-medium">{formatCurrency(Number(product.sellingPrice) || Number(product.price))}</p>
+                        <p className="text-xs text-muted-foreground">Склад: {product.centralStock}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {items.length > 0 && (
+              <div className="mt-3 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Товар</TableHead>
+                      <TableHead className="text-center w-24">Кол-во</TableHead>
+                      <TableHead className="text-right w-32">Цена</TableHead>
+                      <TableHead className="text-right w-28">Сумма</TableHead>
+                      <TableHead className="w-10"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {items.map((item) => (
+                      <TableRow key={item.productId} data-testid={`row-sale-item-${item.productId}`}>
+                        <TableCell>
+                          <p className="font-medium text-sm">{item.productName}</p>
+                          <p className="text-xs text-muted-foreground">Склад: {item.maxStock} шт.</p>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Input
+                            type="number"
+                            min={1}
+                            max={item.maxStock || 999}
+                            value={item.quantity}
+                            onChange={(e) => updateItem(item.productId, "quantity", parseInt(e.target.value) || 1)}
+                            className="w-20 mx-auto text-center"
+                            data-testid={`input-quantity-${item.productId}`}
+                          />
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={item.salePrice}
+                            onChange={(e) => updateItem(item.productId, "salePrice", parseFloat(e.target.value) || 0)}
+                            className="w-28 ml-auto text-right"
+                            data-testid={`input-price-${item.productId}`}
+                          />
+                          {item.salePrice !== item.originalPrice && (
+                            <p className="text-xs text-muted-foreground line-through mt-0.5">{formatCurrency(item.originalPrice)}</p>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right font-medium">
+                          {formatCurrency(item.salePrice * item.quantity)}
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => removeItem(item.productId)}
+                            data-testid={`button-remove-item-${item.productId}`}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <Label className="text-sm font-medium mb-2 block">Покупатель</Label>
+            <div className="flex flex-wrap gap-2 mb-3">
+              <Button
+                variant={customerMode === "guest" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setCustomerMode("guest")}
+                data-testid="button-customer-guest"
+              >
+                <User className="w-3.5 h-3.5 mr-1.5" />
+                Гость
+              </Button>
+              <Button
+                variant={customerMode === "existing" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setCustomerMode("existing")}
+                data-testid="button-customer-existing"
+              >
+                <Search className="w-3.5 h-3.5 mr-1.5" />
+                Из базы
+              </Button>
+              <Button
+                variant={customerMode === "new" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setCustomerMode("new")}
+                data-testid="button-customer-new"
+              >
+                <UserPlus className="w-3.5 h-3.5 mr-1.5" />
+                Новый
+              </Button>
+            </div>
+
+            {customerMode === "existing" && (
+              <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
+                <SelectTrigger data-testid="select-customer">
+                  <SelectValue placeholder="Выберите покупателя" />
+                </SelectTrigger>
+                <SelectContent>
+                  {customers?.map((c: any) => (
+                    <SelectItem key={c.id} value={String(c.id)}>
+                      {c.name}{c.phone ? ` (${c.phone})` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+
+            {customerMode === "new" && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Имя</Label>
+                  <Input
+                    value={newCustomerName}
+                    onChange={(e) => setNewCustomerName(e.target.value)}
+                    placeholder="Имя покупателя"
+                    data-testid="input-new-customer-name"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Телефон</Label>
+                  <Input
+                    value={newCustomerPhone}
+                    onChange={(e) => setNewCustomerPhone(e.target.value)}
+                    placeholder="+7 (999) 123-45-67"
+                    data-testid="input-new-customer-phone"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <Label className="text-xs text-muted-foreground">Примечание</Label>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Необязательное примечание к продаже..."
+              className="resize-none"
+              rows={2}
+              data-testid="input-sale-notes"
+            />
+          </div>
+
+          {items.length > 0 && (
+            <div className="flex items-center justify-between p-4 bg-muted/50 rounded-md">
+              <span className="text-sm font-medium text-muted-foreground">Итого к оплате:</span>
+              <span className="text-2xl font-bold" data-testid="text-sale-total">{formatCurrency(totalAmount)}</span>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => { resetDialog(); onOpenChange(false); }} data-testid="button-cancel-sale">
+            Отмена
+          </Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={items.length === 0 || directSale.isPending}
+            data-testid="button-confirm-sale"
+          >
+            {directSale.isPending ? "Оформление..." : "Оформить продажу"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

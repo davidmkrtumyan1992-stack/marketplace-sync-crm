@@ -1,16 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
-import { type CreateOrderRequest, type UpdateOrderRequest } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 
 export function useOrders() {
   return useQuery({
     queryKey: [api.orders.list.path],
-    queryFn: async () => {
-      const res = await fetch(api.orders.list.path, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch orders");
-      return api.orders.list.responses[200].parse(await res.json());
-    },
   });
 }
 
@@ -19,22 +13,58 @@ export function useCreateOrder() {
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async (data: CreateOrderRequest) => {
+    mutationFn: async (data: any) => {
       const res = await fetch(api.orders.create.path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to create order");
-      return api.orders.create.responses[201].parse(await res.json());
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Ошибка создания заказа");
+      }
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
-      toast({ title: "Order created", description: "New order has been registered" });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({ title: "Заказ создан" });
     },
     onError: (error: Error) => {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useCreateDirectSale() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (data: any) => {
+      const res = await fetch("/api/orders/direct", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Ошибка оформления продажи");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/low-stock"] });
+      toast({ title: "Продажа оформлена", description: "Остатки обновлены и синхронизированы" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
     },
   });
 }
@@ -52,12 +82,12 @@ export function useUpdateOrderStatus() {
         body: JSON.stringify({ status }),
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to update status");
-      return api.orders.updateStatus.responses[200].parse(await res.json());
+      if (!res.ok) throw new Error("Ошибка обновления статуса");
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
-      toast({ title: "Status updated", description: "Order status has been changed" });
+      toast({ title: "Статус обновлён" });
     },
   });
 }
