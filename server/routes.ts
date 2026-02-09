@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
+import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts } from "./marketplace-import";
 import { api } from "@shared/routes";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { z } from "zod";
@@ -445,6 +446,152 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Sync all error:", error);
       res.status(500).json({ message: "Ошибка синхронизации" });
+    }
+  });
+
+  // Marketplace Product Import (owner & administrator)
+  app.post("/api/marketplace/import/:marketplace", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const marketplace = String(req.params.marketplace);
+      const { userId, userName } = getUserInfo(req);
+
+      if (!["ozon", "wildberries", "yandex"].includes(marketplace)) {
+        return res.status(400).json({ message: "Неизвестный маркетплейс" });
+      }
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const setting = allSettings.find(s => s.marketplace === marketplace && s.isActive);
+      if (!setting || !setting.apiKey) {
+        return res.status(400).json({ message: `API-ключ для «${marketplace}» не настроен. Перейдите в «Настройки» и добавьте ключ.` });
+      }
+
+      let fetchedProducts;
+      try {
+        if (marketplace === "ozon") {
+          if (!setting.clientId) {
+            return res.status(400).json({ message: "Client-Id для Ozon не указан в настройках" });
+          }
+          fetchedProducts = await fetchOzonProducts(setting.apiKey, setting.clientId);
+        } else if (marketplace === "wildberries") {
+          fetchedProducts = await fetchWildberriesProducts(setting.apiKey);
+        } else {
+          if (!setting.clientId || !setting.warehouseId) {
+            return res.status(400).json({ message: "OAuth Client-Id или Business-Id для Yandex Market не указан в настройках" });
+          }
+          fetchedProducts = await fetchYandexProducts(setting.apiKey, setting.clientId, setting.warehouseId);
+        }
+      } catch (err: any) {
+        console.error(`Marketplace import error (${marketplace}):`, err);
+        await storage.createSyncHistory({
+          organizationId: orgId,
+          action: "product_import",
+          status: "fail",
+          details: `Ошибка импорта из «${marketplace}»: ${err.message}`,
+          itemsCount: 0,
+        });
+        return res.status(502).json({ message: `Ошибка подключения к API «${marketplace}»: ${err.message}` });
+      }
+
+      let created = 0;
+      let updated = 0;
+      let failed = 0;
+      const errors: string[] = [];
+
+      for (const mp of fetchedProducts) {
+        try {
+          if (!mp.sku) {
+            failed++;
+            continue;
+          }
+
+          const existing = await storage.getProductBySkuAndOrg(mp.sku, orgId);
+
+          if (existing) {
+            const updates: any = {};
+            if (mp.price !== undefined && mp.price !== null) {
+              updates.sellingPrice = String(mp.price);
+              updates.price = String(mp.price);
+            }
+            if (mp.stock !== undefined && mp.stock !== null) {
+              updates.centralStock = mp.stock;
+            }
+            if (mp.name && mp.name !== existing.name) {
+              updates.name = mp.name;
+            }
+            if (mp.barcode && !existing.barcode) {
+              updates.barcode = mp.barcode;
+            }
+            if (mp.imageUrl && !existing.imageUrl) {
+              updates.imageUrl = mp.imageUrl;
+            }
+            if (mp.category && !existing.category) {
+              updates.category = mp.category;
+            }
+            if (marketplace === "ozon" && mp.marketplaceId) updates.ozonId = mp.marketplaceId;
+            if (marketplace === "wildberries" && mp.marketplaceId) updates.wbId = mp.marketplaceId;
+            if (marketplace === "yandex" && mp.marketplaceId) updates.yandexId = mp.marketplaceId;
+
+            if (Object.keys(updates).length > 0) {
+              await storage.updateProduct(existing.id, updates);
+            }
+            updated++;
+          } else {
+            await storage.createProduct({
+              name: mp.name,
+              sku: mp.sku,
+              barcode: mp.barcode || null,
+              category: mp.category || null,
+              purchasePrice: "0",
+              sellingPrice: String(mp.price ?? 0),
+              price: String(mp.price ?? 0),
+              centralStock: mp.stock ?? 0,
+              stockQuantity: mp.stock ?? 0,
+              imageUrl: mp.imageUrl || null,
+              ozonId: marketplace === "ozon" ? mp.marketplaceId || null : null,
+              wbId: marketplace === "wildberries" ? mp.marketplaceId || null : null,
+              yandexId: marketplace === "yandex" ? mp.marketplaceId || null : null,
+              organizationId: orgId,
+            });
+            created++;
+          }
+        } catch (err: any) {
+          failed++;
+          if (errors.length < 10) {
+            errors.push(`${mp.sku}: ${err.message}`);
+          }
+        }
+      }
+
+      await storage.createSyncHistory({
+        organizationId: orgId,
+        action: "product_import",
+        status: failed > 0 && created === 0 && updated === 0 ? "fail" : "success",
+        details: `Импорт из «${marketplace}»: создано ${created}, обновлено ${updated}, ошибок ${failed}`,
+        itemsCount: created + updated,
+      });
+
+      await storage.createAuditLog({
+        organizationId: orgId,
+        userId,
+        userName,
+        action: "marketplace_import",
+        entityType: "product",
+        details: `Импорт из «${marketplace}»: создано ${created}, обновлено ${updated}`,
+      });
+
+      res.json({
+        success: true,
+        marketplace,
+        created,
+        updated,
+        failed,
+        total: fetchedProducts.length,
+        errors: errors.length > 0 ? errors : undefined,
+      });
+    } catch (error: any) {
+      console.error("Marketplace import error:", error);
+      res.status(500).json({ message: "Ошибка импорта товаров" });
     }
   });
 

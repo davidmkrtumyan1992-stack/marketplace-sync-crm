@@ -197,3 +197,5 @@ shared/               # Shared between client/server
 - Optimized Intake page for tablet use (larger buttons, high-contrast text)
 - Role-based KPI hiding (administrators can't see purchase prices/P&L)
 - Frontend role filtering for sidebar navigation and route guarding
+- **Marketplace Product Import**: «Импорт из маркетплейсов» dropdown on Products page with Ozon, Wildberries, Yandex Market options. Backend at `POST /api/marketplace/import/:marketplace` reads API keys from `marketplace_settings`, calls real marketplace APIs with pagination, upserts products by SKU (create new or update existing price/stock), logs to `syncHistory` and `auditLog`. Marketplace API clients in `server/marketplace-import.ts`.
+- **Order Detail Modal**: Marketplace orders hide customer info section; direct sales show full customer with profile link. Source badge prominently displayed at dialog top.

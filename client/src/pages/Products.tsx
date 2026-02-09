@@ -37,12 +37,13 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Download, Loader2, ShoppingBag, Store } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { formatCurrency, formatQuantity } from "@/lib/format";
-import { queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useRole } from "@/hooks/use-role";
+import { useMutation } from "@tanstack/react-query";
 
 const formSchema = insertProductSchema.extend({
   purchasePrice: z.coerce.number(),
@@ -79,6 +80,38 @@ export default function Products() {
   const [inflowProduct, setInflowProduct] = useState<Product | null>(null);
   const { toast } = useToast();
 
+  const [importingMarketplace, setImportingMarketplace] = useState<string | null>(null);
+
+  const importMutation = useMutation({
+    mutationFn: async (marketplace: string) => {
+      setImportingMarketplace(marketplace);
+      const res = await apiRequest("POST", `/api/marketplace/import/${marketplace}`);
+      return await res.json();
+    },
+    onSuccess: (data) => {
+      const label = data.marketplace === "ozon" ? "Ozon" : data.marketplace === "wildberries" ? "Wildberries" : "Yandex Market";
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({
+        title: `Импорт из «${label}» завершён`,
+        description: `Успешно импортировано ${formatQuantity(data.created + data.updated)} товаров. Создано: ${formatQuantity(data.created)}, обновлено: ${formatQuantity(data.updated)}${data.failed > 0 ? `, ошибок: ${formatQuantity(data.failed)}` : ""}`,
+      });
+      setImportingMarketplace(null);
+    },
+    onError: (error: Error) => {
+      let msg = error.message;
+      try {
+        const parsed = JSON.parse(msg.replace(/^\d+:\s*/, ""));
+        msg = parsed.message || msg;
+      } catch {}
+      toast({
+        title: "Ошибка импорта",
+        description: msg,
+        variant: "destructive",
+      });
+      setImportingMarketplace(null);
+    },
+  });
+
   const filteredProducts = products?.filter((p: any) => 
     p.name.toLowerCase().includes(search.toLowerCase()) || 
     p.sku.toLowerCase().includes(search.toLowerCase())
@@ -92,7 +125,47 @@ export default function Products() {
             <h1 className="text-4xl font-bold tracking-tight">Товары</h1>
             <p className="text-muted-foreground mt-2 text-lg">Управление товарами и остатками</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="lg" disabled={importMutation.isPending} data-testid="button-import-marketplace">
+                  {importMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4 mr-2" />
+                  )}
+                  {importMutation.isPending
+                    ? `Импорт из «${importingMarketplace === "ozon" ? "Ozon" : importingMarketplace === "wildberries" ? "Wildberries" : "Yandex Market"}»...`
+                    : "Импорт из маркетплейсов"}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => importMutation.mutate("ozon")}
+                  disabled={importMutation.isPending}
+                  data-testid="button-import-ozon"
+                >
+                  <ShoppingBag className="w-4 h-4 mr-2" />
+                  Загрузить из Ozon
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => importMutation.mutate("wildberries")}
+                  disabled={importMutation.isPending}
+                  data-testid="button-import-wildberries"
+                >
+                  <Store className="w-4 h-4 mr-2" />
+                  Загрузить из Wildberries
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => importMutation.mutate("yandex")}
+                  disabled={importMutation.isPending}
+                  data-testid="button-import-yandex"
+                >
+                  <Package className="w-4 h-4 mr-2" />
+                  Загрузить из Yandex Market
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Dialog open={isImportOpen} onOpenChange={setIsImportOpen}>
               <DialogTrigger asChild>
                 <Button variant="outline" size="lg" data-testid="button-import-products">
