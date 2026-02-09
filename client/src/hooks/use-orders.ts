@@ -1,9 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { useToast } from "@/hooks/use-toast";
+import type { OrderWithDetails } from "@shared/schema";
 
 export function useOrders() {
-  return useQuery({
+  return useQuery<OrderWithDetails[]>({
     queryKey: [api.orders.list.path],
   });
 }
@@ -61,6 +62,7 @@ export function useCreateDirectSale() {
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       queryClient.invalidateQueries({ queryKey: ["/api/analytics/low-stock"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
       toast({ title: "Продажа оформлена", description: "Остатки обновлены и синхронизированы" });
     },
     onError: (error: Error) => {

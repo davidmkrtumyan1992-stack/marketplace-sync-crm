@@ -258,11 +258,37 @@ export async function registerRoutes(
     res.json(customer);
   });
 
+  // Customer orders (for customer profile)
+  app.get("/api/customers/:id/orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const customerOrders = await storage.getOrdersByCustomerId(Number(req.params.id), orgId);
+      res.json(customerOrders);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // Orders (owner & administrator only)
   app.get(api.orders.list.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const companyId = req.query.companyId ? Number(req.query.companyId) : undefined;
     const list = await storage.getOrders(getOrgId(req), companyId);
     res.json(list);
+  });
+
+  app.get("/api/orders/:id", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const order = await storage.getOrder(Number(req.params.id));
+      if (!order) {
+        return res.status(404).json({ message: "Заказ не найден" });
+      }
+      if (order.organizationId !== getOrgId(req)) {
+        return res.status(403).json({ message: "Нет доступа" });
+      }
+      res.json(order);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   app.post(api.orders.create.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {

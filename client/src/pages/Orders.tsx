@@ -24,12 +24,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store } from "lucide-react";
+import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useState, useMemo } from "react";
 import type { Product } from "@shared/schema";
+import { useLocation } from "wouter";
 
 interface DirectSaleItem {
   productId: number;
@@ -43,6 +44,7 @@ interface DirectSaleItem {
 export default function Orders() {
   const { data: orders, isLoading } = useOrders();
   const [isDirectSaleOpen, setIsDirectSaleOpen] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<any>(null);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -139,6 +141,7 @@ export default function Orders() {
                 getStatusColor={getStatusColor} 
                 getStatusLabel={getStatusLabel}
                 getSourceBadge={getSourceBadge}
+                onClick={() => setSelectedOrder(order)}
               />
             ))}
           </div>
@@ -149,20 +152,30 @@ export default function Orders() {
         open={isDirectSaleOpen}
         onOpenChange={setIsDirectSaleOpen}
       />
+
+      <OrderDetailDialog
+        order={selectedOrder}
+        open={!!selectedOrder}
+        onOpenChange={(v) => { if (!v) setSelectedOrder(null); }}
+        getStatusLabel={getStatusLabel}
+        getSourceBadge={getSourceBadge}
+        getStatusColor={getStatusColor}
+      />
     </Layout>
   );
 }
 
-function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge }: { 
+function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge, onClick }: { 
   order: any; 
   getStatusColor: (s: string) => string; 
   getStatusLabel: (s: string) => string;
   getSourceBadge: (s: string) => React.ReactNode;
+  onClick: () => void;
 }) {
   const { mutate: updateStatus, isPending } = useUpdateOrderStatus();
 
   return (
-    <Card className="kpi-card" data-testid={`order-card-${order.id}`}>
+    <Card className="kpi-card cursor-pointer hover-elevate" data-testid={`order-card-${order.id}`} onClick={onClick}>
       <CardContent className="py-5">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start gap-4">
@@ -188,7 +201,7 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge }: {
                 <div className="mt-3 flex flex-wrap gap-2">
                   {order.items.slice(0, 3).map((item: any) => (
                     <Badge key={item.id} variant="secondary" className="text-xs font-normal">
-                      {item.product?.name || "Товар"} × {item.quantity}
+                      {item.product?.name || "Товар"} x {item.quantity}
                     </Badge>
                   ))}
                   {order.items.length > 3 && (
@@ -205,29 +218,206 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge }: {
             <div className="text-right">
               <p className="text-2xl font-bold">{formatCurrency(Number(order.totalAmount))}</p>
             </div>
-            <Select 
-              defaultValue={order.status} 
-              onValueChange={(val) => updateStatus({ id: order.id, status: val })}
-              disabled={isPending}
-            >
-              <SelectTrigger 
-                className={`w-[150px] text-sm font-medium border ${getStatusColor(order.status)}`}
-                data-testid={`select-status-${order.id}`}
+            <div onClick={(e) => e.stopPropagation()}>
+              <Select 
+                defaultValue={order.status} 
+                onValueChange={(val) => updateStatus({ id: order.id, status: val })}
+                disabled={isPending}
               >
-                <SelectValue>{getStatusLabel(order.status)}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="pending">Новый</SelectItem>
-                <SelectItem value="processing">В обработке</SelectItem>
-                <SelectItem value="shipped">Отправлен</SelectItem>
-                <SelectItem value="completed">Завершён</SelectItem>
-                <SelectItem value="cancelled">Отменён</SelectItem>
-              </SelectContent>
-            </Select>
+                <SelectTrigger 
+                  className={`w-[150px] text-sm font-medium border ${getStatusColor(order.status)}`}
+                  data-testid={`select-status-${order.id}`}
+                >
+                  <SelectValue>{getStatusLabel(order.status)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Новый</SelectItem>
+                  <SelectItem value="processing">В обработке</SelectItem>
+                  <SelectItem value="shipped">Отправлен</SelectItem>
+                  <SelectItem value="completed">Завершён</SelectItem>
+                  <SelectItem value="cancelled">Отменён</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourceBadge, getStatusColor }: {
+  order: any;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  getStatusLabel: (s: string) => string;
+  getSourceBadge: (s: string) => React.ReactNode;
+  getStatusColor: (s: string) => string;
+}) {
+  const [, navigate] = useLocation();
+
+  if (!order) return null;
+
+  const getSourceLabel = (source: string) => {
+    switch (source) {
+      case "ozon": return "OZON";
+      case "wildberries": return "Wildberries";
+      case "yandex": return "Yandex Market";
+      case "direct": return "Прямая продажа";
+      default: return "Вручную";
+    }
+  };
+
+  const items = order.items || [];
+  const totalAmount = Number(order.totalAmount) || 0;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <FileText className="w-5 h-5" />
+            {order.orderNumber}
+          </DialogTitle>
+          <DialogDescription>
+            Детали заказа
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center gap-3">
+            {getSourceBadge(order.source)}
+            <Badge className={`${getStatusColor(order.status)}`}>
+              {getStatusLabel(order.status)}
+            </Badge>
+            <span className="text-sm text-muted-foreground flex items-center gap-1.5">
+              <Calendar className="w-4 h-4" />
+              {order.createdAt ? format(new Date(order.createdAt), "d MMMM yyyy, HH:mm", { locale: ru }) : "-"}
+            </span>
+          </div>
+
+          <div>
+            <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
+              <Package className="w-4 h-4" />
+              Товары
+            </h4>
+            {items.length > 0 ? (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Товар</TableHead>
+                      <TableHead>Артикул</TableHead>
+                      <TableHead className="text-center">Кол-во</TableHead>
+                      <TableHead className="text-right">Цена</TableHead>
+                      <TableHead className="text-right">Продажа</TableHead>
+                      <TableHead className="text-right">Сумма</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {items.map((item: any) => {
+                      const originalPrice = Number(item.originalPrice) || Number(item.price) || 0;
+                      const salePrice = Number(item.salePrice) || Number(item.price) || 0;
+                      const hasOverride = item.originalPrice && item.salePrice && Number(item.originalPrice) !== Number(item.salePrice);
+                      return (
+                        <TableRow key={item.id} data-testid={`row-order-item-${item.id}`}>
+                          <TableCell>
+                            <p className="font-medium text-sm">{item.product?.name || "Товар"}</p>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm text-muted-foreground">{item.product?.sku || "-"}</span>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {item.quantity}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {hasOverride ? (
+                              <span className="text-sm text-muted-foreground line-through">{formatCurrency(originalPrice)}</span>
+                            ) : (
+                              <span className="text-sm">{formatCurrency(originalPrice)}</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {hasOverride ? (
+                              <span className="text-sm font-medium">{formatCurrency(salePrice)}</span>
+                            ) : (
+                              <span className="text-sm text-muted-foreground">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-medium">
+                            {formatCurrency(salePrice * item.quantity)}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Нет позиций</p>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between p-4 bg-muted/50 rounded-md">
+            <span className="text-sm font-medium text-muted-foreground">Итого:</span>
+            <span className="text-2xl font-bold" data-testid="text-order-total">{formatCurrency(totalAmount)}</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                <User className="w-4 h-4" />
+                Покупатель
+              </h4>
+              {order.customer ? (
+                <Card>
+                  <CardContent className="py-3">
+                    <p className="font-medium" data-testid="text-order-customer-name">{order.customer.name}</p>
+                    {order.customer.phone && (
+                      <p className="text-sm text-muted-foreground flex items-center gap-1.5 mt-1">
+                        <Phone className="w-3.5 h-3.5" />
+                        {order.customer.phone}
+                      </p>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2"
+                      onClick={() => { onOpenChange(false); navigate("/customers"); }}
+                      data-testid="button-view-customer"
+                    >
+                      <Eye className="w-3.5 h-3.5 mr-1.5" />
+                      Профиль клиента
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <p className="text-sm text-muted-foreground" data-testid="text-order-customer-guest">Гость (без привязки)</p>
+              )}
+            </div>
+            <div>
+              <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                <Store className="w-4 h-4" />
+                Источник
+              </h4>
+              <p className="text-sm" data-testid="text-order-source">{getSourceLabel(order.source)}</p>
+              {order.notes && (
+                <div className="mt-3">
+                  <h4 className="text-sm font-medium mb-1">Примечание</h4>
+                  <p className="text-sm text-muted-foreground">{order.notes}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-close-order-detail">
+            Закрыть
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

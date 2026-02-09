@@ -66,6 +66,7 @@ export interface IStorage {
   // Orders
   getOrders(organizationId: string, companyId?: number): Promise<OrderWithDetails[]>;
   getOrder(id: number): Promise<OrderWithDetails | undefined>;
+  getOrdersByCustomerId(customerId: number, organizationId: string): Promise<OrderWithDetails[]>;
   createOrder(order: InsertOrder, items: { productId: number; quantity: number; price: number }[]): Promise<Order>;
   updateOrderStatus(id: number, status: string): Promise<Order>;
 
@@ -338,6 +339,24 @@ export class DatabaseStorage implements IStorage {
       customer: customer || null,
       items: itemsWithProducts
     };
+  }
+
+  async getOrdersByCustomerId(customerId: number, organizationId: string): Promise<OrderWithDetails[]> {
+    const ordersList = await db.select().from(orders)
+      .where(and(eq(orders.customerId, customerId), eq(orders.organizationId, organizationId)))
+      .orderBy(desc(orders.createdAt));
+
+    const detailedOrders: OrderWithDetails[] = [];
+    for (const order of ordersList) {
+      const customer = order.customerId ? await this.getCustomer(order.customerId) : null;
+      const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
+      const itemsWithProducts = await Promise.all(items.map(async (item) => {
+        const product = await this.getProduct(item.productId);
+        return { ...item, product: product || null };
+      }));
+      detailedOrders.push({ ...order, customer: customer || null, items: itemsWithProducts });
+    }
+    return detailedOrders;
   }
 
   async createOrder(orderData: InsertOrder, itemsData: { productId: number; quantity: number; price: number; originalPrice?: number; salePrice?: number }[]): Promise<Order> {

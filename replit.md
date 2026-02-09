@@ -172,6 +172,11 @@ shared/               # Shared between client/server
 - Settings schema includes fields for API keys and client IDs
 
 ## Recent Changes
+- **Order Detail Modal**: Clickable order cards open a detailed view showing items table (name, SKU, qty, original price, override price, line total), order total, customer info with profile link, source label, and status badge
+- **Customer Profile Modal**: Clickable customer cards open profile with contact info (name, phone, email, notes, registration date), stats (order count, total spent), and full order history table (order number, date, source, status, amount)
+- **Customer DB fix**: Direct sales now correctly invalidate customer cache so newly created customers appear immediately in the Клиенты list
+- **New API routes**: GET /api/orders/:id (with org validation), GET /api/customers/:id/orders (customer order history)
+- **Type safety fixes**: useOrders and useCustomers hooks now return properly typed arrays, removed broken responses[200] parsing
 - **Unified omnichannel warehouse**: Products belong to organization's central warehouse, `companyId` is optional/nullable. No company selector required for product creation or intake.
 - **Direct Sales (Прямая продажа / Самовывоз)**: Full direct sale flow with product search, customer select/create, price override. Backend at `/api/orders/direct` with atomic stock deduction + broadcast sync to all 6 stores. Audit-logged as "direct_sale".
 - **Orders page**: Direct sale dialog accessible via "Прямая продажа" button. New "direct" source badge (green, with Store icon).

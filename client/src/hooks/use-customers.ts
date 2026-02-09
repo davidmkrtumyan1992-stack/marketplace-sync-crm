@@ -1,16 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
-import { type InsertCustomer, type UpdateCustomerRequest } from "@shared/schema";
+import { type InsertCustomer, type Customer, type UpdateCustomerRequest } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 
 export function useCustomers() {
-  return useQuery({
+  return useQuery<Customer[]>({
     queryKey: [api.customers.list.path],
-    queryFn: async () => {
-      const res = await fetch(api.customers.list.path, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch customers");
-      return api.customers.list.responses[200].parse(await res.json());
-    },
   });
 }
 
@@ -26,15 +21,15 @@ export function useCreateCustomer() {
         body: JSON.stringify(data),
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to create customer");
-      return api.customers.create.responses[201].parse(await res.json());
+      if (!res.ok) throw new Error("Ошибка создания клиента");
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.customers.list.path] });
-      toast({ title: "Customer added", description: "Customer record created successfully" });
+      toast({ title: "Клиент добавлен" });
     },
     onError: (error: Error) => {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
     },
   });
 }
@@ -52,12 +47,12 @@ export function useUpdateCustomer() {
         body: JSON.stringify(data),
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to update customer");
-      return api.customers.update.responses[200].parse(await res.json());
+      if (!res.ok) throw new Error("Ошибка обновления клиента");
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.customers.list.path] });
-      toast({ title: "Customer updated", description: "Changes saved successfully" });
+      toast({ title: "Клиент обновлён" });
     },
   });
 }
