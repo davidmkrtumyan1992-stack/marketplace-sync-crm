@@ -523,13 +523,13 @@ export async function registerRoutes(
             if (mp.name && mp.name !== existing.name) {
               updates.name = mp.name;
             }
-            if (mp.barcode && !existing.barcode) {
+            if (mp.barcode) {
               updates.barcode = mp.barcode;
             }
-            if (mp.imageUrl && !existing.imageUrl) {
+            if (mp.imageUrl) {
               updates.imageUrl = mp.imageUrl;
             }
-            if (mp.category && !existing.category) {
+            if (mp.category) {
               updates.category = mp.category;
             }
             if (marketplace === "ozon" && mp.marketplaceId) updates.ozonId = mp.marketplaceId;

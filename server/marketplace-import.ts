@@ -63,15 +63,23 @@ export async function fetchOzonProducts(apiKey: string, clientId: string): Promi
 
     lastId = data?.result?.last_id || "";
     if (!lastId || items.length === 0) break;
+
+    await new Promise(r => setTimeout(r, 300));
   }
 
-  const products: NormalizedProduct[] = [];
+  console.log(`[Ozon Import] Step 1 complete: found ${allItems.length} product IDs`);
 
+  const products: NormalizedProduct[] = [];
   const BATCH = 100;
+
   for (let i = 0; i < allItems.length; i += BATCH) {
     const batch = allItems.slice(i, i + BATCH);
     const productIds = batch.map((item: any) => item.product_id).filter(Boolean);
     if (productIds.length === 0) continue;
+
+    if (i > 0) {
+      await new Promise(r => setTimeout(r, 500));
+    }
 
     let infoItems: any[] = [];
     try {
@@ -82,34 +90,68 @@ export async function fetchOzonProducts(apiKey: string, clientId: string): Promi
       });
       const infoData = await infoRes.json();
       infoItems = infoData?.result?.items || [];
-    } catch {
+    } catch (err: any) {
+      console.error(`[Ozon Import] Info batch ${i / BATCH + 1} failed: ${err.message}`);
       for (const item of batch) {
         products.push({
           name: item.offer_id || `Ozon-${item.product_id}`,
           sku: item.offer_id || String(item.product_id),
-          price: parseFloat(item.price || "0"),
-          stock: item.stocks?.present || 0,
+          price: 0,
+          stock: 0,
           marketplaceId: String(item.product_id),
         });
       }
       continue;
     }
 
+    console.log(`[Ozon Import] Step 2 batch ${i / BATCH + 1}: got info for ${infoItems.length} products`);
+
     for (const info of infoItems) {
-      const listItem = batch.find((b: any) => b.product_id === info.id);
+      let price = 0;
+      if (info.price && info.price !== "" && info.price !== "0") {
+        price = parseFloat(info.price);
+      } else if (info.old_price && info.old_price !== "" && info.old_price !== "0") {
+        price = parseFloat(info.old_price);
+      } else if (info.marketing_price && info.marketing_price !== "" && info.marketing_price !== "0") {
+        price = parseFloat(info.marketing_price);
+      } else if (info.min_ozon_price && info.min_ozon_price !== "" && info.min_ozon_price !== "0") {
+        price = parseFloat(info.min_ozon_price);
+      }
+      if (isNaN(price)) price = 0;
+
+      let stock = 0;
+      if (info.stocks && typeof info.stocks === "object") {
+        stock = info.stocks.present ?? info.stocks.coming ?? 0;
+      }
+
+      let imageUrl: string | undefined;
+      if (Array.isArray(info.images) && info.images.length > 0) {
+        imageUrl = info.images[0];
+      } else if (info.primary_image) {
+        imageUrl = info.primary_image;
+      }
+
+      let barcode: string | undefined;
+      if (info.barcode && info.barcode !== "") {
+        barcode = info.barcode;
+      } else if (Array.isArray(info.barcodes) && info.barcodes.length > 0) {
+        barcode = info.barcodes[0];
+      }
+
       products.push({
         name: info.name || info.offer_id || `Ozon-${info.id}`,
         sku: info.offer_id || String(info.id),
-        barcode: info.barcode || info.barcodes?.[0] || undefined,
+        barcode,
         category: info.category_id ? String(info.category_id) : undefined,
-        price: parseFloat(info.price || listItem?.price || "0"),
-        stock: listItem?.stocks?.present ?? info.stocks?.present ?? 0,
+        price,
+        stock,
         marketplaceId: String(info.id),
-        imageUrl: info.primary_image || info.images?.[0] || undefined,
+        imageUrl,
       });
     }
   }
 
+  console.log(`[Ozon Import] Complete: ${products.length} products with prices/stock/images`);
   return products;
 }
 
