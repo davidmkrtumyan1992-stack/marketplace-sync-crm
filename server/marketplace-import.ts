@@ -31,15 +31,17 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 2): P
   throw new Error("Превышено количество попыток запроса");
 }
 
-export async function fetchOzonProducts(apiKey: string, clientId: string): Promise<NormalizedProduct[]> {
-  const BASE = "https://api-seller.ozon.ru";
-  const cleanClientId = String(parseInt(clientId.trim(), 10));
-  const cleanApiKey = apiKey.trim();
-  const headers: HeadersInit = {
-    "Client-Id": cleanClientId,
-    "Api-Key": cleanApiKey,
+function buildOzonHeaders(apiKey: string, clientId: string): HeadersInit {
+  return {
+    "Client-Id": String(parseInt(clientId.trim(), 10)),
+    "Api-Key": apiKey.trim(),
     "Content-Type": "application/json",
   };
+}
+
+export async function fetchOzonProducts(apiKey: string, clientId: string): Promise<NormalizedProduct[]> {
+  const BASE = "https://api-seller.ozon.ru";
+  const headers = buildOzonHeaders(apiKey, clientId);
 
   const allItems: any[] = [];
   let lastId = "";
@@ -74,8 +76,8 @@ export async function fetchOzonProducts(apiKey: string, clientId: string): Promi
 
   for (let i = 0; i < allItems.length; i += BATCH) {
     const batch = allItems.slice(i, i + BATCH);
-    const productIds = batch.map((item: any) => item.product_id).filter(Boolean);
-    if (productIds.length === 0) continue;
+    const offerIds = batch.map((item: any) => item.offer_id).filter(Boolean);
+    if (offerIds.length === 0) continue;
 
     if (i > 0) {
       await new Promise(r => setTimeout(r, 500));
@@ -86,10 +88,25 @@ export async function fetchOzonProducts(apiKey: string, clientId: string): Promi
       const infoRes = await fetchWithRetry(`${BASE}/v2/product/info/list`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ product_id: productIds }),
+        body: JSON.stringify({ offer_id: offerIds }),
       });
       const infoData = await infoRes.json();
       infoItems = infoData?.result?.items || [];
+      if (i === 0) {
+        const sample = infoItems[0];
+        if (sample) {
+          console.log(`[Ozon Import] Sample info keys: ${Object.keys(sample).join(", ")}`);
+          console.log(`[Ozon Import] Sample price: "${sample.price}", old_price: "${sample.old_price}", marketing_price: "${sample.marketing_price}"`);
+          console.log(`[Ozon Import] Sample stocks: ${JSON.stringify(sample.stocks)}`);
+          console.log(`[Ozon Import] Sample images: ${JSON.stringify((sample.images || []).slice(0, 2))}`);
+          console.log(`[Ozon Import] Sample primary_image: "${sample.primary_image}"`);
+          console.log(`[Ozon Import] Sample name: "${sample.name}", offer_id: "${sample.offer_id}"`);
+        } else {
+          console.log(`[Ozon Import] WARNING: info response has 0 items for first batch of ${offerIds.length} offer_ids`);
+          console.log(`[Ozon Import] Raw response keys: ${JSON.stringify(Object.keys(infoData || {}))}`);
+          console.log(`[Ozon Import] Result keys: ${JSON.stringify(Object.keys(infoData?.result || {}))}`);
+        }
+      }
     } catch (err: any) {
       console.error(`[Ozon Import] Info batch ${i / BATCH + 1} failed: ${err.message}`);
       for (const item of batch) {
@@ -104,50 +121,24 @@ export async function fetchOzonProducts(apiKey: string, clientId: string): Promi
       continue;
     }
 
-    console.log(`[Ozon Import] Step 2 batch ${i / BATCH + 1}: got info for ${infoItems.length} products`);
+    console.log(`[Ozon Import] Step 2 batch ${i / BATCH + 1}: got info for ${infoItems.length} products (requested ${offerIds.length})`);
 
     for (const info of infoItems) {
-      let price = 0;
-      if (info.price && info.price !== "" && info.price !== "0") {
-        price = parseFloat(info.price);
-      } else if (info.old_price && info.old_price !== "" && info.old_price !== "0") {
-        price = parseFloat(info.old_price);
-      } else if (info.marketing_price && info.marketing_price !== "" && info.marketing_price !== "0") {
-        price = parseFloat(info.marketing_price);
-      } else if (info.min_ozon_price && info.min_ozon_price !== "" && info.min_ozon_price !== "0") {
-        price = parseFloat(info.min_ozon_price);
-      }
-      if (isNaN(price)) price = 0;
+      const np = parseOzonInfoItem(info);
+      products.push(np);
+    }
 
-      let stock = 0;
-      if (info.stocks && typeof info.stocks === "object") {
-        stock = info.stocks.present ?? info.stocks.coming ?? 0;
+    const infoOfferIds = new Set(infoItems.map((item: any) => item.offer_id));
+    for (const item of batch) {
+      if (!infoOfferIds.has(item.offer_id)) {
+        products.push({
+          name: item.offer_id || `Ozon-${item.product_id}`,
+          sku: item.offer_id || String(item.product_id),
+          price: 0,
+          stock: 0,
+          marketplaceId: String(item.product_id),
+        });
       }
-
-      let imageUrl: string | undefined;
-      if (Array.isArray(info.images) && info.images.length > 0) {
-        imageUrl = info.images[0];
-      } else if (info.primary_image) {
-        imageUrl = info.primary_image;
-      }
-
-      let barcode: string | undefined;
-      if (info.barcode && info.barcode !== "") {
-        barcode = info.barcode;
-      } else if (Array.isArray(info.barcodes) && info.barcodes.length > 0) {
-        barcode = info.barcodes[0];
-      }
-
-      products.push({
-        name: info.name || info.offer_id || `Ozon-${info.id}`,
-        sku: info.offer_id || String(info.id),
-        barcode,
-        category: info.category_id ? String(info.category_id) : undefined,
-        price,
-        stock,
-        marketplaceId: String(info.id),
-        imageUrl,
-      });
     }
   }
 
@@ -172,28 +163,34 @@ export async function fetchOzonProducts(apiKey: string, clientId: string): Promi
       });
       const stockData = await stockRes.json();
       const stockItems = stockData?.result?.items || [];
+      if (i === 0 && stockItems[0]) {
+        console.log(`[Ozon Import] Sample stock item: ${JSON.stringify(stockItems[0])}`);
+      }
       for (const si of stockItems) {
-        const pid = String(si.product_id);
-        let totalFbo = 0;
-        let totalFbs = 0;
+        const offerId = si.offer_id || "";
+        let total = 0;
         if (Array.isArray(si.stocks)) {
           for (const s of si.stocks) {
-            if (s.type === "fbo") totalFbo += s.present || 0;
-            else if (s.type === "fbs") totalFbs += s.present || 0;
+            total += s.present || 0;
           }
         }
-        stockMap.set(pid, totalFbo + totalFbs);
+        if (offerId) stockMap.set(offerId, total);
+        stockMap.set(String(si.product_id), total);
       }
     } catch (err: any) {
       console.error(`[Ozon Import] Stock batch ${i / STOCK_BATCH + 1} failed: ${err.message}`);
     }
   }
 
-  console.log(`[Ozon Import] Step 3 complete: got stock for ${stockMap.size} products`);
+  console.log(`[Ozon Import] Step 3 complete: got stock for ${stockMap.size} entries`);
 
   for (const p of products) {
-    if (p.marketplaceId && stockMap.has(p.marketplaceId)) {
-      p.stock = stockMap.get(p.marketplaceId)!;
+    const stockBySku = stockMap.get(p.sku);
+    const stockByMpId = p.marketplaceId ? stockMap.get(p.marketplaceId) : undefined;
+    if (stockBySku !== undefined) {
+      p.stock = stockBySku;
+    } else if (stockByMpId !== undefined) {
+      p.stock = stockByMpId;
     }
   }
 
@@ -203,6 +200,152 @@ export async function fetchOzonProducts(apiKey: string, clientId: string): Promi
   console.log(`[Ozon Import] Final: ${products.length} products — ${withImages} with images, ${withPrice} with price, ${withStock} with stock`);
 
   return products;
+}
+
+function parseOzonInfoItem(info: any): NormalizedProduct {
+  let price = 0;
+  if (info.price && info.price !== "" && info.price !== "0") {
+    price = parseFloat(info.price);
+  } else if (info.old_price && info.old_price !== "" && info.old_price !== "0") {
+    price = parseFloat(info.old_price);
+  } else if (info.marketing_price && info.marketing_price !== "" && info.marketing_price !== "0") {
+    price = parseFloat(info.marketing_price);
+  } else if (info.min_ozon_price && info.min_ozon_price !== "" && info.min_ozon_price !== "0") {
+    price = parseFloat(info.min_ozon_price);
+  }
+  if (isNaN(price)) price = 0;
+
+  let stock = 0;
+  if (info.stocks && typeof info.stocks === "object" && !Array.isArray(info.stocks)) {
+    stock = info.stocks.present ?? info.stocks.coming ?? 0;
+  }
+
+  let imageUrl: string | undefined;
+  if (typeof info.primary_image === "string" && info.primary_image.length > 0) {
+    imageUrl = info.primary_image;
+  } else if (Array.isArray(info.images) && info.images.length > 0) {
+    imageUrl = info.images[0];
+  }
+
+  let barcode: string | undefined;
+  if (info.barcode && info.barcode !== "") {
+    barcode = info.barcode;
+  } else if (Array.isArray(info.barcodes) && info.barcodes.length > 0) {
+    barcode = info.barcodes[0];
+  }
+
+  return {
+    name: info.name || info.offer_id || `Ozon-${info.id}`,
+    sku: info.offer_id || String(info.id),
+    barcode,
+    category: info.category_id ? String(info.category_id) : undefined,
+    price,
+    stock,
+    marketplaceId: String(info.id),
+    imageUrl,
+  };
+}
+
+export async function enrichOzonProducts(
+  apiKey: string,
+  clientId: string,
+  productsToEnrich: Array<{ id: number; sku: string; ozonId: string }>
+): Promise<{ updated: number; failed: number; errors: string[] }> {
+  const BASE = "https://api-seller.ozon.ru";
+  const headers = buildOzonHeaders(apiKey, clientId);
+
+  let updated = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  const updates: Array<{ dbId: number; data: NormalizedProduct }> = [];
+
+  const BATCH = 50;
+  for (let i = 0; i < productsToEnrich.length; i += BATCH) {
+    const batch = productsToEnrich.slice(i, i + BATCH);
+    const offerIds = batch.map(p => p.sku);
+
+    if (i > 0) {
+      await new Promise(r => setTimeout(r, 600));
+    }
+
+    try {
+      const infoRes = await fetchWithRetry(`${BASE}/v2/product/info/list`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ offer_id: offerIds }),
+      });
+      const infoData = await infoRes.json();
+      const infoItems: any[] = infoData?.result?.items || [];
+
+      if (i === 0 && infoItems[0]) {
+        console.log(`[Ozon Enrich] Sample: name="${infoItems[0].name}", price="${infoItems[0].price}", images=${JSON.stringify((infoItems[0].images || []).slice(0, 1))}, primary_image="${infoItems[0].primary_image}", stocks=${JSON.stringify(infoItems[0].stocks)}`);
+      }
+
+      const infoMap = new Map<string, any>();
+      for (const item of infoItems) {
+        if (item.offer_id) infoMap.set(item.offer_id, item);
+      }
+
+      for (const p of batch) {
+        const info = infoMap.get(p.sku);
+        if (info) {
+          updates.push({ dbId: p.id, data: parseOzonInfoItem(info) });
+        }
+      }
+    } catch (err: any) {
+      console.error(`[Ozon Enrich] Info batch ${i / BATCH + 1} failed: ${err.message}`);
+      failed += batch.length;
+      if (errors.length < 10) errors.push(`Batch ${i / BATCH + 1}: ${err.message}`);
+    }
+
+    console.log(`[Ozon Enrich] Info batch ${i / BATCH + 1}/${Math.ceil(productsToEnrich.length / BATCH)}: ${updates.length} enriched so far`);
+  }
+
+  const productIds = productsToEnrich.map(p => parseInt(p.ozonId)).filter(n => !isNaN(n));
+  const stockMap = new Map<string, number>();
+
+  for (let i = 0; i < productIds.length; i += BATCH) {
+    const batchIds = productIds.slice(i, i + BATCH);
+    if (i > 0) await new Promise(r => setTimeout(r, 600));
+
+    try {
+      const stockRes = await fetchWithRetry(`${BASE}/v1/product/info/stocks`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ product_id: batchIds }),
+      });
+      const stockData = await stockRes.json();
+      const stockItems: any[] = stockData?.result?.items || [];
+
+      if (i === 0 && stockItems[0]) {
+        console.log(`[Ozon Enrich] Stock sample: ${JSON.stringify(stockItems[0])}`);
+      }
+
+      for (const si of stockItems) {
+        let total = 0;
+        if (Array.isArray(si.stocks)) {
+          for (const s of si.stocks) {
+            total += s.present || 0;
+          }
+        }
+        if (si.offer_id) stockMap.set(si.offer_id, total);
+        stockMap.set(String(si.product_id), total);
+      }
+    } catch (err: any) {
+      console.error(`[Ozon Enrich] Stock batch failed: ${err.message}`);
+    }
+  }
+
+  console.log(`[Ozon Enrich] Got stock data for ${stockMap.size} products`);
+
+  for (const u of updates) {
+    const stockBySku = stockMap.get(u.data.sku);
+    const stockByMpId = u.data.marketplaceId ? stockMap.get(u.data.marketplaceId) : undefined;
+    if (stockBySku !== undefined) u.data.stock = stockBySku;
+    else if (stockByMpId !== undefined) u.data.stock = stockByMpId;
+  }
+
+  return { updated: updates.length, failed, errors, updates } as any;
 }
 
 export async function fetchWildberriesProducts(apiToken: string): Promise<NormalizedProduct[]> {

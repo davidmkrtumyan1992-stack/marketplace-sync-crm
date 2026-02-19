@@ -25,6 +25,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
   Select,
@@ -112,6 +113,35 @@ export default function Products() {
     },
   });
 
+  const enrichMutation = useMutation({
+    mutationFn: async () => {
+      setImportingMarketplace("enrich");
+      const res = await apiRequest("POST", "/api/marketplace/enrich/ozon");
+      return await res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({
+        title: "Обогащение товаров завершено",
+        description: `Обновлено ${formatQuantity(data.enriched)} из ${formatQuantity(data.total)} товаров (фото, цены, остатки)`,
+      });
+      setImportingMarketplace(null);
+    },
+    onError: (error: Error) => {
+      let msg = error.message;
+      try {
+        const parsed = JSON.parse(msg.replace(/^\d+:\s*/, ""));
+        msg = parsed.message || msg;
+      } catch {}
+      toast({
+        title: "Ошибка обогащения",
+        description: msg,
+        variant: "destructive",
+      });
+      setImportingMarketplace(null);
+    },
+  });
+
   const filteredProducts = products?.filter((p: any) => 
     p.name.toLowerCase().includes(search.toLowerCase()) || 
     p.sku.toLowerCase().includes(search.toLowerCase())
@@ -128,13 +158,15 @@ export default function Products() {
           <div className="flex flex-wrap gap-2">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="lg" disabled={importMutation.isPending} data-testid="button-import-marketplace">
-                  {importMutation.isPending ? (
+                <Button variant="outline" size="lg" disabled={importMutation.isPending || enrichMutation.isPending} data-testid="button-import-marketplace">
+                  {(importMutation.isPending || enrichMutation.isPending) ? (
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   ) : (
                     <Download className="w-4 h-4 mr-2" />
                   )}
-                  {importMutation.isPending
+                  {enrichMutation.isPending
+                    ? "Обогащение из Ozon..."
+                    : importMutation.isPending
                     ? `Импорт из «${importingMarketplace === "ozon" ? "Ozon" : importingMarketplace === "wildberries" ? "Wildberries" : "Yandex Market"}»...`
                     : "Импорт из маркетплейсов"}
                 </Button>
@@ -163,6 +195,15 @@ export default function Products() {
                 >
                   <Package className="w-4 h-4 mr-2" />
                   Загрузить из Yandex Market
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => enrichMutation.mutate()}
+                  disabled={enrichMutation.isPending || importMutation.isPending}
+                  data-testid="button-enrich-ozon"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Обогатить из Ozon (фото, цены)
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
-import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts } from "./marketplace-import";
+import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts } from "./marketplace-import";
 import { api } from "@shared/routes";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { z } from "zod";
@@ -596,6 +596,80 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Marketplace import error:", error);
       res.status(500).json({ message: "Ошибка импорта товаров" });
+    }
+  });
+
+  // Enrich existing Ozon products with images/prices/stock
+  app.post("/api/marketplace/enrich/ozon", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const setting = allSettings.find(s => s.marketplace === "ozon" && s.isActive);
+      if (!setting || !setting.apiKey || !setting.clientId) {
+        return res.status(400).json({ message: "API-ключ Ozon не настроен" });
+      }
+
+      const allProducts = await storage.getProducts(orgId);
+      const toEnrich = allProducts
+        .filter(p => p.ozonId)
+        .map(p => ({ id: p.id, sku: p.sku, ozonId: p.ozonId! }));
+
+      if (toEnrich.length === 0) {
+        return res.json({ success: true, message: "Нет товаров для обогащения", updated: 0 });
+      }
+
+      console.log(`[Ozon Enrich] Starting enrichment for ${toEnrich.length} products`);
+
+      const result = await enrichOzonProducts(setting.apiKey, setting.clientId, toEnrich);
+      const enrichUpdates = (result as any).updates as Array<{ dbId: number; data: any }> || [];
+
+      let dbUpdated = 0;
+      for (const u of enrichUpdates) {
+        try {
+          const updateData: any = {};
+          if (u.data.name) updateData.name = u.data.name;
+          if (u.data.imageUrl) updateData.imageUrl = u.data.imageUrl;
+          if (u.data.price !== undefined && u.data.price !== null) {
+            updateData.sellingPrice = String(u.data.price);
+            updateData.price = String(u.data.price);
+          }
+          if (u.data.stock !== undefined && u.data.stock !== null) {
+            updateData.centralStock = u.data.stock;
+          }
+          if (u.data.barcode) updateData.barcode = u.data.barcode;
+          if (u.data.category) updateData.category = u.data.category;
+
+          if (Object.keys(updateData).length > 0) {
+            await storage.updateProduct(u.dbId, updateData);
+            dbUpdated++;
+          }
+        } catch (err: any) {
+          console.error(`[Ozon Enrich] Failed to update product ${u.dbId}: ${err.message}`);
+        }
+      }
+
+      const { userId, userName } = getUserInfo(req);
+      await storage.createAuditLog({
+        organizationId: orgId,
+        userId,
+        userName,
+        action: "ozon_enrich",
+        entityType: "product",
+        details: `Обогащение товаров из Ozon: обновлено ${dbUpdated} из ${toEnrich.length}`,
+      });
+
+      console.log(`[Ozon Enrich] Complete: ${dbUpdated} products updated in DB`);
+
+      res.json({
+        success: true,
+        total: toEnrich.length,
+        enriched: dbUpdated,
+        failed: result.failed,
+        errors: result.errors.length > 0 ? result.errors : undefined,
+      });
+    } catch (error: any) {
+      console.error("Ozon enrich error:", error);
+      res.status(500).json({ message: `Ошибка обогащения: ${error.message}` });
     }
   });
 
