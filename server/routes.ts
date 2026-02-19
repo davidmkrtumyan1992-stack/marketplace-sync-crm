@@ -623,10 +623,7 @@ export async function registerRoutes(
       const result = await enrichOzonProducts(setting.apiKey, setting.clientId, toEnrich);
       const enrichUpdates = result.updates || [];
 
-      console.log(`[Ozon Enrich Route] Got ${enrichUpdates.length} updates from enrichOzonProducts`);
-
       let dbUpdated = 0;
-      let dbSkipped = 0;
       for (const u of enrichUpdates) {
         try {
           const updateData: any = {};
@@ -636,31 +633,22 @@ export async function registerRoutes(
             updateData.sellingPrice = String(u.data.price);
             updateData.price = String(u.data.price);
           }
-          if (u.data.stock > 0) {
+          if (u.data.stock !== undefined && u.data.stock !== null) {
             updateData.centralStock = u.data.stock;
           }
           if (u.data.barcode && u.data.barcode.length > 0) updateData.barcode = u.data.barcode;
           if (u.data.category && u.data.category.length > 0) updateData.category = u.data.category;
 
           if (Object.keys(updateData).length > 0) {
-            if (dbUpdated < 3) {
-              console.log(`[Ozon Enrich Route] DB UPDATE #${dbUpdated + 1} for product id=${u.dbId}: ${JSON.stringify(updateData).slice(0, 500)}`);
-            }
             await storage.updateProduct(u.dbId, updateData);
             dbUpdated++;
-          } else {
-            dbSkipped++;
-            if (dbSkipped <= 3) {
-              console.log(`[Ozon Enrich Route] SKIPPED product id=${u.dbId} — all fields empty/zero. Raw data: name="${u.data.name}", price=${u.data.price}, imageUrl="${u.data.imageUrl}", stock=${u.data.stock}`);
-            }
           }
         } catch (err: any) {
-          console.error(`[Ozon Enrich Route] DB UPDATE FAILED for product ${u.dbId}: ${err.message}`);
-          console.error(`[Ozon Enrich Route] Failed data: ${JSON.stringify(u.data).slice(0, 300)}`);
+          console.error(`[Ozon Enrich] DB update failed for product ${u.dbId}: ${err.message}`);
         }
       }
 
-      console.log(`[Ozon Enrich Route] DB results: ${dbUpdated} updated, ${dbSkipped} skipped (empty data)`);
+      console.log(`[Ozon Enrich] DB updated: ${dbUpdated}/${enrichUpdates.length} products`);
 
       const { userId, userName } = getUserInfo(req);
       await storage.createAuditLog({
