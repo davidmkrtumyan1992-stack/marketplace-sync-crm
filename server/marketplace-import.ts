@@ -151,7 +151,57 @@ export async function fetchOzonProducts(apiKey: string, clientId: string): Promi
     }
   }
 
-  console.log(`[Ozon Import] Complete: ${products.length} products with prices/stock/images`);
+  console.log(`[Ozon Import] Step 2 complete: ${products.length} products with info`);
+
+  const stockMap = new Map<string, number>();
+  const STOCK_BATCH = 100;
+  for (let i = 0; i < allItems.length; i += STOCK_BATCH) {
+    const batch = allItems.slice(i, i + STOCK_BATCH);
+    const productIds = batch.map((item: any) => item.product_id).filter(Boolean);
+    if (productIds.length === 0) continue;
+
+    if (i > 0) {
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    try {
+      const stockRes = await fetchWithRetry(`${BASE}/v1/product/info/stocks`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ product_id: productIds }),
+      });
+      const stockData = await stockRes.json();
+      const stockItems = stockData?.result?.items || [];
+      for (const si of stockItems) {
+        const pid = String(si.product_id);
+        let totalFbo = 0;
+        let totalFbs = 0;
+        if (Array.isArray(si.stocks)) {
+          for (const s of si.stocks) {
+            if (s.type === "fbo") totalFbo += s.present || 0;
+            else if (s.type === "fbs") totalFbs += s.present || 0;
+          }
+        }
+        stockMap.set(pid, totalFbo + totalFbs);
+      }
+    } catch (err: any) {
+      console.error(`[Ozon Import] Stock batch ${i / STOCK_BATCH + 1} failed: ${err.message}`);
+    }
+  }
+
+  console.log(`[Ozon Import] Step 3 complete: got stock for ${stockMap.size} products`);
+
+  for (const p of products) {
+    if (p.marketplaceId && stockMap.has(p.marketplaceId)) {
+      p.stock = stockMap.get(p.marketplaceId)!;
+    }
+  }
+
+  const withImages = products.filter(p => p.imageUrl).length;
+  const withPrice = products.filter(p => p.price > 0).length;
+  const withStock = products.filter(p => p.stock > 0).length;
+  console.log(`[Ozon Import] Final: ${products.length} products — ${withImages} with images, ${withPrice} with price, ${withStock} with stock`);
+
   return products;
 }
 
