@@ -718,6 +718,9 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
   const [isSaving, setIsSaving] = useState(false);
 
   const hasOzon = !!product.ozonId;
+  const hasWb = !!product.wbId;
+  const hasMarketplace = hasOzon || hasWb;
+  const marketplaceNames = [hasOzon && "Ozon", hasWb && "Wildberries"].filter(Boolean).join(", ");
   const hasChanges = editName !== product.name ||
     editBarcode !== (product.barcode || "") ||
     editPrice !== Number(product.sellingPrice || product.price || 0) ||
@@ -726,7 +729,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
 
   const handleSaveClick = () => {
     if (!hasChanges) return;
-    if (hasOzon) {
+    if (hasMarketplace) {
       setShowConfirm(true);
     } else {
       doSave();
@@ -744,10 +747,10 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
         category: editCategory || null,
       };
 
-      const endpoint = hasOzon
+      const endpoint = hasMarketplace
         ? `/api/products/${product.id}/sync-to-marketplace`
         : `/api/products/${product.id}`;
-      const method = hasOzon ? "POST" : "PUT";
+      const method = hasMarketplace ? "POST" : "PUT";
 
       const res = await apiRequest(method, endpoint, body);
 
@@ -764,7 +767,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
       }
 
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({ title: "Сохранено", description: "Товар обновлён" + (hasOzon ? " и синхронизирован с маркетплейсом" : "") });
+      toast({ title: "Сохранено", description: "Товар обновлён" + (hasMarketplace ? ` и синхронизирован с ${marketplaceNames}` : "") });
       onClose();
     } catch (err: any) {
       toast({
@@ -820,6 +823,12 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
                   <div className="flex items-center gap-2">
                     <Badge className="text-white no-default-hover-elevate" style={{ backgroundColor: "#005BFF" }}>Ozon</Badge>
                     {product.ozonId && <span className="text-xs text-muted-foreground">ID: {product.ozonId}</span>}
+                  </div>
+                )}
+                {hasWb && (
+                  <div className="flex items-center gap-2">
+                    <Badge className="text-white no-default-hover-elevate" style={{ backgroundColor: "#CB11AB" }}>Wildberries</Badge>
+                    {product.wbId && <span className="text-xs text-muted-foreground">nmID: {product.wbId}</span>}
                   </div>
                 )}
                 <div className="flex items-center gap-4 text-sm">
@@ -892,11 +901,11 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
               )}
             </div>
 
-            {hasOzon && hasChanges && (
+            {hasMarketplace && hasChanges && (
               <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
                 <p className="text-xs text-amber-800 dark:text-amber-200">
-                  Изменения будут применены во всех подключённых магазинах (Ozon)
+                  Изменения будут применены во всех подключённых магазинах ({marketplaceNames})
                 </p>
               </div>
             )}
@@ -931,7 +940,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
               Подтверждение синхронизации
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Внимание: изменения будут применены во всех подключённых магазинах. Цена, название и атрибуты товара будут обновлены на маркетплейсе Ozon. Продолжить?
+              Внимание: изменения будут применены во всех подключённых магазинах. Цена, название и атрибуты товара будут обновлены на маркетплейсе {marketplaceNames}. Продолжить?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -958,7 +967,11 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick }: 
             {product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover rounded" /> : <Package size={20} />}
           </div>
           <div>
-            <span className="block">{product.name}</span>
+            <div className="flex items-center gap-1.5">
+              <span className="block">{product.name}</span>
+              {product.ozonId && <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#005BFF" }} title="Ozon" />}
+              {product.wbId && <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#CB11AB" }} title="Wildberries" />}
+            </div>
             {product.category && <span className="text-xs text-muted-foreground">{product.category}</span>}
           </div>
         </div>

@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
-import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, syncProductToOzon } from "./marketplace-import";
+import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, syncProductToOzon, syncProductToWb } from "./marketplace-import";
 import { api } from "@shared/routes";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { z } from "zod";
@@ -478,7 +478,7 @@ export async function registerRoutes(
           }
           fetchedProducts = await fetchOzonProducts(setting.apiKey, setting.clientId);
         } else if (marketplace === "wildberries") {
-          fetchedProducts = await fetchWildberriesProducts(setting.apiKey);
+          fetchedProducts = await fetchWildberriesProducts(setting.apiKey, setting.warehouseId || undefined);
         } else {
           if (!setting.clientId || !setting.warehouseId) {
             return res.status(400).json({ message: "OAuth Client-Id или Business-Id для Yandex Market не указан в настройках" });
@@ -684,10 +684,10 @@ export async function registerRoutes(
       if (product.organizationId !== orgId) return res.status(403).json({ message: "Доступ запрещён" });
 
       const { name, barcode, sellingPrice, category } = req.body;
-      const syncResults: any = { ozon: null, errors: [] };
+      const syncResults: any = { ozon: null, wb: null, errors: [] };
+      const allSettings = await storage.getMarketplaceSettings(orgId);
 
       if (product.ozonId) {
-        const allSettings = await storage.getMarketplaceSettings(orgId);
         const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.isActive);
 
         if (ozonSetting && ozonSetting.apiKey && ozonSetting.clientId) {
@@ -716,6 +716,35 @@ export async function registerRoutes(
 
             if (ozonResult.errors.length > 0) {
               syncResults.errors.push(...ozonResult.errors);
+            }
+          }
+        }
+      }
+
+      if (product.wbId) {
+        const wbSetting = allSettings.find(s => s.marketplace === "wildberries" && s.isActive);
+
+        if (wbSetting && wbSetting.apiKey) {
+          const wbUpdates: any = {};
+
+          if (sellingPrice !== undefined) {
+            const newPrice = Number(sellingPrice);
+            const oldPrice = Number(product.sellingPrice) || 0;
+            if (newPrice !== oldPrice) {
+              wbUpdates.sellingPrice = newPrice;
+            }
+          }
+
+          if (Object.keys(wbUpdates).length > 0) {
+            const wbResult = await syncProductToWb(
+              wbSetting.apiKey,
+              product.wbId,
+              wbUpdates
+            );
+            syncResults.wb = wbResult;
+
+            if (wbResult.errors.length > 0) {
+              syncResults.errors.push(...wbResult.errors);
             }
           }
         }

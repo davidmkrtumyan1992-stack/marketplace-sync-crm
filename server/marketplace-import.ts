@@ -260,14 +260,45 @@ export async function enrichOzonProducts(
   return { updated: updates.length, failed, errors, updates };
 }
 
-export async function fetchWildberriesProducts(apiToken: string): Promise<NormalizedProduct[]> {
-  const CONTENT_BASE = "https://content-api.wildberries.ru";
-  const STATS_BASE = "https://statistics-api.wildberries.ru";
-  const headers: HeadersInit = {
-    "Authorization": apiToken.startsWith("Bearer ") ? apiToken : `Bearer ${apiToken}`,
+function buildWbHeaders(apiToken: string): HeadersInit {
+  return {
+    "Authorization": apiToken.startsWith("Bearer ") ? apiToken : apiToken,
     "Content-Type": "application/json",
   };
+}
 
+function buildWbCdnImageUrl(nmId: number | string): string {
+  const id = typeof nmId === "string" ? parseInt(nmId, 10) : nmId;
+  if (isNaN(id) || id <= 0) return "";
+  const vol = Math.floor(id / 100000);
+  const part = Math.floor(id / 1000);
+  let basket: number;
+  if (vol >= 0 && vol <= 143) basket = 1;
+  else if (vol <= 287) basket = 2;
+  else if (vol <= 431) basket = 3;
+  else if (vol <= 719) basket = 4;
+  else if (vol <= 1007) basket = 5;
+  else if (vol <= 1061) basket = 6;
+  else if (vol <= 1115) basket = 7;
+  else if (vol <= 1169) basket = 8;
+  else if (vol <= 1313) basket = 9;
+  else if (vol <= 1601) basket = 10;
+  else if (vol <= 1655) basket = 11;
+  else if (vol <= 1919) basket = 12;
+  else if (vol <= 2045) basket = 13;
+  else if (vol <= 2189) basket = 14;
+  else if (vol <= 2405) basket = 15;
+  else if (vol <= 2621) basket = 16;
+  else if (vol <= 2837) basket = 17;
+  else basket = 18;
+  return `https://basket-${String(basket).padStart(2, "0")}.wbbasket.ru/vol${vol}/part${part}/${id}/images/c516x688/1.webp`;
+}
+
+export async function fetchWildberriesProducts(apiToken: string, warehouseId?: string): Promise<NormalizedProduct[]> {
+  const CONTENT_BASE = "https://content-api.wildberries.ru";
+  const headers = buildWbHeaders(apiToken);
+
+  console.log(`[WB Import] Step 1: Fetching product cards...`);
   const allCards: any[] = [];
   let cursor: any = { limit: 100 };
 
@@ -297,27 +328,100 @@ export async function fetchWildberriesProducts(apiToken: string): Promise<Normal
       updatedAt: nextCursor.updatedAt,
       nmID: nextCursor.nmID,
     };
+
+    await new Promise(r => setTimeout(r, 300));
   }
 
-  let stockMap = new Map<string, number>();
+  console.log(`[WB Import] Step 1 complete: ${allCards.length} cards fetched`);
+
+  const nmIds = allCards.map((c: any) => c.nmID || c.nmId).filter(Boolean);
+
+  console.log(`[WB Import] Step 2: Fetching prices for ${nmIds.length} products...`);
+  const priceMap = new Map<string, number>();
   try {
-    const dateFrom = new Date();
-    dateFrom.setDate(dateFrom.getDate() - 1);
-    const stockRes = await fetchWithRetry(
-      `${STATS_BASE}/api/v1/supplier/stocks?dateFrom=${dateFrom.toISOString().split("T")[0]}`,
-      { method: "GET", headers }
-    );
-    const stockData = await stockRes.json();
-    if (Array.isArray(stockData)) {
-      for (const item of stockData) {
-        const key = String(item.nmId || item.nmID);
-        stockMap.set(key, (stockMap.get(key) || 0) + (item.quantity || 0));
+    const BATCH_SIZE = 1000;
+    for (let i = 0; i < nmIds.length; i += BATCH_SIZE) {
+      const batchNmIds = nmIds.slice(i, i + BATCH_SIZE);
+      const priceRes = await fetchWithRetry(
+        `https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=1000&offset=0`,
+        {
+          method: "GET",
+          headers: buildWbHeaders(apiToken),
+        }
+      );
+      const priceData = await priceRes.json();
+      const goods = priceData?.data?.listGoods || [];
+      for (const g of goods) {
+        const key = String(g.nmID);
+        const sizes = g.sizes || [];
+        if (sizes.length > 0 && sizes[0].price) {
+          priceMap.set(key, sizes[0].price);
+        } else if (g.currencyIsoCode4217 && sizes[0]?.discountedPrice) {
+          priceMap.set(key, sizes[0].discountedPrice);
+        }
+      }
+      if (i + BATCH_SIZE < nmIds.length) {
+        await new Promise(r => setTimeout(r, 300));
       }
     }
-  } catch {
+    console.log(`[WB Import] Step 2 complete: ${priceMap.size} prices fetched`);
+  } catch (err: any) {
+    console.warn(`[WB Import] Step 2 price fetch failed (using card prices): ${err.message}`);
   }
 
-  return allCards.map((card: any) => {
+  console.log(`[WB Import] Step 3: Fetching stock levels...`);
+  const stockMap = new Map<string, number>();
+  try {
+    if (warehouseId) {
+      const stockRes = await fetchWithRetry(
+        `https://marketplace-api.wildberries.ru/api/v3/stocks/${warehouseId}`,
+        {
+          method: "POST",
+          headers: buildWbHeaders(apiToken),
+          body: JSON.stringify({ skus: [] }),
+        }
+      );
+      const stockData = await stockRes.json();
+      const stocks = stockData?.stocks || [];
+      for (const item of stocks) {
+        const key = String(item.sku || "");
+        stockMap.set(key, (stockMap.get(key) || 0) + (item.amount || 0));
+      }
+    } else {
+      const warehousesRes = await fetchWithRetry(
+        `https://marketplace-api.wildberries.ru/api/v3/warehouses`,
+        { method: "GET", headers: buildWbHeaders(apiToken) }
+      );
+      const warehouses = await warehousesRes.json();
+      if (Array.isArray(warehouses) && warehouses.length > 0) {
+        for (const wh of warehouses) {
+          try {
+            const stockRes = await fetchWithRetry(
+              `https://marketplace-api.wildberries.ru/api/v3/stocks/${wh.id}`,
+              {
+                method: "POST",
+                headers: buildWbHeaders(apiToken),
+                body: JSON.stringify({ skus: [] }),
+              }
+            );
+            const stockData = await stockRes.json();
+            const stocks = stockData?.stocks || [];
+            for (const item of stocks) {
+              const key = String(item.sku || "");
+              stockMap.set(key, (stockMap.get(key) || 0) + (item.amount || 0));
+            }
+            await new Promise(r => setTimeout(r, 300));
+          } catch {}
+        }
+      }
+    }
+    console.log(`[WB Import] Step 3 complete: ${stockMap.size} stock entries`);
+  } catch (err: any) {
+    console.warn(`[WB Import] Step 3 stock fetch failed: ${err.message}`);
+  }
+
+  console.log(`[WB Import] Step 4: Building product list with CDN images...`);
+  const products = allCards.map((card: any) => {
     const nmId = String(card.nmID || card.nmId || "");
     const vendorCode = card.vendorCode || card.supplierArticle || "";
     const sizes = card.sizes || [];
@@ -325,11 +429,28 @@ export async function fetchWildberriesProducts(apiToken: string): Promise<Normal
     const skus = firstSize.skus || card.skus || [];
     const barcode = skus[0] || "";
 
-    let price = 0;
-    if (firstSize.price) {
+    let price = priceMap.get(nmId) || 0;
+    if (price === 0 && firstSize.price) {
       price = firstSize.price;
-    } else if (card.sizes?.[0]?.price) {
+    }
+    if (price === 0 && card.sizes?.[0]?.price) {
       price = card.sizes[0].price;
+    }
+
+    let imageUrl: string | undefined;
+    const cdnUrl = buildWbCdnImageUrl(nmId);
+    if (cdnUrl) {
+      imageUrl = cdnUrl;
+    } else if (card.mediaFiles?.[0]) {
+      imageUrl = card.mediaFiles[0];
+    }
+
+    let stock = 0;
+    for (const sku of skus) {
+      stock += stockMap.get(String(sku)) || 0;
+    }
+    if (stock === 0) {
+      stock = stockMap.get(nmId) || 0;
     }
 
     return {
@@ -338,11 +459,80 @@ export async function fetchWildberriesProducts(apiToken: string): Promise<Normal
       barcode: barcode || undefined,
       category: card.subjectName || card.object || undefined,
       price,
-      stock: stockMap.get(nmId) || 0,
+      stock,
       marketplaceId: nmId,
-      imageUrl: card.mediaFiles?.[0] || undefined,
+      imageUrl,
     };
   });
+
+  const withImages = products.filter(p => p.imageUrl).length;
+  const withPrice = products.filter(p => p.price > 0).length;
+  const withStock = products.filter(p => p.stock > 0).length;
+  console.log(`[WB Import] Final: ${products.length} products — ${withImages} with images, ${withPrice} with price, ${withStock} with stock`);
+
+  return products;
+}
+
+export async function pushWbPrice(
+  apiToken: string,
+  nmId: string,
+  price: number
+): Promise<{ success: boolean; error?: string }> {
+  const headers = buildWbHeaders(apiToken);
+
+  try {
+    const res = await fetchWithRetry(
+      `https://discounts-prices-api.wildberries.ru/api/v2/upload/task`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          data: [{
+            nmID: parseInt(nmId, 10),
+            price: Math.round(price),
+          }],
+        }),
+      }
+    );
+    const data = await res.json();
+
+    if (data?.error || data?.errorText) {
+      return { success: false, error: data.errorText || data.error || "Ошибка обновления цены в WB" };
+    }
+    if (data?.data?.alreadyExists === true) {
+      return { success: true };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Ошибка обновления цены в WB" };
+  }
+}
+
+export type WbSyncResult = {
+  priceUpdated: boolean;
+  errors: string[];
+};
+
+export async function syncProductToWb(
+  apiToken: string,
+  nmId: string,
+  updates: { sellingPrice?: number }
+): Promise<WbSyncResult> {
+  const result: WbSyncResult = {
+    priceUpdated: false,
+    errors: [],
+  };
+
+  if (updates.sellingPrice !== undefined) {
+    const priceResult = await pushWbPrice(apiToken, nmId, updates.sellingPrice);
+    if (priceResult.success) {
+      result.priceUpdated = true;
+    } else {
+      result.errors.push(`Цена WB: ${priceResult.error}`);
+    }
+  }
+
+  return result;
 }
 
 export async function fetchYandexProducts(oauthToken: string, clientId: string, businessId: string): Promise<NormalizedProduct[]> {
