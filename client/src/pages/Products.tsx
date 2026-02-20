@@ -126,9 +126,9 @@ export default function Products() {
   });
 
   const enrichMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (marketplace: "ozon" | "wildberries") => {
       setImportingMarketplace("enrich");
-      const res = await apiRequest("POST", "/api/marketplace/enrich/ozon");
+      const res = await apiRequest("POST", `/api/marketplace/enrich/${marketplace}`);
       return await res.json();
     },
     onSuccess: (data: any) => {
@@ -210,12 +210,20 @@ export default function Products() {
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={() => enrichMutation.mutate()}
+                  onClick={() => enrichMutation.mutate("ozon")}
                   disabled={enrichMutation.isPending || importMutation.isPending}
                   data-testid="button-enrich-ozon"
                 >
                   <RefreshCw className="w-4 h-4 mr-2" />
                   Обогатить из Ozon (фото, цены)
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => enrichMutation.mutate("wildberries")}
+                  disabled={enrichMutation.isPending || importMutation.isPending}
+                  data-testid="button-enrich-wildberries"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Обогатить из WB (фото, цены)
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

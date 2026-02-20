@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
-import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, syncProductToOzon, syncProductToWb } from "./marketplace-import";
+import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, syncProductToOzon, syncProductToWb } from "./marketplace-import";
 import { api } from "@shared/routes";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { z } from "zod";
@@ -711,6 +711,84 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Ozon enrich error:", error);
       res.status(500).json({ message: `Ошибка обогащения: ${error.message}` });
+    }
+  });
+
+  app.post("/api/marketplace/enrich/wildberries", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const setting = allSettings.find(s => s.marketplace === "wildberries" && s.isActive);
+      if (!setting || !setting.apiKey) {
+        return res.status(400).json({ message: "API-ключ Wildberries не настроен" });
+      }
+
+      const allProducts = await storage.getProducts(orgId);
+      const toEnrich = allProducts
+        .filter(p => p.wbId)
+        .map(p => ({ id: p.id, sku: p.sku, wbId: p.wbId!, barcode: p.barcode }));
+
+      if (toEnrich.length === 0) {
+        return res.json({ success: true, message: "Нет товаров WB для обогащения", updated: 0 });
+      }
+
+      console.log(`[WB Enrich] Starting enrichment for ${toEnrich.length} products`);
+
+      const result = await enrichWbProducts(setting.apiKey, setting.warehouseId || undefined, toEnrich);
+      const enrichUpdates = result.updates || [];
+
+      let dbUpdated = 0;
+      for (const u of enrichUpdates) {
+        try {
+          const updateData: any = {};
+          if (u.data.imageUrl && u.data.imageUrl.startsWith("http")) updateData.imageUrl = u.data.imageUrl;
+          if (u.data.price && u.data.price > 0) {
+            updateData.sellingPrice = String(u.data.price);
+            updateData.price = String(u.data.price);
+          }
+          if (u.data.stock !== undefined && u.data.stock !== null) {
+            updateData.centralStock = u.data.stock;
+          }
+
+          if (Object.keys(updateData).length > 0) {
+            await storage.updateProduct(u.dbId, updateData);
+            dbUpdated++;
+          }
+        } catch (err: any) {
+          console.error(`[WB Enrich] DB update failed for product ${u.dbId}: ${err.message}`);
+        }
+      }
+
+      console.log(`[WB Enrich] DB updated: ${dbUpdated}/${enrichUpdates.length} products`);
+
+      const { userId, userName } = getUserInfo(req);
+      await storage.createAuditLog({
+        organizationId: orgId,
+        userId,
+        userName,
+        action: "wb_enrich",
+        entityType: "product",
+        details: `Обогащение товаров из Wildberries: обновлено ${dbUpdated} из ${toEnrich.length}`,
+      });
+
+      await storage.createSyncHistory({
+        organizationId: orgId,
+        action: "product_enrich",
+        status: result.failed > 0 && dbUpdated === 0 ? "fail" : "success",
+        details: `Обогащение WB: обновлено ${dbUpdated}, ошибок ${result.failed}`,
+        itemsCount: dbUpdated,
+      });
+
+      res.json({
+        success: true,
+        total: toEnrich.length,
+        enriched: dbUpdated,
+        failed: result.failed,
+        errors: result.errors.length > 0 ? result.errors : undefined,
+      });
+    } catch (error: any) {
+      console.error("WB enrich error:", error);
+      res.status(500).json({ message: `Ошибка обогащения WB: ${error.message}` });
     }
   });
 

@@ -295,6 +295,125 @@ function buildWbCdnImageUrl(nmId: number | string): string {
   return `https://basket-${String(basket).padStart(2, "0")}.wbbasket.ru/vol${vol}/part${part}/${id}/images/c516x688/1.webp`;
 }
 
+function collectAllBarcodes(cards: any[]): string[] {
+  const barcodes: string[] = [];
+  for (const card of cards) {
+    const sizes = card.sizes || [];
+    for (const size of sizes) {
+      const skus = size.skus || [];
+      for (const sku of skus) {
+        if (sku) barcodes.push(String(sku));
+      }
+    }
+    if (card.skus) {
+      for (const sku of card.skus) {
+        if (sku) barcodes.push(String(sku));
+      }
+    }
+  }
+  return Array.from(new Set(barcodes));
+}
+
+async function fetchWbStocks(apiToken: string, warehouseId: string, barcodes: string[]): Promise<Map<string, number>> {
+  const stockMap = new Map<string, number>();
+  const headers = buildWbHeaders(apiToken);
+  const BATCH = 1000;
+
+  for (let i = 0; i < barcodes.length; i += BATCH) {
+    const batch = barcodes.slice(i, i + BATCH);
+    try {
+      const stockRes = await fetchWithRetry(
+        `https://marketplace-api.wildberries.ru/api/v3/stocks/${warehouseId}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ skus: batch }),
+        }
+      );
+      const stockData = await stockRes.json();
+      const stocks = stockData?.stocks || [];
+      for (const item of stocks) {
+        const key = String(item.sku || "");
+        if (key) stockMap.set(key, (stockMap.get(key) || 0) + (item.amount || 0));
+      }
+    } catch (err: any) {
+      console.warn(`[WB Stocks] Batch ${i / BATCH + 1} failed: ${err.message}`);
+    }
+    if (i + BATCH < barcodes.length) await new Promise(r => setTimeout(r, 300));
+  }
+
+  return stockMap;
+}
+
+async function fetchWbPrices(apiToken: string): Promise<Map<string, { price: number; discount: number }>> {
+  const priceMap = new Map<string, { price: number; discount: number }>();
+  const headers = buildWbHeaders(apiToken);
+  let offset = 0;
+  const LIMIT = 1000;
+
+  while (true) {
+    try {
+      const priceRes = await fetchWithRetry(
+        `https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=${LIMIT}&offset=${offset}`,
+        { method: "GET", headers }
+      );
+      const priceData = await priceRes.json();
+      const goods = priceData?.data?.listGoods || [];
+
+      if (goods.length === 0) break;
+
+      for (const g of goods) {
+        const key = String(g.nmID);
+        const sizes = g.sizes || [];
+        const firstSize = sizes[0] || {};
+        const discount = g.discount || 0;
+        let finalPrice = 0;
+
+        if (firstSize.discountedPrice && firstSize.discountedPrice > 0) {
+          finalPrice = firstSize.discountedPrice;
+        } else if (firstSize.price && firstSize.price > 0) {
+          finalPrice = discount > 0 ? Math.round(firstSize.price * (1 - discount / 100)) : firstSize.price;
+        }
+
+        if (finalPrice > 0) {
+          priceMap.set(key, { price: finalPrice, discount });
+        }
+      }
+
+      offset += LIMIT;
+      if (goods.length < LIMIT) break;
+      await new Promise(r => setTimeout(r, 300));
+    } catch (err: any) {
+      console.warn(`[WB Prices] Offset ${offset} failed: ${err.message}`);
+      break;
+    }
+  }
+
+  return priceMap;
+}
+
+async function resolveWbWarehouses(apiToken: string, warehouseId?: string): Promise<number[]> {
+  if (warehouseId) return [parseInt(warehouseId, 10)];
+
+  const headers = buildWbHeaders(apiToken);
+  try {
+    const res = await fetchWithRetry(
+      `https://marketplace-api.wildberries.ru/api/v3/warehouses`,
+      { method: "GET", headers }
+    );
+    const warehouses = await res.json();
+    if (Array.isArray(warehouses) && warehouses.length > 0) {
+      console.log(`[WB] Found ${warehouses.length} warehouses: ${warehouses.map((w: any) => `${w.name} (id=${w.id})`).join(", ")}`);
+      return warehouses.map((w: any) => w.id).filter(Boolean);
+    }
+    console.warn(`[WB] No warehouses found`);
+    return [];
+  } catch (err: any) {
+    console.warn(`[WB] Warehouse fetch failed: ${err.message}`);
+    return [];
+  }
+}
+
 export async function fetchWildberriesProducts(apiToken: string, warehouseId?: string): Promise<NormalizedProduct[]> {
   const CONTENT_BASE = "https://content-api.wildberries.ru";
   const headers = buildWbHeaders(apiToken);
@@ -335,91 +454,30 @@ export async function fetchWildberriesProducts(apiToken: string, warehouseId?: s
 
   console.log(`[WB Import] Step 1 complete: ${allCards.length} cards fetched`);
 
-  const nmIds = allCards.map((c: any) => c.nmID || c.nmId).filter(Boolean);
-
-  console.log(`[WB Import] Step 2: Fetching prices for ${nmIds.length} products...`);
-  const priceMap = new Map<string, number>();
-  try {
-    const BATCH_SIZE = 1000;
-    for (let i = 0; i < nmIds.length; i += BATCH_SIZE) {
-      const batchNmIds = nmIds.slice(i, i + BATCH_SIZE);
-      const priceRes = await fetchWithRetry(
-        `https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=1000&offset=0`,
-        {
-          method: "GET",
-          headers: buildWbHeaders(apiToken),
-        }
-      );
-      const priceData = await priceRes.json();
-      const goods = priceData?.data?.listGoods || [];
-      for (const g of goods) {
-        const key = String(g.nmID);
-        const sizes = g.sizes || [];
-        if (sizes.length > 0 && sizes[0].price) {
-          priceMap.set(key, sizes[0].price);
-        } else if (g.currencyIsoCode4217 && sizes[0]?.discountedPrice) {
-          priceMap.set(key, sizes[0].discountedPrice);
-        }
-      }
-      if (i + BATCH_SIZE < nmIds.length) {
-        await new Promise(r => setTimeout(r, 300));
-      }
-    }
-    console.log(`[WB Import] Step 2 complete: ${priceMap.size} prices fetched`);
-  } catch (err: any) {
-    console.warn(`[WB Import] Step 2 price fetch failed (using card prices): ${err.message}`);
-  }
+  console.log(`[WB Import] Step 2: Fetching prices (with pagination)...`);
+  const priceMap = await fetchWbPrices(apiToken);
+  console.log(`[WB Import] Step 2 complete: ${priceMap.size} prices fetched`);
 
   console.log(`[WB Import] Step 3: Fetching stock levels...`);
+  const allBarcodes = collectAllBarcodes(allCards);
+  console.log(`[WB Import] Collected ${allBarcodes.length} unique barcodes from cards`);
+
   const stockMap = new Map<string, number>();
-  try {
-    if (warehouseId) {
-      const stockRes = await fetchWithRetry(
-        `https://marketplace-api.wildberries.ru/api/v3/stocks/${warehouseId}`,
-        {
-          method: "POST",
-          headers: buildWbHeaders(apiToken),
-          body: JSON.stringify({ skus: [] }),
-        }
-      );
-      const stockData = await stockRes.json();
-      const stocks = stockData?.stocks || [];
-      for (const item of stocks) {
-        const key = String(item.sku || "");
-        stockMap.set(key, (stockMap.get(key) || 0) + (item.amount || 0));
-      }
-    } else {
-      const warehousesRes = await fetchWithRetry(
-        `https://marketplace-api.wildberries.ru/api/v3/warehouses`,
-        { method: "GET", headers: buildWbHeaders(apiToken) }
-      );
-      const warehouses = await warehousesRes.json();
-      if (Array.isArray(warehouses) && warehouses.length > 0) {
-        for (const wh of warehouses) {
-          try {
-            const stockRes = await fetchWithRetry(
-              `https://marketplace-api.wildberries.ru/api/v3/stocks/${wh.id}`,
-              {
-                method: "POST",
-                headers: buildWbHeaders(apiToken),
-                body: JSON.stringify({ skus: [] }),
-              }
-            );
-            const stockData = await stockRes.json();
-            const stocks = stockData?.stocks || [];
-            for (const item of stocks) {
-              const key = String(item.sku || "");
-              stockMap.set(key, (stockMap.get(key) || 0) + (item.amount || 0));
-            }
-            await new Promise(r => setTimeout(r, 300));
-          } catch {}
-        }
-      }
+  const warehouseIds = await resolveWbWarehouses(apiToken, warehouseId);
+
+  for (const whId of warehouseIds) {
+    try {
+      const whStocks = await fetchWbStocks(apiToken, String(whId), allBarcodes);
+      whStocks.forEach((val, key) => {
+        stockMap.set(key, (stockMap.get(key) || 0) + val);
+      });
+      console.log(`[WB Import] Warehouse ${whId}: ${whStocks.size} stock entries`);
+    } catch (err: any) {
+      console.warn(`[WB Import] Warehouse ${whId} stocks failed: ${err.message}`);
     }
-    console.log(`[WB Import] Step 3 complete: ${stockMap.size} stock entries`);
-  } catch (err: any) {
-    console.warn(`[WB Import] Step 3 stock fetch failed: ${err.message}`);
+    if (warehouseIds.length > 1) await new Promise(r => setTimeout(r, 300));
   }
+  console.log(`[WB Import] Step 3 complete: ${stockMap.size} total stock entries across ${warehouseIds.length} warehouses`);
 
   console.log(`[WB Import] Step 4: Building product list with CDN images...`);
   const products = allCards.map((card: any) => {
@@ -430,7 +488,8 @@ export async function fetchWildberriesProducts(apiToken: string, warehouseId?: s
     const skus = firstSize.skus || card.skus || [];
     const barcode = skus[0] || "";
 
-    let price = priceMap.get(nmId) || 0;
+    const priceEntry = priceMap.get(nmId);
+    let price = priceEntry?.price || 0;
     if (price === 0 && firstSize.price) {
       price = firstSize.price;
     }
@@ -438,13 +497,7 @@ export async function fetchWildberriesProducts(apiToken: string, warehouseId?: s
       price = card.sizes[0].price;
     }
 
-    let imageUrl: string | undefined;
-    const cdnUrl = buildWbCdnImageUrl(nmId);
-    if (cdnUrl) {
-      imageUrl = cdnUrl;
-    } else if (card.mediaFiles?.[0]) {
-      imageUrl = card.mediaFiles[0];
-    }
+    const imageUrl = buildWbCdnImageUrl(nmId) || card.mediaFiles?.[0] || undefined;
 
     let stock = 0;
     for (const sku of skus) {
@@ -452,6 +505,9 @@ export async function fetchWildberriesProducts(apiToken: string, warehouseId?: s
     }
     if (stock === 0) {
       stock = stockMap.get(nmId) || 0;
+    }
+    if (stock === 0 && barcode) {
+      stock = stockMap.get(barcode) || 0;
     }
 
     return {
@@ -472,6 +528,79 @@ export async function fetchWildberriesProducts(apiToken: string, warehouseId?: s
   console.log(`[WB Import] Final: ${products.length} products — ${withImages} with images, ${withPrice} with price, ${withStock} with stock`);
 
   return products;
+}
+
+export async function enrichWbProducts(
+  apiToken: string,
+  warehouseId: string | undefined,
+  productsToEnrich: Array<{ id: number; sku: string; wbId: string; barcode?: string | null }>
+): Promise<{ updated: number; failed: number; errors: string[]; updates: Array<{ dbId: number; data: Partial<NormalizedProduct> }> }> {
+  const updates: Array<{ dbId: number; data: Partial<NormalizedProduct> }> = [];
+  const errors: string[] = [];
+  let failed = 0;
+
+  console.log(`[WB Enrich] Enriching ${productsToEnrich.length} products...`);
+
+  console.log(`[WB Enrich] Step 1: Fetching prices...`);
+  const priceMap = await fetchWbPrices(apiToken);
+  console.log(`[WB Enrich] Got ${priceMap.size} prices`);
+
+  console.log(`[WB Enrich] Step 2: Fetching stocks...`);
+  const allBarcodes = productsToEnrich
+    .map(p => p.barcode)
+    .filter((b): b is string => !!b && b.length > 0);
+  const uniqueBarcodes = Array.from(new Set(allBarcodes));
+
+  const warehouseIds = await resolveWbWarehouses(apiToken, warehouseId);
+  const stockMap = new Map<string, number>();
+
+  for (const whId of warehouseIds) {
+    try {
+      const whStocks = await fetchWbStocks(apiToken, String(whId), uniqueBarcodes);
+      whStocks.forEach((val, key) => {
+        stockMap.set(key, (stockMap.get(key) || 0) + val);
+      });
+    } catch (err: any) {
+      console.warn(`[WB Enrich] Warehouse ${whId} stocks failed: ${err.message}`);
+    }
+  }
+  console.log(`[WB Enrich] Got ${stockMap.size} stock entries`);
+
+  for (const product of productsToEnrich) {
+    try {
+      const nmId = product.wbId;
+      const data: Partial<NormalizedProduct> = {};
+
+      const imageUrl = buildWbCdnImageUrl(nmId);
+      if (imageUrl) data.imageUrl = imageUrl;
+
+      const priceEntry = priceMap.get(nmId);
+      if (priceEntry && priceEntry.price > 0) {
+        data.price = priceEntry.price;
+      }
+
+      let stock = 0;
+      if (product.barcode) {
+        stock = stockMap.get(product.barcode) || 0;
+      }
+      if (stock === 0) {
+        stock = stockMap.get(nmId) || 0;
+      }
+      data.stock = stock;
+
+      updates.push({ dbId: product.id, data });
+    } catch (err: any) {
+      failed++;
+      if (errors.length < 10) errors.push(`${product.sku}: ${err.message}`);
+    }
+  }
+
+  const withImg = updates.filter(u => u.data.imageUrl).length;
+  const withPrice = updates.filter(u => (u.data.price || 0) > 0).length;
+  const withStock = updates.filter(u => (u.data.stock || 0) > 0).length;
+  console.log(`[WB Enrich] SUMMARY: ${updates.length} updates — ${withImg} with images, ${withPrice} with price>0, ${withStock} with stock>0`);
+
+  return { updated: updates.length, failed, errors, updates };
 }
 
 export async function pushWbPrice(
