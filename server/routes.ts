@@ -738,16 +738,27 @@ export async function registerRoutes(
       const enrichUpdates = result.updates || [];
 
       let dbUpdated = 0;
+      let photosSet = 0;
+      let stocksSet = 0;
+      let barcodesSet = 0;
       for (const u of enrichUpdates) {
         try {
           const updateData: any = {};
-          if (u.data.imageUrl && u.data.imageUrl.startsWith("http")) updateData.imageUrl = u.data.imageUrl;
+          if (u.data.imageUrl && u.data.imageUrl.startsWith("http")) {
+            updateData.imageUrl = u.data.imageUrl;
+            photosSet++;
+          }
           if (u.data.price && u.data.price > 0) {
             updateData.sellingPrice = String(u.data.price);
             updateData.price = String(u.data.price);
           }
           if (u.data.stock !== undefined && u.data.stock !== null) {
             updateData.centralStock = u.data.stock;
+            if (u.data.stock > 0) stocksSet++;
+          }
+          if (u.data.barcode && u.data.barcode.length > 0) {
+            updateData.barcode = u.data.barcode;
+            barcodesSet++;
           }
 
           if (Object.keys(updateData).length > 0) {
@@ -755,11 +766,12 @@ export async function registerRoutes(
             dbUpdated++;
           }
         } catch (err: any) {
-          console.error(`[WB Enrich] DB update failed for product ${u.dbId}: ${err.message}`);
+          console.error(`[WB Sync] DB update failed for product ${u.dbId}: ${err.message}`);
         }
       }
 
-      console.log(`[WB Enrich] DB updated: ${dbUpdated}/${enrichUpdates.length} products`);
+      console.log(`[WB Sync] Updated ${photosSet} products with photos and ${stocksSet} products with stocks`);
+      console.log(`[WB Sync] Barcodes saved: ${barcodesSet}, total DB updates: ${dbUpdated}/${enrichUpdates.length}`);
 
       const { userId, userName } = getUserInfo(req);
       await storage.createAuditLog({
@@ -768,14 +780,14 @@ export async function registerRoutes(
         userName,
         action: "wb_enrich",
         entityType: "product",
-        details: `Обогащение товаров из Wildberries: обновлено ${dbUpdated} из ${toEnrich.length}`,
+        details: `Обогащение товаров из Wildberries: обновлено ${dbUpdated} из ${toEnrich.length} (фото: ${photosSet}, остатки: ${stocksSet})`,
       });
 
       await storage.createSyncHistory({
         organizationId: orgId,
         action: "product_enrich",
         status: result.failed > 0 && dbUpdated === 0 ? "fail" : "success",
-        details: `Обогащение WB: обновлено ${dbUpdated}, ошибок ${result.failed}`,
+        details: `Обогащение WB: обновлено ${dbUpdated}, фото: ${photosSet}, остатки: ${stocksSet}, ошибок: ${result.failed}`,
         itemsCount: dbUpdated,
       });
 
@@ -783,6 +795,9 @@ export async function registerRoutes(
         success: true,
         total: toEnrich.length,
         enriched: dbUpdated,
+        photosUpdated: photosSet,
+        stocksUpdated: stocksSet,
+        barcodesUpdated: barcodesSet,
         failed: result.failed,
         errors: result.errors.length > 0 ? result.errors : undefined,
       });

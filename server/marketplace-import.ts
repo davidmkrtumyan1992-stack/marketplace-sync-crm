@@ -535,58 +535,194 @@ export async function enrichWbProducts(
   warehouseId: string | undefined,
   productsToEnrich: Array<{ id: number; sku: string; wbId: string; barcode?: string | null }>
 ): Promise<{ updated: number; failed: number; errors: string[]; updates: Array<{ dbId: number; data: Partial<NormalizedProduct> }> }> {
+  const CONTENT_BASE = "https://content-api.wildberries.ru";
+  const headers = buildWbHeaders(apiToken);
   const updates: Array<{ dbId: number; data: Partial<NormalizedProduct> }> = [];
   const errors: string[] = [];
   let failed = 0;
 
-  console.log(`[WB Enrich] Enriching ${productsToEnrich.length} products...`);
+  const targetNmIds = new Set(productsToEnrich.map(p => p.wbId));
+  console.log(`[WB Sync] Starting deep enrichment for ${productsToEnrich.length} products (${targetNmIds.size} unique nmIds)...`);
 
-  console.log(`[WB Enrich] Step 1: Fetching prices...`);
-  const priceMap = await fetchWbPrices(apiToken);
-  console.log(`[WB Enrich] Got ${priceMap.size} prices`);
-
-  console.log(`[WB Enrich] Step 2: Fetching stocks...`);
-  const allBarcodes = productsToEnrich
-    .map(p => p.barcode)
-    .filter((b): b is string => !!b && b.length > 0);
-  const uniqueBarcodes = Array.from(new Set(allBarcodes));
-
-  const warehouseIds = await resolveWbWarehouses(apiToken, warehouseId);
-  const stockMap = new Map<string, number>();
-
-  for (const whId of warehouseIds) {
-    try {
-      const whStocks = await fetchWbStocks(apiToken, String(whId), uniqueBarcodes);
-      whStocks.forEach((val, key) => {
-        stockMap.set(key, (stockMap.get(key) || 0) + val);
-      });
-    } catch (err: any) {
-      console.warn(`[WB Enrich] Warehouse ${whId} stocks failed: ${err.message}`);
+  // Step 1: Collect barcodes from DB for products linked to WB
+  console.log(`[WB Sync] Step 1: Collecting barcodes from database...`);
+  const dbBarcodes: string[] = [];
+  const barcodeToProduct = new Map<string, string[]>();
+  for (const p of productsToEnrich) {
+    if (p.barcode && p.barcode.length > 0) {
+      dbBarcodes.push(p.barcode);
+      const existing = barcodeToProduct.get(p.barcode) || [];
+      existing.push(p.wbId);
+      barcodeToProduct.set(p.barcode, existing);
     }
   }
-  console.log(`[WB Enrich] Got ${stockMap.size} stock entries`);
+  const uniqueDbBarcodes = Array.from(new Set(dbBarcodes));
+  console.log(`[WB Sync] Found ${uniqueDbBarcodes.length} barcodes in database for ${productsToEnrich.length} WB products`);
+
+  // Step 2: Fetch product cards from WB to get fresh barcodes and mediaFiles
+  console.log(`[WB Sync] Step 2: Fetching product cards from WB for photo and barcode recovery...`);
+  const allCards: any[] = [];
+  let cursor: any = { limit: 100 };
+
+  while (true) {
+    const body = {
+      settings: {
+        cursor,
+        filter: { withPhoto: -1 },
+      },
+    };
+    try {
+      const res = await fetchWithRetry(`${CONTENT_BASE}/content/v2/get/cards/list`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      const cards = data?.cards || data?.data?.cards || [];
+      allCards.push(...cards);
+
+      const nextCursor = data?.cursor || data?.data?.cursor;
+      if (!nextCursor || cards.length < 100) break;
+
+      cursor = {
+        limit: 100,
+        updatedAt: nextCursor.updatedAt,
+        nmID: nextCursor.nmID,
+      };
+      await new Promise(r => setTimeout(r, 300));
+    } catch (err: any) {
+      console.error(`[WB Sync] Card fetch failed: ${err.message}`);
+      break;
+    }
+  }
+
+  // Filter cards to only those matching our target products
+  const cardMap = new Map<string, any>();
+  for (const card of allCards) {
+    const nmId = String(card.nmID || card.nmId || "");
+    if (nmId && targetNmIds.has(nmId)) {
+      cardMap.set(nmId, card);
+    }
+  }
+  console.log(`[WB Sync] Step 2 complete: ${allCards.length} total cards from WB, ${cardMap.size} matched to our products`);
+
+  // Step 3: Merge barcodes — DB barcodes + fresh barcodes from matched cards
+  console.log(`[WB Sync] Step 3: Merging barcodes and fetching stocks...`);
+  const productBarcodeMap = new Map<string, string[]>(); // nmId -> barcodes for that product
+  for (const product of productsToEnrich) {
+    const barcodes: string[] = [];
+    if (product.barcode && product.barcode.length > 0) {
+      barcodes.push(product.barcode);
+    }
+    const card = cardMap.get(product.wbId);
+    if (card) {
+      const sizes = card.sizes || [];
+      for (const size of sizes) {
+        const skus = size.skus || [];
+        for (const sku of skus) {
+          if (sku && !barcodes.includes(String(sku))) barcodes.push(String(sku));
+        }
+      }
+      if (card.skus) {
+        for (const sku of card.skus) {
+          if (sku && !barcodes.includes(String(sku))) barcodes.push(String(sku));
+        }
+      }
+    }
+    productBarcodeMap.set(product.wbId, barcodes);
+  }
+
+  // Collect all unique barcodes across all target products for batch stock fetch
+  const allBarcodesSet = new Set<string>();
+  productBarcodeMap.forEach((barcodes) => {
+    for (const b of barcodes) allBarcodesSet.add(b);
+  });
+  // Also include DB barcodes that may not be in cards
+  for (const b of uniqueDbBarcodes) allBarcodesSet.add(b);
+  const allBarcodes = Array.from(allBarcodesSet);
+  console.log(`[WB Sync] Total unique barcodes for stock query: ${allBarcodes.length} (${uniqueDbBarcodes.length} from DB, rest from cards)`);
+
+  // Fetch stocks only for our barcodes — never send empty array
+  const stockMap = new Map<string, number>();
+  if (allBarcodes.length > 0) {
+    const warehouseIds = await resolveWbWarehouses(apiToken, warehouseId);
+    console.log(`[WB Sync] Querying stocks across ${warehouseIds.length} warehouse(s)...`);
+
+    for (const whId of warehouseIds) {
+      try {
+        const whStocks = await fetchWbStocks(apiToken, String(whId), allBarcodes);
+        whStocks.forEach((val, key) => {
+          stockMap.set(key, (stockMap.get(key) || 0) + val);
+        });
+        console.log(`[WB Sync] Warehouse ${whId}: ${whStocks.size} stock entries`);
+      } catch (err: any) {
+        console.warn(`[WB Sync] Warehouse ${whId} stocks failed: ${err.message}`);
+      }
+      if (warehouseIds.length > 1) await new Promise(r => setTimeout(r, 300));
+    }
+  } else {
+    console.warn(`[WB Sync] No barcodes found (DB or cards) — skipping stock fetch`);
+  }
+  console.log(`[WB Sync] Step 3 complete: ${stockMap.size} stock entries from API`);
+
+  // Step 4: Fetch prices with pagination
+  console.log(`[WB Sync] Step 4: Fetching prices...`);
+  const priceMap = await fetchWbPrices(apiToken);
+  console.log(`[WB Sync] Step 4 complete: ${priceMap.size} prices fetched`);
+
+  // Step 5: Build updates for each product
+  console.log(`[WB Sync] Step 5: Building updates for ${productsToEnrich.length} products...`);
+  let photosUpdated = 0;
+  let stocksUpdated = 0;
 
   for (const product of productsToEnrich) {
     try {
       const nmId = product.wbId;
+      const card = cardMap.get(nmId);
       const data: Partial<NormalizedProduct> = {};
 
-      const imageUrl = buildWbCdnImageUrl(nmId);
-      if (imageUrl) data.imageUrl = imageUrl;
+      // Photo: primary source is mediaFiles from card, fallback to CDN URL
+      let imageUrl: string | undefined;
+      if (card) {
+        const mediaFiles: string[] = card.mediaFiles || [];
+        if (mediaFiles.length > 0) {
+          const firstPhoto = mediaFiles[0];
+          imageUrl = firstPhoto.startsWith("http") ? firstPhoto : `https://${firstPhoto}`;
+        }
+      }
+      if (!imageUrl) {
+        imageUrl = buildWbCdnImageUrl(nmId);
+      }
+      if (imageUrl) {
+        data.imageUrl = imageUrl;
+        photosUpdated++;
+      }
 
+      // Price from price API
       const priceEntry = priceMap.get(nmId);
       if (priceEntry && priceEntry.price > 0) {
         data.price = priceEntry.price;
       }
 
-      let stock = 0;
-      if (product.barcode) {
-        stock = stockMap.get(product.barcode) || 0;
+      // Barcode: get fresh barcode from card data if product doesn't have one
+      const productBarcodes = productBarcodeMap.get(nmId) || [];
+      if (productBarcodes.length > 0 && (!product.barcode || product.barcode.length === 0)) {
+        data.barcode = productBarcodes[0];
+      } else if (productBarcodes.length > 0 && product.barcode) {
+        // Keep existing barcode, but also save the first card barcode if different
+        const cardBarcode = card ? (card.sizes?.[0]?.skus?.[0] || card.skus?.[0]) : undefined;
+        if (cardBarcode && String(cardBarcode) !== product.barcode) {
+          data.barcode = String(cardBarcode);
+        }
       }
-      if (stock === 0) {
-        stock = stockMap.get(nmId) || 0;
+
+      // Stock: sum up stocks for all barcodes belonging to THIS product only
+      let stock = 0;
+      for (const bc of productBarcodes) {
+        stock += stockMap.get(bc) || 0;
       }
       data.stock = stock;
+      if (stock > 0) stocksUpdated++;
 
       updates.push({ dbId: product.id, data });
     } catch (err: any) {
@@ -595,10 +731,10 @@ export async function enrichWbProducts(
     }
   }
 
-  const withImg = updates.filter(u => u.data.imageUrl).length;
   const withPrice = updates.filter(u => (u.data.price || 0) > 0).length;
-  const withStock = updates.filter(u => (u.data.stock || 0) > 0).length;
-  console.log(`[WB Enrich] SUMMARY: ${updates.length} updates — ${withImg} with images, ${withPrice} with price>0, ${withStock} with stock>0`);
+  console.log(`[WB Sync] Updated ${photosUpdated} products with photos and ${stocksUpdated} products with stocks`);
+  console.log(`[WB Sync] Price data: ${withPrice} products with price > 0`);
+  console.log(`[WB Sync] Total updates: ${updates.length}, failed: ${failed}`);
 
   return { updated: updates.length, failed, errors, updates };
 }

@@ -133,9 +133,11 @@ export default function Products() {
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      const photos = data.photosUpdated ?? data.enriched ?? 0;
+      const stocks = data.stocksUpdated ?? 0;
       toast({
         title: "Обогащение товаров завершено",
-        description: `Обновлено ${formatQuantity(data.enriched)} из ${formatQuantity(data.total)} товаров (фото, цены, остатки)`,
+        description: `Обновлено ${formatQuantity(data.enriched)} из ${formatQuantity(data.total)} товаров\n\u00ABФото\u00BB: ${formatQuantity(photos)}, \u00ABОстатки\u00BB: ${formatQuantity(stocks)}`,
       });
       setImportingMarketplace(null);
     },
