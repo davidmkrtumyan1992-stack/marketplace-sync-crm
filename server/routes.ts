@@ -638,6 +638,189 @@ export async function registerRoutes(
     }
   });
 
+  // Smart Sync: Ozon (import + enrich in one call)
+  app.post("/api/marketplace/sync/ozon", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { userId, userName } = getUserInfo(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const setting = allSettings.find(s => s.marketplace === "ozon" && s.isActive);
+      if (!setting || !setting.apiKey || !setting.clientId) {
+        return res.status(400).json({ message: "API-ключ или Client-Id для Ozon не настроен" });
+      }
+
+      console.log(`[Ozon Smart Sync] Step 1/2: Importing products...`);
+      const fetchedProducts = await fetchOzonProducts(setting.apiKey, setting.clientId);
+
+      let created = 0, updated = 0, failed = 0;
+      for (const mp of fetchedProducts) {
+        try {
+          if (!mp.sku) { failed++; continue; }
+          const existing = await storage.getProductBySkuAndOrg(mp.sku, orgId);
+          if (existing) {
+            const updates: any = {};
+            if (mp.price !== undefined && mp.price !== null) { updates.sellingPrice = String(mp.price); updates.price = String(mp.price); }
+            if (mp.stock !== undefined && mp.stock !== null) updates.centralStock = mp.stock;
+            if (mp.name && mp.name !== existing.name) updates.name = mp.name;
+            if (mp.barcode) updates.barcode = mp.barcode;
+            if (mp.imageUrl) updates.imageUrl = mp.imageUrl;
+            if (mp.category) updates.category = mp.category;
+            if (mp.marketplaceId) updates.ozonId = mp.marketplaceId;
+            if (Object.keys(updates).length > 0) await storage.updateProduct(existing.id, updates);
+            updated++;
+          } else {
+            await storage.createProduct({
+              name: mp.name, sku: mp.sku, barcode: mp.barcode || null, category: mp.category || null,
+              purchasePrice: "0", sellingPrice: String(mp.price ?? 0), price: String(mp.price ?? 0),
+              centralStock: mp.stock ?? 0, stockQuantity: mp.stock ?? 0, imageUrl: mp.imageUrl || null,
+              ozonId: mp.marketplaceId || null, wbId: null, yandexId: null, organizationId: orgId,
+            });
+            created++;
+          }
+        } catch (err: any) { failed++; }
+      }
+      console.log(`[Ozon Smart Sync] Step 1 complete: created ${created}, updated ${updated}, failed ${failed}`);
+
+      console.log(`[Ozon Smart Sync] Step 2/2: Enriching products...`);
+      const allProducts = await storage.getProducts(orgId);
+      const toEnrich = allProducts.filter(p => p.ozonId).map(p => ({ id: p.id, sku: p.sku, ozonId: p.ozonId! }));
+      let enriched = 0;
+
+      if (toEnrich.length > 0) {
+        const enrichResult = await enrichOzonProducts(setting.apiKey, setting.clientId, toEnrich);
+        for (const u of (enrichResult.updates || [])) {
+          try {
+            const updateData: any = {};
+            if (u.data.name && u.data.name.length > 0) updateData.name = u.data.name;
+            if (u.data.imageUrl && u.data.imageUrl.startsWith("http")) updateData.imageUrl = u.data.imageUrl;
+            if (u.data.price > 0) { updateData.sellingPrice = String(u.data.price); updateData.price = String(u.data.price); }
+            if (u.data.stock !== undefined && u.data.stock !== null) updateData.centralStock = u.data.stock;
+            if (u.data.barcode && u.data.barcode.length > 0) updateData.barcode = u.data.barcode;
+            if (u.data.category && u.data.category.length > 0) updateData.category = u.data.category;
+            if (Object.keys(updateData).length > 0) { await storage.updateProduct(u.dbId, updateData); enriched++; }
+          } catch (err: any) { console.error(`[Ozon Smart Sync] Enrich DB update failed: ${err.message}`); }
+        }
+      }
+      console.log(`[Ozon Smart Sync] Step 2 complete: enriched ${enriched} products`);
+
+      await storage.createAuditLog({
+        organizationId: orgId, userId, userName,
+        action: "ozon_smart_sync", entityType: "product",
+        details: `Синхронизация Ozon: создано ${created}, обновлено ${updated}, обогащено ${enriched}`,
+      });
+      await storage.createSyncHistory({
+        organizationId: orgId, action: "product_sync",
+        status: failed > 0 && created === 0 && updated === 0 ? "fail" : "success",
+        details: `Синхронизация Ozon: создано ${created}, обновлено ${updated}, обогащено ${enriched}`,
+        itemsCount: created + updated,
+      });
+
+      res.json({ success: true, marketplace: "ozon", created, updated, enriched, failed, total: fetchedProducts.length });
+    } catch (error: any) {
+      console.error("Ozon smart sync error:", error);
+      res.status(500).json({ message: `Ошибка синхронизации Ozon: ${error.message}` });
+    }
+  });
+
+  // Smart Sync: Wildberries (import + enrich + fix photos in one call)
+  app.post("/api/marketplace/sync/wildberries", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { userId, userName } = getUserInfo(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const setting = allSettings.find(s => s.marketplace === "wildberries" && s.isActive);
+      if (!setting || !setting.apiKey) {
+        return res.status(400).json({ message: "API-ключ Wildberries не настроен" });
+      }
+
+      console.log(`[WB Smart Sync] Step 1/3: Importing products...`);
+      const fetchedProducts = await fetchWildberriesProducts(setting.apiKey, setting.warehouseId || undefined);
+
+      let created = 0, updated = 0, failed = 0;
+      for (const mp of fetchedProducts) {
+        try {
+          if (!mp.sku) { failed++; continue; }
+          const existing = await storage.getProductBySkuAndOrg(mp.sku, orgId);
+          if (existing) {
+            const updates: any = {};
+            if (mp.price !== undefined && mp.price !== null) { updates.sellingPrice = String(mp.price); updates.price = String(mp.price); }
+            if (mp.stock !== undefined && mp.stock !== null) updates.centralStock = mp.stock;
+            if (mp.name && mp.name !== existing.name) updates.name = mp.name;
+            if (mp.barcode) updates.barcode = mp.barcode;
+            if (mp.imageUrl) updates.imageUrl = mp.imageUrl;
+            if (mp.category) updates.category = mp.category;
+            if (mp.marketplaceId) updates.wbId = mp.marketplaceId;
+            if (Object.keys(updates).length > 0) await storage.updateProduct(existing.id, updates);
+            updated++;
+          } else {
+            await storage.createProduct({
+              name: mp.name, sku: mp.sku, barcode: mp.barcode || null, category: mp.category || null,
+              purchasePrice: "0", sellingPrice: String(mp.price ?? 0), price: String(mp.price ?? 0),
+              centralStock: mp.stock ?? 0, stockQuantity: mp.stock ?? 0, imageUrl: mp.imageUrl || null,
+              ozonId: null, wbId: mp.marketplaceId || null, yandexId: null, organizationId: orgId,
+            });
+            created++;
+          }
+        } catch (err: any) { failed++; }
+      }
+      console.log(`[WB Smart Sync] Step 1 complete: created ${created}, updated ${updated}, failed ${failed}`);
+
+      console.log(`[WB Smart Sync] Step 2/3: Enriching stocks & prices...`);
+      const allProducts = await storage.getProducts(orgId);
+      const toEnrich = allProducts.filter(p => p.wbId).map(p => ({ id: p.id, sku: p.sku, wbId: p.wbId!, barcode: p.barcode }));
+      let enriched = 0;
+      let stocksUpdated = 0;
+
+      if (toEnrich.length > 0) {
+        const enrichResult = await enrichWbProducts(setting.apiKey, setting.warehouseId || undefined, toEnrich);
+        for (const u of (enrichResult.updates || [])) {
+          try {
+            const updateData: any = {};
+            if (u.data.imageUrl && u.data.imageUrl.startsWith("http")) updateData.imageUrl = u.data.imageUrl;
+            if (u.data.price && u.data.price > 0) { updateData.sellingPrice = String(u.data.price); updateData.price = String(u.data.price); }
+            if (u.data.stock !== undefined && u.data.stock !== null) { updateData.centralStock = u.data.stock; if (u.data.stock > 0) stocksUpdated++; }
+            if (u.data.barcode && u.data.barcode.length > 0) updateData.barcode = u.data.barcode;
+            if (Object.keys(updateData).length > 0) { await storage.updateProduct(u.dbId, updateData); enriched++; }
+          } catch (err: any) { console.error(`[WB Smart Sync] Enrich DB update failed: ${err.message}`); }
+        }
+      }
+      console.log(`[WB Smart Sync] Step 2 complete: enriched ${enriched}, stocks updated ${stocksUpdated}`);
+
+      console.log(`[WB Smart Sync] Step 3/3: Fixing photos from mediaFiles...`);
+      const wbProducts = allProducts.filter(p => p.wbId).map(p => ({ id: p.id, wbId: p.wbId! }));
+      let photosFixed = 0;
+
+      if (wbProducts.length > 0) {
+        const photoResult = await fixWbPhotos(setting.apiKey, wbProducts);
+        const entries = Array.from(photoResult.photoMap.entries());
+        for (const [productId, imageUrl] of entries) {
+          try {
+            await storage.updateProduct(productId, { imageUrl });
+            photosFixed++;
+          } catch (err: any) { console.error(`[WB Smart Sync] Photo DB update failed: ${err.message}`); }
+        }
+      }
+      console.log(`[WB Smart Sync] Step 3 complete: ${photosFixed} photos fixed`);
+
+      await storage.createAuditLog({
+        organizationId: orgId, userId, userName,
+        action: "wb_smart_sync", entityType: "product",
+        details: `Синхронизация Wildberries: создано ${created}, обновлено ${updated}, обогащено ${enriched}, фото: ${photosFixed}`,
+      });
+      await storage.createSyncHistory({
+        organizationId: orgId, action: "product_sync",
+        status: failed > 0 && created === 0 && updated === 0 ? "fail" : "success",
+        details: `Синхронизация WB: создано ${created}, обновлено ${updated}, остатки: ${stocksUpdated}, фото: ${photosFixed}`,
+        itemsCount: created + updated,
+      });
+
+      res.json({ success: true, marketplace: "wildberries", created, updated, enriched, stocksUpdated, photosFixed, failed, total: fetchedProducts.length });
+    } catch (error: any) {
+      console.error("WB smart sync error:", error);
+      res.status(500).json({ message: `Ошибка синхронизации Wildberries: ${error.message}` });
+    }
+  });
+
   // Enrich existing Ozon products with images/prices/stock
   app.post("/api/marketplace/enrich/ozon", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {

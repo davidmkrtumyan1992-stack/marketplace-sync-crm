@@ -35,7 +35,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
   Select,
@@ -48,7 +47,7 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, ImageIcon, FileSpreadsheet, Percent, Download, Loader2, ShoppingBag, Store, Save, X, AlertTriangle } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { formatCurrency, formatQuantity } from "@/lib/format";
@@ -95,18 +94,25 @@ export default function Products() {
   const [importingMarketplace, setImportingMarketplace] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
-  const importMutation = useMutation({
+  const syncMutation = useMutation({
     mutationFn: async (marketplace: string) => {
       setImportingMarketplace(marketplace);
-      const res = await apiRequest("POST", `/api/marketplace/import/${marketplace}`);
+      const endpoint = marketplace === "yandex"
+        ? `/api/marketplace/import/${marketplace}`
+        : `/api/marketplace/sync/${marketplace}`;
+      const res = await apiRequest("POST", endpoint);
       return await res.json();
     },
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       const label = data.marketplace === "ozon" ? "Ozon" : data.marketplace === "wildberries" ? "Wildberries" : "Yandex Market";
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       toast({
-        title: `Импорт из «${label}» завершён`,
-        description: `Успешно импортировано ${formatQuantity(data.created + data.updated)} товаров. Создано: ${formatQuantity(data.created)}, обновлено: ${formatQuantity(data.updated)}${data.failed > 0 ? `, ошибок: ${formatQuantity(data.failed)}` : ""}`,
+        title: `\u00ABДанные ${label}\u00BB успешно обновлены`,
+        description: data.marketplace === "wildberries"
+          ? `Товары: ${formatQuantity((data.created || 0) + (data.updated || 0))}, остатки: ${formatQuantity(data.stocksUpdated || 0)}, фото: ${formatQuantity(data.photosFixed || 0)}`
+          : data.marketplace === "ozon"
+          ? `Товары: ${formatQuantity((data.created || 0) + (data.updated || 0))}, обогащено: ${formatQuantity(data.enriched || 0)}`
+          : `Создано: ${formatQuantity(data.created || 0)}, обновлено: ${formatQuantity(data.updated || 0)}`,
       });
       setImportingMarketplace(null);
     },
@@ -117,67 +123,7 @@ export default function Products() {
         msg = parsed.message || msg;
       } catch {}
       toast({
-        title: "Ошибка импорта",
-        description: msg,
-        variant: "destructive",
-      });
-      setImportingMarketplace(null);
-    },
-  });
-
-  const enrichMutation = useMutation({
-    mutationFn: async (marketplace: "ozon" | "wildberries") => {
-      setImportingMarketplace("enrich");
-      const res = await apiRequest("POST", `/api/marketplace/enrich/${marketplace}`);
-      return await res.json();
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      const photos = data.photosUpdated ?? data.enriched ?? 0;
-      const stocks = data.stocksUpdated ?? 0;
-      toast({
-        title: "Обогащение товаров завершено",
-        description: `Обновлено ${formatQuantity(data.enriched)} из ${formatQuantity(data.total)} товаров\n\u00ABФото\u00BB: ${formatQuantity(photos)}, \u00ABОстатки\u00BB: ${formatQuantity(stocks)}`,
-      });
-      setImportingMarketplace(null);
-    },
-    onError: (error: Error) => {
-      let msg = error.message;
-      try {
-        const parsed = JSON.parse(msg.replace(/^\d+:\s*/, ""));
-        msg = parsed.message || msg;
-      } catch {}
-      toast({
-        title: "Ошибка обогащения",
-        description: msg,
-        variant: "destructive",
-      });
-      setImportingMarketplace(null);
-    },
-  });
-
-  const fixPhotosMutation = useMutation({
-    mutationFn: async () => {
-      setImportingMarketplace("enrich");
-      const res = await apiRequest("POST", "/api/marketplace/fix-photos/wildberries");
-      return await res.json();
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({
-        title: "Фото WB обновлены",
-        description: `Обновлено ${formatQuantity(data.photosUpdated)} из ${formatQuantity(data.total)} товаров`,
-      });
-      setImportingMarketplace(null);
-    },
-    onError: (error: Error) => {
-      let msg = error.message;
-      try {
-        const parsed = JSON.parse(msg.replace(/^\d+:\s*/, ""));
-        msg = parsed.message || msg;
-      } catch {}
-      toast({
-        title: "Ошибка обновления фото",
+        title: "Ошибка синхронизации",
         description: msg,
         variant: "destructive",
       });
@@ -201,71 +147,41 @@ export default function Products() {
           <div className="flex flex-wrap gap-2">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="lg" disabled={importMutation.isPending || enrichMutation.isPending || fixPhotosMutation.isPending} data-testid="button-import-marketplace">
-                  {(importMutation.isPending || enrichMutation.isPending || fixPhotosMutation.isPending) ? (
+                <Button variant="outline" size="lg" disabled={syncMutation.isPending} data-testid="button-sync-marketplace">
+                  {syncMutation.isPending ? (
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   ) : (
-                    <Download className="w-4 h-4 mr-2" />
+                    <RefreshCw className="w-4 h-4 mr-2" />
                   )}
-                  {fixPhotosMutation.isPending
-                    ? "Обновление фото WB..."
-                    : enrichMutation.isPending
-                    ? "Обогащение..."
-                    : importMutation.isPending
-                    ? `Импорт из «${importingMarketplace === "ozon" ? "Ozon" : importingMarketplace === "wildberries" ? "Wildberries" : "Yandex Market"}»...`
-                    : "Импорт из маркетплейсов"}
+                  {syncMutation.isPending
+                    ? `Синхронизация ${importingMarketplace === "ozon" ? "Ozon" : importingMarketplace === "wildberries" ? "Wildberries" : "Yandex Market"}: загружаем данные и фото...`
+                    : "Обновить из маркетплейсов"}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem
-                  onClick={() => importMutation.mutate("ozon")}
-                  disabled={importMutation.isPending}
-                  data-testid="button-import-ozon"
+                  onClick={() => syncMutation.mutate("ozon")}
+                  disabled={syncMutation.isPending}
+                  data-testid="button-sync-ozon"
                 >
                   <ShoppingBag className="w-4 h-4 mr-2" />
-                  Загрузить из Ozon
+                  Обновить Ozon
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={() => importMutation.mutate("wildberries")}
-                  disabled={importMutation.isPending}
-                  data-testid="button-import-wildberries"
+                  onClick={() => syncMutation.mutate("wildberries")}
+                  disabled={syncMutation.isPending}
+                  data-testid="button-sync-wildberries"
                 >
                   <Store className="w-4 h-4 mr-2" />
-                  Загрузить из Wildberries
+                  Обновить Wildberries
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={() => importMutation.mutate("yandex")}
-                  disabled={importMutation.isPending}
-                  data-testid="button-import-yandex"
+                  onClick={() => syncMutation.mutate("yandex")}
+                  disabled={syncMutation.isPending}
+                  data-testid="button-sync-yandex"
                 >
                   <Package className="w-4 h-4 mr-2" />
-                  Загрузить из Yandex Market
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => enrichMutation.mutate("ozon")}
-                  disabled={enrichMutation.isPending || importMutation.isPending}
-                  data-testid="button-enrich-ozon"
-                >
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                  Обогатить из Ozon (фото, цены)
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => enrichMutation.mutate("wildberries")}
-                  disabled={enrichMutation.isPending || importMutation.isPending}
-                  data-testid="button-enrich-wildberries"
-                >
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                  Обогатить из WB (фото, цены)
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => fixPhotosMutation.mutate()}
-                  disabled={fixPhotosMutation.isPending || importMutation.isPending}
-                  data-testid="button-fix-photos-wb"
-                >
-                  <ImageIcon className="w-4 h-4 mr-2" />
-                  Исправить фото WB
+                  Обновить Yandex Market
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
