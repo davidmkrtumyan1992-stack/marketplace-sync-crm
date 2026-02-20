@@ -200,7 +200,7 @@ export default function Dashboard() {
                     >
                       Прогноз прибыли
                     </p>
-                    <p className="stat-number mt-2 truncate">
+                    <p className="stat-number mt-2 truncate whitespace-nowrap">
                       {kpiLoading ? "..." : formatCurrency(kpi?.expectedProfit || 0)}
                     </p>
                     <p className="text-xs mt-3" style={{ color: "hsl(175 20% 55%)" }}>

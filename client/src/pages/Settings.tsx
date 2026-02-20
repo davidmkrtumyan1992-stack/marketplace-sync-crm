@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { useMarketplaceSettings, useSaveMarketplaceSettings, useSyncAllMarketplaces } from "@/hooks/use-marketplace";
+import { useMarketplaceSettings, useSaveMarketplaceSettings, useUpdateMarketplaceSetting, useDeleteMarketplaceSetting, useSyncAllMarketplaces } from "@/hooks/use-marketplace";
 import { useTaxSettings, useSaveTaxSettings } from "@/hooks/use-tax-settings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,10 +10,13 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertMarketplaceSettingsSchema, type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store, type StockSyncLogEntry, type InventorySyncSetting } from "@shared/schema";
-import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText } from "lucide-react";
+import { type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store, type StockSyncLogEntry, type InventorySyncSetting, type MarketplaceSetting } from "@shared/schema";
+import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -29,14 +32,18 @@ const ACTION_LABELS: Record<string, string> = {
   order_status_push: "Статус заказа",
 };
 
+const MARKETPLACE_OPTIONS = [
+  { value: "ozon", label: "Ozon", color: "#005BFF" },
+  { value: "wildberries", label: "Wildberries", color: "#CB11AB" },
+  { value: "yandex", label: "Yandex Market", color: "#FFCC00" },
+];
+
 export default function Settings() {
-  const { data: settings } = useMarketplaceSettings();
+  const { data: settings, isLoading: settingsLoading } = useMarketplaceSettings();
   const { data: taxSettings, isLoading: taxLoading } = useTaxSettings();
   const { mutate: syncAll, isPending: isSyncing } = useSyncAllMarketplaces();
   const { mutate: saveTax, isPending: savingTax } = useSaveTaxSettings();
-
-  const ozonSettings = settings?.find((s: any) => s.marketplace === "ozon");
-  const wbSettings = settings?.find((s: any) => s.marketplace === "wildberries");
+  const [showAddStore, setShowAddStore] = useState(false);
 
   return (
     <Layout>
@@ -68,23 +75,11 @@ export default function Settings() {
               isSaving={savingTax}
             />
 
-            <div className="grid gap-6">
-              <MarketplaceCard 
-                title="Ozon" 
-                marketplace="ozon"
-                description="Синхронизация товаров и заказов через Ozon Seller API."
-                existingSettings={ozonSettings}
-                logoColor="text-blue-600"
-              />
-              
-              <MarketplaceCard 
-                title="Wildberries" 
-                marketplace="wildberries"
-                description="Подключите ваш партнёрский аккаунт WB через API ключ."
-                existingSettings={wbSettings}
-                logoColor="text-purple-600"
-              />
-            </div>
+            <MarketplaceStoresSection 
+              settings={settings || []}
+              isLoading={settingsLoading}
+              onAddStore={() => setShowAddStore(true)}
+            />
           </TabsContent>
 
           <TabsContent value="safety-stock" className="mt-6">
@@ -100,7 +95,437 @@ export default function Settings() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {showAddStore && (
+        <AddStoreDialog onClose={() => setShowAddStore(false)} />
+      )}
     </Layout>
+  );
+}
+
+function MarketplaceStoresSection({ settings, isLoading, onAddStore }: { settings: MarketplaceSetting[]; isLoading: boolean; onAddStore: () => void }) {
+  const [editingStore, setEditingStore] = useState<MarketplaceSetting | null>(null);
+  const [deletingStore, setDeletingStore] = useState<MarketplaceSetting | null>(null);
+  const { mutate: deleteStore, isPending: isDeleting } = useDeleteMarketplaceSetting();
+  const { mutate: updateStore } = useUpdateMarketplaceSetting();
+
+  const handleDelete = () => {
+    if (!deletingStore) return;
+    deleteStore(deletingStore.id);
+    setDeletingStore(null);
+  };
+
+  const handleToggleActive = (setting: MarketplaceSetting) => {
+    updateStore({ id: setting.id, isActive: !setting.isActive });
+  };
+
+  return (
+    <>
+      <Card className="dashboard-card overflow-hidden">
+        <CardHeader className="bg-muted/50 border-b">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-card rounded-lg border shadow-sm text-primary">
+                <StoreIcon className="w-6 h-6" />
+              </div>
+              <div>
+                <CardTitle>Магазины маркетплейсов</CardTitle>
+                <CardDescription>Подключённые аккаунты для синхронизации товаров и заказов</CardDescription>
+              </div>
+            </div>
+            <Button onClick={onAddStore} data-testid="button-add-store">
+              <Plus className="w-4 h-4 mr-2" />
+              Добавить магазин
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="text-center py-8 text-muted-foreground">Загрузка...</div>
+          ) : settings.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <StoreIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <p className="text-lg font-medium">Нет подключённых магазинов</p>
+              <p className="text-sm mt-1">Нажмите «Добавить магазин» чтобы подключить маркетплейс</p>
+            </div>
+          ) : (
+            <div className="divide-y">
+              {settings.map((setting) => {
+                const mpStyle = getMarketplaceStyle(setting.marketplace);
+                const hasApiKey = !!setting.apiKey && setting.apiKey.length > 3;
+                const isConnected = hasApiKey && setting.isActive;
+
+                return (
+                  <div key={setting.id} className="flex items-center justify-between gap-4 p-4 hover:bg-muted/30 transition-colors" data-testid={`store-row-${setting.id}`}>
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div
+                        className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
+                        style={{ backgroundColor: mpStyle.bg }}
+                      >
+                        <StoreIcon className="w-5 h-5" style={{ color: mpStyle.color }} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium truncate" data-testid={`text-store-name-${setting.id}`}>
+                            {setting.storeName || `${mpStyle.label} магазин`}
+                          </span>
+                          <Badge
+                            className="text-[10px] font-bold shrink-0 no-default-hover-elevate"
+                            style={{ backgroundColor: mpStyle.bg, color: mpStyle.color }}
+                            data-testid={`badge-store-marketplace-${setting.id}`}
+                          >
+                            {mpStyle.label}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center gap-3 mt-0.5">
+                          {isConnected ? (
+                            <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400" data-testid={`status-connected-${setting.id}`}>
+                              <Wifi className="w-3 h-3" />
+                              Подключён
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-xs text-muted-foreground" data-testid={`status-disconnected-${setting.id}`}>
+                              <WifiOff className="w-3 h-3" />
+                              {!hasApiKey ? "API-ключ не задан" : "Неактивен"}
+                            </span>
+                          )}
+                          {setting.lastSync && (
+                            <span className="text-xs text-muted-foreground">
+                              Последняя синхронизация: {format(new Date(setting.lastSync), "dd.MM.yy HH:mm", { locale: ru })}
+                            </span>
+                          )}
+                          {setting.marketplace === "ozon" && setting.clientId && (
+                            <span className="text-xs text-muted-foreground">Client ID: {setting.clientId}</span>
+                          )}
+                          {setting.marketplace === "wildberries" && setting.warehouseId && (
+                            <span className="text-xs text-muted-foreground">Склад: {setting.warehouseId}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 ml-4">
+                      <Switch
+                        checked={setting.isActive ?? true}
+                        onCheckedChange={() => handleToggleActive(setting)}
+                        data-testid={`switch-store-active-${setting.id}`}
+                      />
+                      <Button variant="ghost" size="icon" onClick={() => setEditingStore(setting)} data-testid={`button-edit-store-${setting.id}`}>
+                        <Pencil className="w-4 h-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => setDeletingStore(setting)} data-testid={`button-delete-store-${setting.id}`}>
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {editingStore && (
+        <EditStoreDialog store={editingStore} onClose={() => setEditingStore(null)} />
+      )}
+
+      <AlertDialog open={!!deletingStore} onOpenChange={(open) => !open && setDeletingStore(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить магазин?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Магазин «{deletingStore?.storeName || "Без названия"}» будет удалён. Это действие нельзя отменить. API-ключ и все настройки будут потеряны.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete-store">Отмена</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground" data-testid="button-confirm-delete-store">
+              Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+const storeFormSchema = z.object({
+  storeName: z.string().min(1, "Название обязательно"),
+  marketplace: z.enum(["ozon", "wildberries", "yandex"]),
+  apiKey: z.string().min(1, "API-ключ обязателен"),
+  clientId: z.string().optional(),
+  warehouseId: z.string().optional(),
+  isActive: z.boolean(),
+}).superRefine((data, ctx) => {
+  if (data.marketplace === "ozon" && (!data.clientId || data.clientId.trim() === "")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Client ID обязателен для Ozon", path: ["clientId"] });
+  }
+});
+
+function AddStoreDialog({ onClose }: { onClose: () => void }) {
+  const { mutate: saveStore, isPending } = useSaveMarketplaceSettings();
+  const [marketplace, setMarketplace] = useState<string>("ozon");
+
+  const form = useForm<z.infer<typeof storeFormSchema>>({
+    resolver: zodResolver(storeFormSchema),
+    defaultValues: {
+      storeName: "",
+      marketplace: "ozon",
+      apiKey: "",
+      clientId: "",
+      warehouseId: "",
+      isActive: true,
+    },
+  });
+
+  const onSubmit = (data: z.infer<typeof storeFormSchema>) => {
+    const payload: any = {
+      storeName: data.storeName.trim(),
+      marketplace: data.marketplace,
+      apiKey: data.apiKey.trim(),
+      isActive: data.isActive,
+    };
+    if (data.marketplace === "ozon" && data.clientId) {
+      payload.clientId = data.clientId.trim();
+    }
+    if (data.marketplace === "wildberries" && data.warehouseId) {
+      payload.warehouseId = data.warehouseId.trim();
+    }
+    if (data.marketplace === "yandex") {
+      if (data.clientId) payload.clientId = data.clientId.trim();
+      if (data.warehouseId) payload.warehouseId = data.warehouseId.trim();
+    }
+
+    saveStore(payload as InsertMarketplaceSetting, {
+      onSuccess: () => onClose(),
+    });
+  };
+
+  const handleMarketplaceChange = (val: string) => {
+    setMarketplace(val);
+    form.setValue("marketplace", val as "ozon" | "wildberries" | "yandex");
+  };
+
+  const selectedMp = MARKETPLACE_OPTIONS.find(m => m.value === marketplace);
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md w-[95vw] sm:w-full">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Plus className="w-5 h-5" />
+            Добавить магазин
+          </DialogTitle>
+          <DialogDescription>Подключите новый аккаунт маркетплейса</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Маркетплейс</Label>
+            <Select value={marketplace} onValueChange={handleMarketplaceChange}>
+              <SelectTrigger data-testid="select-marketplace">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MARKETPLACE_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: opt.color }} />
+                      {opt.label}
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Название магазина</Label>
+            <Input
+              {...form.register("storeName")}
+              placeholder={`Например: Лаура — ${selectedMp?.label || "Ozon"}`}
+              data-testid="input-store-name"
+            />
+            {form.formState.errors.storeName && (
+              <span className="text-xs text-destructive">{form.formState.errors.storeName.message}</span>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label>API-ключ</Label>
+            <Input
+              type="password"
+              {...form.register("apiKey")}
+              placeholder={marketplace === "wildberries" ? "eyJ... (JWT-токен WB)" : "API ключ"}
+              data-testid="input-api-key"
+            />
+            {form.formState.errors.apiKey && (
+              <span className="text-xs text-destructive">{form.formState.errors.apiKey.message}</span>
+            )}
+            {marketplace === "wildberries" && (
+              <p className="text-xs text-muted-foreground">Вставьте токен целиком — пробелы в начале и конце будут убраны автоматически</p>
+            )}
+          </div>
+
+          {marketplace === "ozon" && (
+            <div className="space-y-2">
+              <Label>Client ID</Label>
+              <Input {...form.register("clientId")} placeholder="Client ID" data-testid="input-client-id" />
+              {form.formState.errors.clientId && (
+                <span className="text-xs text-destructive">{form.formState.errors.clientId.message}</span>
+              )}
+            </div>
+          )}
+
+          {marketplace === "wildberries" && (
+            <div className="space-y-2">
+              <Label>ID склада (опционально)</Label>
+              <Input {...form.register("warehouseId")} placeholder="ID склада WB" data-testid="input-warehouse-id" />
+            </div>
+          )}
+
+          {marketplace === "yandex" && (
+            <>
+              <div className="space-y-2">
+                <Label>OAuth Client ID</Label>
+                <Input {...form.register("clientId")} placeholder="OAuth Client ID" data-testid="input-client-id" />
+              </div>
+              <div className="space-y-2">
+                <Label>Business ID</Label>
+                <Input {...form.register("warehouseId")} placeholder="Business ID" data-testid="input-warehouse-id" />
+              </div>
+            </>
+          )}
+
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={form.watch("isActive")}
+              onCheckedChange={(val) => form.setValue("isActive", val)}
+              data-testid="switch-new-store-active"
+            />
+            <Label className="text-sm text-muted-foreground">Активен</Label>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} data-testid="button-cancel-add-store">
+              Отмена
+            </Button>
+            <Button type="submit" disabled={isPending} data-testid="button-save-new-store">
+              {isPending ? "Сохранение..." : "Добавить"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditStoreDialog({ store, onClose }: { store: MarketplaceSetting; onClose: () => void }) {
+  const { mutate: updateStore, isPending } = useUpdateMarketplaceSetting();
+  const mpStyle = getMarketplaceStyle(store.marketplace);
+
+  const form = useForm<z.infer<typeof storeFormSchema>>({
+    resolver: zodResolver(storeFormSchema),
+    defaultValues: {
+      storeName: store.storeName || "",
+      marketplace: store.marketplace as "ozon" | "wildberries" | "yandex",
+      apiKey: store.apiKey || "",
+      clientId: store.clientId || "",
+      warehouseId: store.warehouseId || "",
+      isActive: store.isActive ?? true,
+    },
+  });
+
+  const onSubmit = (data: z.infer<typeof storeFormSchema>) => {
+    updateStore({
+      id: store.id,
+      storeName: data.storeName.trim(),
+      apiKey: data.apiKey.trim(),
+      clientId: data.clientId?.trim() || null,
+      warehouseId: data.warehouseId?.trim() || null,
+      isActive: data.isActive,
+    } as any, {
+      onSuccess: () => onClose(),
+    });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md w-[95vw] sm:w-full">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Pencil className="w-5 h-5" />
+            Редактировать магазин
+            <Badge
+              className="text-[10px] font-bold no-default-hover-elevate ml-1"
+              style={{ backgroundColor: mpStyle.bg, color: mpStyle.color }}
+            >
+              {mpStyle.label}
+            </Badge>
+          </DialogTitle>
+          <DialogDescription>Изменить настройки подключения</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Название магазина</Label>
+            <Input {...form.register("storeName")} data-testid="input-edit-store-name" />
+            {form.formState.errors.storeName && (
+              <span className="text-xs text-destructive">{form.formState.errors.storeName.message}</span>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label>API-ключ</Label>
+            <Input
+              type="password"
+              {...form.register("apiKey")}
+              placeholder={store.marketplace === "wildberries" ? "eyJ... (JWT-токен WB)" : "API ключ"}
+              data-testid="input-edit-api-key"
+            />
+            {form.formState.errors.apiKey && (
+              <span className="text-xs text-destructive">{form.formState.errors.apiKey.message}</span>
+            )}
+          </div>
+
+          {store.marketplace === "ozon" && (
+            <div className="space-y-2">
+              <Label>Client ID</Label>
+              <Input {...form.register("clientId")} placeholder="Client ID" data-testid="input-edit-client-id" />
+            </div>
+          )}
+
+          {(store.marketplace === "wildberries" || store.marketplace === "yandex") && (
+            <div className="space-y-2">
+              <Label>{store.marketplace === "wildberries" ? "ID склада" : "Business ID"}</Label>
+              <Input {...form.register("warehouseId")} placeholder={store.marketplace === "wildberries" ? "ID склада WB" : "Business ID"} data-testid="input-edit-warehouse-id" />
+            </div>
+          )}
+
+          {store.marketplace === "yandex" && (
+            <div className="space-y-2">
+              <Label>OAuth Client ID</Label>
+              <Input {...form.register("clientId")} placeholder="OAuth Client ID" data-testid="input-edit-client-id" />
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={form.watch("isActive")}
+              onCheckedChange={(val) => form.setValue("isActive", val)}
+              data-testid="switch-edit-store-active"
+            />
+            <Label className="text-sm text-muted-foreground">Активен</Label>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} data-testid="button-cancel-edit-store">
+              Отмена
+            </Button>
+            <Button type="submit" disabled={isPending} data-testid="button-save-edit-store">
+              {isPending ? "Сохранение..." : "Сохранить"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -447,103 +872,6 @@ function TaxSettingsCard({
   );
 }
 
-function MarketplaceCard({ 
-  title, 
-  marketplace, 
-  description, 
-  existingSettings,
-  logoColor 
-}: { 
-  title: string; 
-  marketplace: string; 
-  description: string;
-  existingSettings?: any;
-  logoColor: string;
-}) {
-  const { mutate, isPending } = useSaveMarketplaceSettings();
-  
-  const form = useForm({
-    defaultValues: {
-      marketplace,
-      apiKey: "",
-      clientId: "",
-      warehouseId: "",
-      isActive: true,
-    }
-  });
-
-  useEffect(() => {
-    if (existingSettings) {
-      form.reset({
-        marketplace,
-        apiKey: existingSettings.apiKey,
-        clientId: existingSettings.clientId || "",
-        warehouseId: existingSettings.warehouseId || "",
-        isActive: existingSettings.isActive,
-      });
-    }
-  }, [existingSettings, form, marketplace]);
-
-  const onSubmit = (data: any) => {
-    mutate(data as InsertMarketplaceSetting);
-  };
-
-  return (
-    <Card className="dashboard-card overflow-hidden">
-      <CardHeader className="bg-muted/50 border-b">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className={`p-2 bg-card rounded-lg border shadow-sm ${logoColor}`}>
-              <CheckCircle2 className="w-6 h-6" />
-            </div>
-            <div>
-              <CardTitle>{title}</CardTitle>
-              <CardDescription>{description}</CardDescription>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Label htmlFor={`${marketplace}-active`} className="text-sm text-muted-foreground">Активен</Label>
-            <Switch 
-              id={`${marketplace}-active`}
-              checked={form.watch("isActive")}
-              onCheckedChange={(val) => form.setValue("isActive", val)}
-            />
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="pt-6">
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-          <div className="grid gap-2">
-            <Label>API ключ</Label>
-            <Input type="password" {...form.register("apiKey")} placeholder="Ваш API ключ" />
-            {form.formState.errors.apiKey && <span className="text-xs text-red-500">{form.formState.errors.apiKey.message}</span>}
-          </div>
-          
-          {marketplace === "ozon" && (
-            <div className="grid gap-2">
-              <Label>Client ID</Label>
-              <Input {...form.register("clientId")} placeholder="Client ID" />
-            </div>
-          )}
-
-          {marketplace === "wildberries" && (
-            <div className="grid gap-2">
-              <Label>Warehouse ID (ID склада)</Label>
-              <Input {...form.register("warehouseId")} placeholder="ID склада WB" />
-            </div>
-          )}
-
-          <div className="flex justify-end pt-2">
-            <Button type="submit" disabled={isPending}>
-              {isPending ? "Сохранение..." : "Сохранить настройки"}
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
-
 function SafetyStockSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -654,7 +982,6 @@ function SafetyStockSection() {
 }
 
 function StockSyncLogSection() {
-  const { toast } = useToast();
   const [limit, setLimit] = useState(50);
 
   const { data: syncLogs, isLoading, isError } = useQuery<StockSyncLogEntry[]>({

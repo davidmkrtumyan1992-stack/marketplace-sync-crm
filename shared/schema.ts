@@ -131,6 +131,7 @@ export const marketplaceSettings = pgTable("marketplace_settings", {
   organizationId: text("organization_id").notNull(),
   companyId: integer("company_id").references(() => companies.id),
   marketplace: text("marketplace").notNull(),
+  storeName: text("store_name"),
   apiKey: text("api_key").notNull(),
   clientId: text("client_id"),
   warehouseId: text("warehouse_id"),

@@ -74,6 +74,9 @@ export interface IStorage {
   // Marketplace
   getMarketplaceSettings(organizationId: string): Promise<MarketplaceSetting[]>;
   saveMarketplaceSetting(setting: InsertMarketplaceSetting): Promise<MarketplaceSetting>;
+  createMarketplaceSetting(setting: InsertMarketplaceSetting): Promise<MarketplaceSetting>;
+  updateMarketplaceSetting(id: number, updates: Partial<InsertMarketplaceSetting>): Promise<MarketplaceSetting>;
+  deleteMarketplaceSetting(id: number): Promise<void>;
 
   // Tax Settings
   getTaxSettings(organizationId: string): Promise<TaxSetting | undefined>;
@@ -425,6 +428,23 @@ export class DatabaseStorage implements IStorage {
       const [created] = await db.insert(marketplaceSettings).values(setting).returning();
       return created;
     }
+  }
+
+  async createMarketplaceSetting(setting: InsertMarketplaceSetting): Promise<MarketplaceSetting> {
+    const [created] = await db.insert(marketplaceSettings).values(setting).returning();
+    return created;
+  }
+
+  async updateMarketplaceSetting(id: number, updates: Partial<InsertMarketplaceSetting>): Promise<MarketplaceSetting> {
+    const [updated] = await db.update(marketplaceSettings)
+      .set(updates)
+      .where(eq(marketplaceSettings.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteMarketplaceSetting(id: number): Promise<void> {
+    await db.delete(marketplaceSettings).where(eq(marketplaceSettings.id, id));
   }
 
   // Tax Settings

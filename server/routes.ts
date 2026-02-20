@@ -433,9 +433,48 @@ export async function registerRoutes(
     if (body.apiKey && typeof body.apiKey === "string") body.apiKey = body.apiKey.trim();
     if (body.clientId && typeof body.clientId === "string") body.clientId = body.clientId.trim();
     if (body.warehouseId && typeof body.warehouseId === "string") body.warehouseId = body.warehouseId.trim();
+    if (body.storeName && typeof body.storeName === "string") body.storeName = body.storeName.trim();
     const input = api.marketplace.save.input.parse(body);
-    const setting = await storage.saveMarketplaceSetting(input);
+    const setting = await storage.createMarketplaceSetting(input);
     res.status(201).json(setting);
+  });
+
+  app.put("/api/marketplace/settings/:id", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const existing = allSettings.find(s => s.id === id);
+      if (!existing) return res.status(404).json({ message: "Настройка не найдена" });
+
+      const body = { ...req.body };
+      if (body.apiKey && typeof body.apiKey === "string") body.apiKey = body.apiKey.trim();
+      if (body.clientId && typeof body.clientId === "string") body.clientId = body.clientId.trim();
+      if (body.warehouseId && typeof body.warehouseId === "string") body.warehouseId = body.warehouseId.trim();
+      if (body.storeName && typeof body.storeName === "string") body.storeName = body.storeName.trim();
+
+      const updated = await storage.updateMarketplaceSetting(id, body);
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Update marketplace setting error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/marketplace/settings/:id", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const existing = allSettings.find(s => s.id === id);
+      if (!existing) return res.status(404).json({ message: "Настройка не найдена" });
+
+      await storage.deleteMarketplaceSetting(id);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Delete marketplace setting error:", error);
+      res.status(500).json({ message: error.message });
+    }
   });
 
   app.post(api.marketplace.syncAll.path, isAuthenticated, requireRole("owner"), async (req, res) => {
