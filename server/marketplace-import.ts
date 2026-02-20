@@ -261,8 +261,9 @@ export async function enrichOzonProducts(
 }
 
 function buildWbHeaders(apiToken: string): HeadersInit {
+  const token = apiToken.startsWith("Bearer ") ? apiToken.slice(7) : apiToken;
   return {
-    "Authorization": apiToken.startsWith("Bearer ") ? apiToken : apiToken,
+    "Authorization": token,
     "Content-Type": "application/json",
   };
 }
