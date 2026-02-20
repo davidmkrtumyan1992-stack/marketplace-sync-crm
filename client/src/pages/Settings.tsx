@@ -248,6 +248,10 @@ function MarketplaceStoresSection({ settings, isLoading, onAddStore }: { setting
   );
 }
 
+const CYRILLIC_REGEX = /[А-Яа-яЁё]/;
+const ASCII_ONLY_REGEX = /^[\x00-\x7F]*$/;
+const DIGITS_ONLY_REGEX = /^\d+$/;
+
 const storeFormSchema = z.object({
   storeName: z.string().min(1, "Название обязательно"),
   marketplace: z.enum(["ozon", "wildberries", "yandex"]),
@@ -258,6 +262,18 @@ const storeFormSchema = z.object({
 }).superRefine((data, ctx) => {
   if (data.marketplace === "ozon" && (!data.clientId || data.clientId.trim() === "")) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Client ID обязателен для Ozon", path: ["clientId"] });
+  }
+  if (data.marketplace === "yandex") {
+    if (CYRILLIC_REGEX.test(data.apiKey) || !ASCII_ONLY_REGEX.test(data.apiKey)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Поле должно содержать только латинские буквы и цифры", path: ["apiKey"] });
+    }
+    if (data.warehouseId && data.warehouseId.trim() !== "") {
+      if (!DIGITS_ONLY_REGEX.test(data.warehouseId.trim())) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Business ID должен содержать только цифры", path: ["warehouseId"] });
+      }
+    } else {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Business ID обязателен для Yandex Market", path: ["warehouseId"] });
+    }
   }
 });
 
@@ -278,10 +294,13 @@ function AddStoreDialog({ onClose }: { onClose: () => void }) {
   });
 
   const onSubmit = (data: z.infer<typeof storeFormSchema>) => {
+    const sanitize = (s: string) => s.replace(/[^\x00-\x7F]/g, "").trim();
+    const apiKey = data.marketplace === "yandex" ? sanitize(data.apiKey) : data.apiKey.trim();
+
     const payload: any = {
       storeName: data.storeName.trim(),
       marketplace: data.marketplace,
-      apiKey: data.apiKey.trim(),
+      apiKey,
       isActive: data.isActive,
     };
     if (data.marketplace === "ozon" && data.clientId) {
@@ -291,7 +310,7 @@ function AddStoreDialog({ onClose }: { onClose: () => void }) {
       payload.warehouseId = data.warehouseId.trim();
     }
     if (data.marketplace === "yandex") {
-      if (data.warehouseId) payload.warehouseId = data.warehouseId.trim();
+      if (data.warehouseId) payload.warehouseId = sanitize(data.warehouseId);
     }
 
     saveStore(payload as InsertMarketplaceSetting, {
@@ -384,7 +403,10 @@ function AddStoreDialog({ onClose }: { onClose: () => void }) {
           {marketplace === "yandex" && (
             <div className="space-y-2">
               <Label>Business ID</Label>
-              <Input {...form.register("warehouseId")} placeholder="Business ID" data-testid="input-warehouse-id" />
+              <Input {...form.register("warehouseId")} placeholder="Business ID (только цифры)" data-testid="input-warehouse-id" />
+              {form.formState.errors.warehouseId && (
+                <span className="text-xs text-destructive">{form.formState.errors.warehouseId.message}</span>
+              )}
             </div>
           )}
 
@@ -428,12 +450,15 @@ function EditStoreDialog({ store, onClose }: { store: MarketplaceSetting; onClos
   });
 
   const onSubmit = (data: z.infer<typeof storeFormSchema>) => {
+    const isYandex = store.marketplace === "yandex";
+    const sanitize = (s: string) => s.replace(/[^\x00-\x7F]/g, "").trim();
+
     updateStore({
       id: store.id,
       storeName: data.storeName.trim(),
-      apiKey: data.apiKey.trim(),
+      apiKey: isYandex ? sanitize(data.apiKey) : data.apiKey.trim(),
       clientId: data.clientId?.trim() || null,
-      warehouseId: data.warehouseId?.trim() || null,
+      warehouseId: isYandex && data.warehouseId ? sanitize(data.warehouseId) : (data.warehouseId?.trim() || null),
       isActive: data.isActive,
     } as any, {
       onSuccess: () => onClose(),
@@ -488,7 +513,10 @@ function EditStoreDialog({ store, onClose }: { store: MarketplaceSetting; onClos
           {(store.marketplace === "wildberries" || store.marketplace === "yandex") && (
             <div className="space-y-2">
               <Label>{store.marketplace === "wildberries" ? "ID склада" : "Business ID"}</Label>
-              <Input {...form.register("warehouseId")} placeholder={store.marketplace === "wildberries" ? "ID склада WB" : "Business ID"} data-testid="input-edit-warehouse-id" />
+              <Input {...form.register("warehouseId")} placeholder={store.marketplace === "wildberries" ? "ID склада WB" : "Business ID (только цифры)"} data-testid="input-edit-warehouse-id" />
+              {store.marketplace === "yandex" && form.formState.errors.warehouseId && (
+                <span className="text-xs text-destructive">{form.formState.errors.warehouseId.message}</span>
+              )}
             </div>
           )}
 
