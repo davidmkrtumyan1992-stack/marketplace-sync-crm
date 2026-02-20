@@ -22,6 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
 import { formatNumber } from "@/lib/format";
+import { getMarketplaceStyle, detectMarketplaceFromName } from "@/lib/marketplace";
 
 const ACTION_LABELS: Record<string, string> = {
   stock_sync: "Синхронизация остатков",
@@ -257,34 +258,51 @@ function SyncHistorySection() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {syncHistory.map((entry) => (
-                  <TableRow key={entry.id} data-testid={`row-sync-${entry.id}`}>
-                    <TableCell data-testid={`text-sync-date-${entry.id}`}>
-                      {entry.createdAt
-                        ? format(new Date(entry.createdAt), "dd MMM yyyy, HH:mm", { locale: ru })
-                        : "—"}
-                    </TableCell>
-                    <TableCell data-testid={`text-sync-store-${entry.id}`}>
-                      {entry.details || "—"}
-                    </TableCell>
-                    <TableCell data-testid={`text-sync-action-${entry.id}`}>
-                      {ACTION_LABELS[entry.action] || entry.action}
-                    </TableCell>
-                    <TableCell data-testid={`text-sync-status-${entry.id}`}>
-                      <Badge
-                        variant={entry.status === "success" ? "default" : "destructive"}
-                        className={entry.status === "success" ? "bg-green-600 text-white no-default-hover-elevate no-default-active-elevate" : ""}
-                      >
-                        {entry.status === "success" ? "Успешно" : "Ошибка"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell data-testid={`text-sync-details-${entry.id}`}>
-                      {entry.itemsCount != null && entry.itemsCount > 0
-                        ? `${entry.itemsCount} элементов`
-                        : "—"}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {syncHistory.map((entry) => {
+                  const store = stores?.find((s) => s.id === entry.storeId);
+                  const mpKey = store?.marketplace || detectMarketplaceFromName(entry.details || "");
+                  const mpStyle = mpKey ? getMarketplaceStyle(mpKey) : null;
+
+                  return (
+                    <TableRow key={entry.id} data-testid={`row-sync-${entry.id}`}>
+                      <TableCell data-testid={`text-sync-date-${entry.id}`}>
+                        {entry.createdAt
+                          ? format(new Date(entry.createdAt), "dd MMM yyyy, HH:mm", { locale: ru })
+                          : "—"}
+                      </TableCell>
+                      <TableCell data-testid={`text-sync-store-${entry.id}`}>
+                        <div className="flex items-center gap-2">
+                          {mpStyle && (
+                            <span
+                              className="text-[10px] font-bold px-2 py-0.5 rounded"
+                              style={{ backgroundColor: mpStyle.bg, color: mpStyle.color }}
+                              data-testid={`badge-sync-marketplace-${entry.id}`}
+                            >
+                              {mpStyle.label}
+                            </span>
+                          )}
+                          <span className="truncate max-w-[180px]">{store?.name || entry.details || "—"}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell data-testid={`text-sync-action-${entry.id}`}>
+                        {ACTION_LABELS[entry.action] || entry.action}
+                      </TableCell>
+                      <TableCell data-testid={`text-sync-status-${entry.id}`}>
+                        <Badge
+                          variant={entry.status === "success" ? "default" : "destructive"}
+                          className={entry.status === "success" ? "bg-green-600 text-white no-default-hover-elevate no-default-active-elevate" : ""}
+                        >
+                          {entry.status === "success" ? "Успешно" : "Ошибка"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell data-testid={`text-sync-details-${entry.id}`}>
+                        {entry.itemsCount != null && entry.itemsCount > 0
+                          ? `${entry.itemsCount} элементов`
+                          : "—"}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

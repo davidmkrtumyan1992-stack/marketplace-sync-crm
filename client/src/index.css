@@ -291,6 +291,30 @@
     inset 0 1px 0 hsl(175 80% 60% / 0.3);
 }
 
+@media (max-width: 640px) {
+  .stat-number {
+    @apply text-2xl;
+  }
+
+  .icon-box-lg {
+    @apply w-10 h-10;
+  }
+
+  .icon-box-lg svg {
+    @apply w-5 h-5;
+  }
+
+  .counter-badge {
+    @apply text-xs px-2 py-1;
+  }
+}
+
+@media (min-width: 1536px) {
+  .stat-number {
+    @apply text-4xl;
+  }
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;

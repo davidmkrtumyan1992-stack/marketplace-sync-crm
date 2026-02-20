@@ -226,7 +226,7 @@ export default function Products() {
                   Импорт из файла
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg">
+              <DialogContent className="max-w-lg w-[95vw] sm:w-full">
                 <DialogHeader>
                   <DialogTitle>Импорт товаров из файла</DialogTitle>
                   <DialogDescription>
@@ -243,7 +243,7 @@ export default function Products() {
                   Добавить товар
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogContent className="max-w-2xl w-[95vw] sm:w-full max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Добавить новый товар</DialogTitle>
                   <DialogDescription>Заполните информацию о товаре</DialogDescription>
@@ -303,7 +303,7 @@ export default function Products() {
 
       {/* Stock Inflow Modal */}
       <Dialog open={!!inflowProduct} onOpenChange={(open) => !open && setInflowProduct(null)}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md w-[95vw] sm:w-full">
           <DialogHeader>
             <DialogTitle>Оприходование товара</DialogTitle>
             <DialogDescription>{inflowProduct?.name}</DialogDescription>
@@ -780,7 +780,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
   return (
     <>
       <Dialog open onOpenChange={(open) => !open && onClose()}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl w-[95vw] sm:w-full max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Package className="w-5 h-5" />
@@ -790,8 +790,8 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
           </DialogHeader>
 
           <div className="space-y-6 py-2">
-            <div className="flex gap-6">
-              <div className="w-48 h-48 rounded-xl border bg-muted flex items-center justify-center overflow-hidden shrink-0">
+            <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
+              <div className="w-full sm:w-48 h-48 rounded-xl border bg-muted flex items-center justify-center overflow-hidden shrink-0">
                 {product.imageUrl ? (
                   <img
                     src={product.imageUrl}
@@ -818,7 +818,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
                 </div>
                 {hasOzon && (
                   <div className="flex items-center gap-2">
-                    <Badge className="bg-blue-600 text-white">Ozon</Badge>
+                    <Badge className="text-white no-default-hover-elevate" style={{ backgroundColor: "#005BFF" }}>Ozon</Badge>
                     {product.ozonId && <span className="text-xs text-muted-foreground">ID: {product.ozonId}</span>}
                   </div>
                 )}

@@ -20,17 +20,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatCurrency, formatQuantity, formatNumber } from "@/lib/format";
+import { getMarketplaceStyle } from "@/lib/marketplace";
 import type { DashboardKPI, LowStockProduct, SalesDataPoint, SyncStatusSummary } from "@shared/schema";
 import { Link } from "wouter";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 const CHART_COLORS = ['#0FC2C0', '#0CABA8', '#008F8C', '#015958'];
-
-const MARKETPLACE_STYLES: Record<string, { label: string; bg: string; color: string }> = {
-  ozon: { label: "Ozon", bg: "#005BFF", color: "#FFFFFF" },
-  wb: { label: "Wildberries", bg: "#CB11AB", color: "#FFFFFF" },
-  yandex: { label: "Yandex Market", bg: "#FFCC00", color: "#000000" },
-};
 
 export default function Dashboard() {
   const { data: products } = useProducts();
@@ -137,8 +132,8 @@ export default function Dashboard() {
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <Card className="kpi-card hover-elevate" data-testid="card-total-stock">
             <CardContent className="pt-6">
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
                     Общий остаток
                   </p>
@@ -147,7 +142,7 @@ export default function Dashboard() {
                   </p>
                   <p className="text-xs text-muted-foreground mt-3">шт. на центральном складе</p>
                 </div>
-                <div className="icon-box icon-box-lg">
+                <div className="icon-box icon-box-lg shrink-0">
                   <Package className="w-7 h-7 text-primary" />
                 </div>
               </div>
@@ -157,8 +152,8 @@ export default function Dashboard() {
           {canSeePnL && (
             <Card className="kpi-card hover-elevate" data-testid="card-capitalization">
               <CardContent className="pt-6">
-                <div className="flex items-start justify-between">
-                  <div>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
                       Капитализация
                     </p>
@@ -167,7 +162,7 @@ export default function Dashboard() {
                     </p>
                     <p className="text-xs text-muted-foreground mt-3">по закупочной цене</p>
                   </div>
-                  <div className="icon-box icon-box-lg">
+                  <div className="icon-box icon-box-lg shrink-0">
                     <Coins className="w-7 h-7 text-primary" />
                   </div>
                 </div>
@@ -177,17 +172,17 @@ export default function Dashboard() {
 
           <Card className="kpi-card hover-elevate" data-testid="card-revenue">
             <CardContent className="pt-6">
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
                     Ожидаемая выручка
                   </p>
-                  <p className="text-3xl font-extrabold tracking-tight">
+                  <p className="text-3xl font-extrabold tracking-tight truncate">
                     {kpiLoading ? "..." : formatCurrency(kpi?.expectedRevenue || 0)}
                   </p>
                   <p className="text-xs text-muted-foreground mt-3">по продажной цене</p>
                 </div>
-                <div className="icon-box icon-box-lg">
+                <div className="icon-box icon-box-lg shrink-0">
                   <TrendingUp className="w-7 h-7 text-primary" />
                 </div>
               </div>
@@ -197,15 +192,15 @@ export default function Dashboard() {
           {canSeePnL && (
             <Card className="stat-card-premium hover-elevate" data-testid="card-profit">
               <CardContent className="pt-6">
-                <div className="flex items-start justify-between">
-                  <div>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
                     <p
                       className="text-sm font-medium uppercase tracking-wide"
                       style={{ color: "hsl(175 30% 70%)" }}
                     >
                       Прогноз прибыли
                     </p>
-                    <p className="stat-number mt-2">
+                    <p className="stat-number mt-2 truncate">
                       {kpiLoading ? "..." : formatCurrency(kpi?.expectedProfit || 0)}
                     </p>
                     <p className="text-xs mt-3" style={{ color: "hsl(175 20% 55%)" }}>
@@ -213,7 +208,7 @@ export default function Dashboard() {
                     </p>
                   </div>
                   <div
-                    className="icon-box icon-box-lg"
+                    className="icon-box icon-box-lg shrink-0"
                     style={{
                       background:
                         "linear-gradient(135deg, hsl(175 98% 41% / 0.3) 0%, hsl(175 85% 35% / 0.2) 100%)",
@@ -330,7 +325,7 @@ export default function Dashboard() {
             </Card>
 
             <Dialog open={lowStockOpen} onOpenChange={setLowStockOpen}>
-              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+              <DialogContent className="max-w-2xl w-[95vw] sm:w-full max-h-[80vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2 text-destructive">
                     <AlertTriangle className="w-5 h-5" />
@@ -369,6 +364,19 @@ export default function Dashboard() {
               </DialogContent>
             </Dialog>
           </div>
+        )}
+
+        {kpi?.companies && kpi.companies.length === 0 && (
+          <Card className="kpi-card" data-testid="card-empty-companies">
+            <CardContent className="py-12 text-center">
+              <Building2 className="w-12 h-12 mx-auto text-muted-foreground/40 mb-4" />
+              <p className="text-lg font-semibold mb-2">Нет компаний</p>
+              <p className="text-sm text-muted-foreground mb-6">Создайте компанию и добавьте магазины для начала работы</p>
+              <Link href="/settings">
+                <Button data-testid="button-go-settings">Перейти в настройки</Button>
+              </Link>
+            </CardContent>
+          </Card>
         )}
 
         {kpi?.companies && kpi.companies.length > 0 && (
@@ -423,11 +431,7 @@ export default function Dashboard() {
                 <CardContent>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     {company.stores.map((store) => {
-                      const mpStyle = MARKETPLACE_STYLES[store.marketplace] || {
-                        label: store.marketplace,
-                        bg: CHART_COLORS[0],
-                        color: "#FFFFFF",
-                      };
+                      const mpStyle = getMarketplaceStyle(store.marketplace);
 
                       return (
                         <Card

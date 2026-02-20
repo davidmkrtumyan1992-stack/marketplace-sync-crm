@@ -26,6 +26,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
+import { getMarketplaceStyle } from "@/lib/marketplace";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useState, useMemo } from "react";
@@ -69,13 +70,21 @@ export default function Orders() {
   };
 
   const getSourceBadge = (source: string) => {
-    switch (source) {
-      case "ozon": return <Badge className="bg-blue-500/20 text-blue-700 border-blue-300 dark:text-blue-300">OZON</Badge>;
-      case "wildberries": return <Badge className="bg-purple-500/20 text-purple-700 border-purple-300 dark:text-purple-300">WB</Badge>;
-      case "yandex": return <Badge className="bg-yellow-500/20 text-yellow-700 border-yellow-300 dark:text-yellow-300">Yandex</Badge>;
-      case "direct": return <Badge className="bg-emerald-500/20 text-emerald-700 border-emerald-300 dark:text-emerald-300"><Store className="w-3 h-3 mr-1 inline" />Прямая</Badge>;
-      default: return <Badge variant="outline" className="text-xs">Вручную</Badge>;
+    if (source === "direct") {
+      return <Badge className="bg-emerald-500/20 text-emerald-700 border-emerald-300 dark:text-emerald-300"><Store className="w-3 h-3 mr-1 inline" />Прямая</Badge>;
     }
+    const mpStyle = getMarketplaceStyle(source);
+    if (["ozon", "wildberries", "wb", "yandex", "yandex_market"].includes(source)) {
+      return (
+        <Badge
+          className="no-default-hover-elevate border-0"
+          style={{ backgroundColor: mpStyle.bg, color: mpStyle.color }}
+        >
+          {mpStyle.label}
+        </Badge>
+      );
+    }
+    return <Badge variant="outline" className="text-xs">Вручную</Badge>;
   };
 
   const pendingCount = orders?.filter((o: any) => o.status === "pending").length || 0;
@@ -273,7 +282,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl w-[95vw] sm:w-full max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="w-5 h-5" />
@@ -558,7 +567,7 @@ function DirectSaleDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) resetDialog(); onOpenChange(v); }}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl w-[95vw] sm:w-full max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Store className="w-5 h-5" />

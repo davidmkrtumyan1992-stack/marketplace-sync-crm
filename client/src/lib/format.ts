@@ -1,64 +1,47 @@
-// Russian number formatting utilities
+const NBSP = "\u00A0";
 
-/**
- * Format number with space as thousand separator (Russian style)
- * 1450000 -> "1 450 000"
- */
 export function formatNumber(value: number | string): string {
   const num = typeof value === "string" ? parseFloat(value) : value;
   if (isNaN(num)) return "0";
-  return num.toLocaleString("ru-RU", { maximumFractionDigits: 0 }).replace(/,/g, " ");
+  return Math.round(num)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
 }
 
-/**
- * Format currency with space separator and ruble sign
- * 1450000 -> "1 450 000 ₽" or "«1 450 000 руб.»"
- */
 export function formatCurrency(value: number | string, useAngleQuotes = false): string {
   const formatted = formatNumber(value);
   if (useAngleQuotes) {
-    return `«${formatted} руб.»`;
+    return `«${formatted}${NBSP}руб.»`;
   }
-  return `${formatted} ₽`;
+  return `${formatted}${NBSP}₽`;
 }
 
-/**
- * Format quantity with units
- * 1200 -> "1 200 шт."
- */
 export function formatQuantity(value: number | string, useAngleQuotes = false): string {
   const formatted = formatNumber(value);
   if (useAngleQuotes) {
-    return `«${formatted} шт.»`;
+    return `«${formatted}${NBSP}шт.»`;
   }
-  return `${formatted} шт.`;
+  return `${formatted}${NBSP}шт.`;
 }
 
-/**
- * Format percentage
- * 15.5 -> "15,5%"
- */
 export function formatPercent(value: number | string): string {
   const num = typeof value === "string" ? parseFloat(value) : value;
   if (isNaN(num)) return "0%";
-  return num.toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + "%";
+  const fixed = num.toFixed(1);
+  const parts = fixed.split(".");
+  const intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
+  const dec = parts[1] === "0" ? "" : `,${parts[1]}`;
+  return `${intPart}${dec}%`;
 }
 
-/**
- * Wrap text in angle quotes (Russian typographic convention)
- * "text" -> "«text»"
- */
 export function angleQuote(text: string): string {
   return `«${text}»`;
 }
 
-/**
- * Format decimal currency (with kopeks)
- * 1450000.50 -> "1 450 000,50 ₽"
- */
 export function formatCurrencyDecimal(value: number | string): string {
   const num = typeof value === "string" ? parseFloat(value) : value;
-  if (isNaN(num)) return "0 ₽";
-  const formatted = num.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `${formatted} ₽`;
+  if (isNaN(num)) return `0${NBSP}₽`;
+  const parts = num.toFixed(2).split(".");
+  const intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
+  return `${intPart},${parts[1]}${NBSP}₽`;
 }
