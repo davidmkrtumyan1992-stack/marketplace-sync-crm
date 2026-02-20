@@ -916,8 +916,11 @@ export async function syncProductToWb(
 
 export async function fetchYandexProducts(oauthToken: string, businessId: string): Promise<NormalizedProduct[]> {
   const BASE = "https://api.partner.market.yandex.ru";
+  const cleanToken = oauthToken.replace(/\s+/g, " ").trim();
+  const cleanBusinessId = businessId.replace(/\s/g, "").trim();
+  console.log(`[fetchYandexProducts] tokenLen=${cleanToken.length}, first5="${cleanToken.substring(0, 5)}…", businessId="${cleanBusinessId}"`);
   const headers: HeadersInit = {
-    "Authorization": `Bearer ${oauthToken}`,
+    "Authorization": `Bearer ${cleanToken}`,
     "Content-Type": "application/json",
   };
 
@@ -925,7 +928,7 @@ export async function fetchYandexProducts(oauthToken: string, businessId: string
   let pageToken: string | undefined;
 
   while (true) {
-    let url = `${BASE}/businesses/${businessId}/offer-mappings`;
+    let url = `${BASE}/businesses/${cleanBusinessId}/offer-mappings`;
     const params: string[] = [];
     if (pageToken) params.push(`page_token=${encodeURIComponent(pageToken)}`);
     params.push("limit=200");

@@ -522,8 +522,9 @@ export async function registerRoutes(
           if (!setting.warehouseId) {
             return res.status(400).json({ message: "Business ID для Yandex Market не указан в настройках" });
           }
-          const yToken = setting.apiKey.replace(/[^\x00-\x7F]/g, "").trim();
-          const yBusinessId = setting.warehouseId.replace(/[^\x00-\x7F]/g, "").trim();
+          const yToken = setting.apiKey.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+          const yBusinessId = setting.warehouseId.replace(/[^\x00-\x7F]/g, "").replace(/\s/g, "").trim();
+          console.log(`[Yandex Sync] Token: first 5 chars="${yToken.substring(0, 5)}…", length=${yToken.length}, businessId="${yBusinessId}", rawApiKeyLen=${setting.apiKey.length}`);
           fetchedProducts = await fetchYandexProducts(yToken, yBusinessId);
         }
       } catch (err: any) {
