@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
-import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, syncProductToOzon, syncProductToWb } from "./marketplace-import";
+import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, fixWbPhotos, syncProductToOzon, syncProductToWb } from "./marketplace-import";
 import { api } from "@shared/routes";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { z } from "zod";
@@ -804,6 +804,61 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("WB enrich error:", error);
       res.status(500).json({ message: `Ошибка обогащения WB: ${error.message}` });
+    }
+  });
+
+  app.post("/api/marketplace/fix-photos/wildberries", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const setting = allSettings.find(s => s.marketplace === "wildberries" && s.isActive);
+      if (!setting || !setting.apiKey) {
+        return res.status(400).json({ message: "API-ключ Wildberries не настроен" });
+      }
+
+      const allProducts = await storage.getProducts(orgId);
+      const wbProducts = allProducts
+        .filter(p => p.wbId)
+        .map(p => ({ id: p.id, wbId: p.wbId! }));
+
+      if (wbProducts.length === 0) {
+        return res.json({ success: true, message: "Нет товаров WB", updated: 0 });
+      }
+
+      console.log(`[WB Photo Fix] Starting photo fix for ${wbProducts.length} products`);
+
+      const result = await fixWbPhotos(setting.apiKey, wbProducts);
+
+      let dbUpdated = 0;
+      const entries = Array.from(result.photoMap.entries());
+      for (const [productId, imageUrl] of entries) {
+        try {
+          await storage.updateProduct(productId, { imageUrl });
+          dbUpdated++;
+        } catch (err: any) {
+          console.error(`[WB Photo Fix] DB update failed for product ${productId}: ${err.message}`);
+        }
+      }
+
+      const { userId, userName } = getUserInfo(req);
+      await storage.createAuditLog({
+        organizationId: orgId,
+        userId,
+        userName,
+        action: "wb_photo_fix",
+        entityType: "product",
+        details: `Исправление фото WB: обновлено ${result.updated} из ${wbProducts.length}`,
+      });
+
+      res.json({
+        success: true,
+        total: wbProducts.length,
+        photosUpdated: result.updated,
+        failed: result.failed,
+      });
+    } catch (error: any) {
+      console.error("WB photo fix error:", error);
+      res.status(500).json({ message: `Ошибка исправления фото WB: ${error.message}` });
     }
   });
 

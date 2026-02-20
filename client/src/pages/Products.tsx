@@ -48,7 +48,7 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Download, Loader2, ShoppingBag, Store, Save, X, AlertTriangle } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, ImageIcon, FileSpreadsheet, Percent, Download, Loader2, ShoppingBag, Store, Save, X, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { formatCurrency, formatQuantity } from "@/lib/format";
@@ -156,6 +156,35 @@ export default function Products() {
     },
   });
 
+  const fixPhotosMutation = useMutation({
+    mutationFn: async () => {
+      setImportingMarketplace("enrich");
+      const res = await apiRequest("POST", "/api/marketplace/fix-photos/wildberries");
+      return await res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({
+        title: "Фото WB обновлены",
+        description: `Обновлено ${formatQuantity(data.photosUpdated)} из ${formatQuantity(data.total)} товаров`,
+      });
+      setImportingMarketplace(null);
+    },
+    onError: (error: Error) => {
+      let msg = error.message;
+      try {
+        const parsed = JSON.parse(msg.replace(/^\d+:\s*/, ""));
+        msg = parsed.message || msg;
+      } catch {}
+      toast({
+        title: "Ошибка обновления фото",
+        description: msg,
+        variant: "destructive",
+      });
+      setImportingMarketplace(null);
+    },
+  });
+
   const filteredProducts = products?.filter((p: any) => 
     p.name.toLowerCase().includes(search.toLowerCase()) || 
     p.sku.toLowerCase().includes(search.toLowerCase())
@@ -172,14 +201,16 @@ export default function Products() {
           <div className="flex flex-wrap gap-2">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="lg" disabled={importMutation.isPending || enrichMutation.isPending} data-testid="button-import-marketplace">
-                  {(importMutation.isPending || enrichMutation.isPending) ? (
+                <Button variant="outline" size="lg" disabled={importMutation.isPending || enrichMutation.isPending || fixPhotosMutation.isPending} data-testid="button-import-marketplace">
+                  {(importMutation.isPending || enrichMutation.isPending || fixPhotosMutation.isPending) ? (
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   ) : (
                     <Download className="w-4 h-4 mr-2" />
                   )}
-                  {enrichMutation.isPending
-                    ? "Обогащение из Ozon..."
+                  {fixPhotosMutation.isPending
+                    ? "Обновление фото WB..."
+                    : enrichMutation.isPending
+                    ? "Обогащение..."
                     : importMutation.isPending
                     ? `Импорт из «${importingMarketplace === "ozon" ? "Ozon" : importingMarketplace === "wildberries" ? "Wildberries" : "Yandex Market"}»...`
                     : "Импорт из маркетплейсов"}
@@ -226,6 +257,15 @@ export default function Products() {
                 >
                   <RefreshCw className="w-4 h-4 mr-2" />
                   Обогатить из WB (фото, цены)
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => fixPhotosMutation.mutate()}
+                  disabled={fixPhotosMutation.isPending || importMutation.isPending}
+                  data-testid="button-fix-photos-wb"
+                >
+                  <ImageIcon className="w-4 h-4 mr-2" />
+                  Исправить фото WB
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

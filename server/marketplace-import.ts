@@ -497,7 +497,15 @@ export async function fetchWildberriesProducts(apiToken: string, warehouseId?: s
       price = card.sizes[0].price;
     }
 
-    const imageUrl = buildWbCdnImageUrl(nmId) || card.mediaFiles?.[0] || undefined;
+    let imageUrl: string | undefined;
+    const mediaFiles: string[] = card.mediaFiles || [];
+    if (mediaFiles.length > 0) {
+      const firstMedia = mediaFiles[0];
+      imageUrl = firstMedia.startsWith("http") ? firstMedia : `https://${firstMedia}`;
+    }
+    if (!imageUrl) {
+      imageUrl = buildWbCdnImageUrl(nmId) || undefined;
+    }
 
     let stock = 0;
     for (const sku of skus) {
@@ -737,6 +745,111 @@ export async function enrichWbProducts(
   console.log(`[WB Sync] Total updates: ${updates.length}, failed: ${failed}`);
 
   return { updated: updates.length, failed, errors, updates };
+}
+
+export async function fixWbPhotos(
+  apiToken: string,
+  productsToFix: Array<{ id: number; wbId: string }>
+): Promise<{ updated: number; failed: number; photoMap: Map<number, string> }> {
+  const CONTENT_BASE = "https://content-api.wildberries.ru";
+  const headers = buildWbHeaders(apiToken);
+  const photoMap = new Map<number, string>();
+  let failed = 0;
+
+  const targetNmIds = new Set(productsToFix.map(p => p.wbId));
+  console.log(`[WB Photo Fix] Fetching cards for ${productsToFix.length} products...`);
+
+  const allCards: any[] = [];
+  let cursor: any = { limit: 100 };
+
+  while (true) {
+    const body = {
+      settings: {
+        cursor,
+        filter: { withPhoto: -1 },
+      },
+    };
+    try {
+      const res = await fetchWithRetry(`${CONTENT_BASE}/content/v2/get/cards/list`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      const cards = data?.cards || data?.data?.cards || [];
+      allCards.push(...cards);
+
+      const nextCursor = data?.cursor || data?.data?.cursor;
+      if (!nextCursor || cards.length < 100) break;
+
+      cursor = {
+        limit: 100,
+        updatedAt: nextCursor.updatedAt,
+        nmID: nextCursor.nmID,
+      };
+      await new Promise(r => setTimeout(r, 300));
+    } catch (err: any) {
+      console.error(`[WB Photo Fix] Card fetch failed: ${err.message}`);
+      break;
+    }
+  }
+
+  console.log(`[WB Photo Fix] Fetched ${allCards.length} cards from WB`);
+
+  const cardMap = new Map<string, any>();
+  for (const card of allCards) {
+    const nmId = String(card.nmID || card.nmId || "");
+    if (nmId && targetNmIds.has(nmId)) {
+      cardMap.set(nmId, card);
+    }
+  }
+  console.log(`[WB Photo Fix] Matched ${cardMap.size} cards to target products`);
+
+  for (const product of productsToFix) {
+    const card = cardMap.get(product.wbId);
+    if (!card) {
+      failed++;
+      continue;
+    }
+
+    const mediaFiles: string[] = card.mediaFiles || [];
+    let imageUrl: string | undefined;
+
+    if (mediaFiles.length > 0) {
+      const firstMedia = mediaFiles[0];
+      imageUrl = firstMedia.startsWith("http") ? firstMedia : `https://${firstMedia}`;
+    }
+
+    if (!imageUrl) {
+      const photos: any[] = card.photos || [];
+      if (photos.length > 0) {
+        const photo = photos[0];
+        let photoUrl: string | undefined;
+        if (typeof photo === "string") {
+          photoUrl = photo;
+        } else if (photo && typeof photo === "object") {
+          photoUrl = photo.big || photo.c516x688 || photo.tm || photo.c246x328 || photo.square || photo.small;
+        }
+        if (photoUrl) {
+          imageUrl = photoUrl.startsWith("http") ? photoUrl : `https://${photoUrl}`;
+        }
+      }
+    }
+
+    if (!imageUrl) {
+      imageUrl = buildWbCdnImageUrl(product.wbId);
+    }
+
+    if (imageUrl && imageUrl.startsWith("http")) {
+      photoMap.set(product.id, imageUrl);
+      console.log(`[WB Photo Fix] Updated image for nmId: ${product.wbId}`);
+    } else {
+      failed++;
+    }
+  }
+
+  console.log(`[WB Photo Fix] Result: ${photoMap.size} photos found, ${failed} failed`);
+  return { updated: photoMap.size, failed, photoMap };
 }
 
 export async function pushWbPrice(
