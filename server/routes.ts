@@ -519,10 +519,10 @@ export async function registerRoutes(
         } else if (marketplace === "wildberries") {
           fetchedProducts = await fetchWildberriesProducts(setting.apiKey, setting.warehouseId || undefined);
         } else {
-          if (!setting.clientId || !setting.warehouseId) {
-            return res.status(400).json({ message: "OAuth Client-Id или Business-Id для Yandex Market не указан в настройках" });
+          if (!setting.warehouseId) {
+            return res.status(400).json({ message: "Business ID для Yandex Market не указан в настройках" });
           }
-          fetchedProducts = await fetchYandexProducts(setting.apiKey, setting.clientId, setting.warehouseId);
+          fetchedProducts = await fetchYandexProducts(setting.apiKey, setting.warehouseId);
         }
       } catch (err: any) {
         console.error(`Marketplace import error (${marketplace}):`, err);

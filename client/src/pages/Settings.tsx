@@ -291,7 +291,6 @@ function AddStoreDialog({ onClose }: { onClose: () => void }) {
       payload.warehouseId = data.warehouseId.trim();
     }
     if (data.marketplace === "yandex") {
-      if (data.clientId) payload.clientId = data.clientId.trim();
       if (data.warehouseId) payload.warehouseId = data.warehouseId.trim();
     }
 
@@ -383,16 +382,10 @@ function AddStoreDialog({ onClose }: { onClose: () => void }) {
           )}
 
           {marketplace === "yandex" && (
-            <>
-              <div className="space-y-2">
-                <Label>OAuth Client ID</Label>
-                <Input {...form.register("clientId")} placeholder="OAuth Client ID" data-testid="input-client-id" />
-              </div>
-              <div className="space-y-2">
-                <Label>Business ID</Label>
-                <Input {...form.register("warehouseId")} placeholder="Business ID" data-testid="input-warehouse-id" />
-              </div>
-            </>
+            <div className="space-y-2">
+              <Label>Business ID</Label>
+              <Input {...form.register("warehouseId")} placeholder="Business ID" data-testid="input-warehouse-id" />
+            </div>
           )}
 
           <div className="flex items-center gap-2">
@@ -499,12 +492,6 @@ function EditStoreDialog({ store, onClose }: { store: MarketplaceSetting; onClos
             </div>
           )}
 
-          {store.marketplace === "yandex" && (
-            <div className="space-y-2">
-              <Label>OAuth Client ID</Label>
-              <Input {...form.register("clientId")} placeholder="OAuth Client ID" data-testid="input-edit-client-id" />
-            </div>
-          )}
 
           <div className="flex items-center gap-2">
             <Switch

@@ -914,7 +914,7 @@ export async function syncProductToWb(
   return result;
 }
 
-export async function fetchYandexProducts(oauthToken: string, clientId: string, businessId: string): Promise<NormalizedProduct[]> {
+export async function fetchYandexProducts(oauthToken: string, businessId: string): Promise<NormalizedProduct[]> {
   const BASE = "https://api.partner.market.yandex.ru";
   const headers: HeadersInit = {
     "Authorization": `Bearer ${oauthToken}`,
