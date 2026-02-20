@@ -390,3 +390,127 @@ export async function fetchYandexProducts(oauthToken: string, clientId: string, 
     };
   }).filter(p => p.sku);
 }
+
+export type OzonSyncResult = {
+  priceUpdated: boolean;
+  attributesUpdated: boolean;
+  errors: string[];
+};
+
+export async function pushOzonPrice(
+  apiKey: string,
+  clientId: string,
+  offerId: string,
+  price: number,
+  oldPrice?: number
+): Promise<{ success: boolean; error?: string }> {
+  const BASE = "https://api-seller.ozon.ru";
+  const headers = buildOzonHeaders(apiKey, clientId);
+
+  const priceItem: any = {
+    offer_id: offerId,
+    price: String(price),
+    currency_code: "RUB",
+  };
+  if (oldPrice && oldPrice > price) {
+    priceItem.old_price = String(oldPrice);
+  }
+
+  try {
+    const res = await fetchWithRetry(`${BASE}/v4/product/info/prices`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prices: [priceItem] }),
+    });
+    const data = await res.json();
+    const result = data?.result?.[0];
+    if (result?.errors && result.errors.length > 0) {
+      return { success: false, error: result.errors.map((e: any) => e.message || e.code).join("; ") };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Ошибка обновления цены в Ozon" };
+  }
+}
+
+export async function pushOzonAttributes(
+  apiKey: string,
+  clientId: string,
+  offerId: string,
+  updates: { name?: string; barcode?: string }
+): Promise<{ success: boolean; error?: string }> {
+  const BASE = "https://api-seller.ozon.ru";
+  const headers = buildOzonHeaders(apiKey, clientId);
+
+  const attributes: any[] = [];
+  if (updates.name) {
+    attributes.push({ id: 4180, values: [{ value: updates.name }] });
+  }
+  if (updates.barcode) {
+    attributes.push({ id: 8229, values: [{ value: updates.barcode }] });
+  }
+
+  if (attributes.length === 0) {
+    return { success: true };
+  }
+
+  try {
+    const res = await fetchWithRetry(`${BASE}/v1/product/update`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        items: [{
+          offer_id: offerId,
+          attributes,
+        }],
+      }),
+    });
+    const data = await res.json();
+    if (data?.result?.task_id) {
+      return { success: true };
+    }
+    if (data?.message) {
+      return { success: false, error: data.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Ошибка обновления атрибутов в Ozon" };
+  }
+}
+
+export async function syncProductToOzon(
+  apiKey: string,
+  clientId: string,
+  offerId: string,
+  updates: { name?: string; barcode?: string; sellingPrice?: number; oldPrice?: number }
+): Promise<OzonSyncResult> {
+  const result: OzonSyncResult = {
+    priceUpdated: false,
+    attributesUpdated: false,
+    errors: [],
+  };
+
+  if (updates.sellingPrice !== undefined) {
+    const priceResult = await pushOzonPrice(apiKey, clientId, offerId, updates.sellingPrice, updates.oldPrice);
+    if (priceResult.success) {
+      result.priceUpdated = true;
+    } else {
+      result.errors.push(`Цена: ${priceResult.error}`);
+    }
+  }
+
+  const attrUpdates: { name?: string; barcode?: string } = {};
+  if (updates.name) attrUpdates.name = updates.name;
+  if (updates.barcode) attrUpdates.barcode = updates.barcode;
+
+  if (Object.keys(attrUpdates).length > 0) {
+    const attrResult = await pushOzonAttributes(apiKey, clientId, offerId, attrUpdates);
+    if (attrResult.success) {
+      result.attributesUpdated = true;
+    } else {
+      result.errors.push(`Атрибуты: ${attrResult.error}`);
+    }
+  }
+
+  return result;
+}

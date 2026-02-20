@@ -21,6 +21,16 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -38,13 +48,14 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Download, Loader2, ShoppingBag, Store } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Download, Loader2, ShoppingBag, Store, Save, X, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { formatCurrency, formatQuantity } from "@/lib/format";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useRole } from "@/hooks/use-role";
 import { useMutation } from "@tanstack/react-query";
+import { Badge } from "@/components/ui/badge";
 
 const formSchema = insertProductSchema.extend({
   purchasePrice: z.coerce.number(),
@@ -82,6 +93,7 @@ export default function Products() {
   const { toast } = useToast();
 
   const [importingMarketplace, setImportingMarketplace] = useState<string | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
   const importMutation = useMutation({
     mutationFn: async (marketplace: string) => {
@@ -281,7 +293,7 @@ export default function Products() {
                 </TableRow>
               ) : (
                 filteredProducts?.map((product: any) => (
-                  <ProductRow key={product.id} product={product} onInflow={() => setInflowProduct(product)} canSeePurchasePrice={canSeePurchasePrice} />
+                  <ProductRow key={product.id} product={product} onInflow={() => setInflowProduct(product)} canSeePurchasePrice={canSeePurchasePrice} onClick={() => setSelectedProduct(product)} />
                 ))
               )}
             </TableBody>
@@ -301,6 +313,15 @@ export default function Products() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Product Detail Modal */}
+      {selectedProduct && (
+        <ProductDetailModal
+          product={selectedProduct}
+          canSeePurchasePrice={canSeePurchasePrice}
+          onClose={() => setSelectedProduct(null)}
+        />
+      )}
     </Layout>
   );
 }
@@ -687,12 +708,250 @@ function StockInflowForm({ product, onSuccess }: { product: Product; onSuccess: 
   );
 }
 
-function ProductRow({ product, onInflow, canSeePurchasePrice = true }: { product: Product; onInflow: () => void; canSeePurchasePrice?: boolean }) {
+function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product: Product; canSeePurchasePrice: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [editName, setEditName] = useState(product.name);
+  const [editBarcode, setEditBarcode] = useState(product.barcode || "");
+  const [editPrice, setEditPrice] = useState(Number(product.sellingPrice || product.price || 0));
+  const [editCategory, setEditCategory] = useState(product.category || "");
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const hasOzon = !!product.ozonId;
+  const hasChanges = editName !== product.name ||
+    editBarcode !== (product.barcode || "") ||
+    editPrice !== Number(product.sellingPrice || product.price || 0) ||
+    editCategory !== (product.category || "");
+  const isValid = editName.trim().length > 0 && !isNaN(editPrice) && editPrice >= 0;
+
+  const handleSaveClick = () => {
+    if (!hasChanges) return;
+    if (hasOzon) {
+      setShowConfirm(true);
+    } else {
+      doSave();
+    }
+  };
+
+  const doSave = async () => {
+    setIsSaving(true);
+    setShowConfirm(false);
+    try {
+      const body = {
+        name: editName,
+        barcode: editBarcode || null,
+        sellingPrice: editPrice,
+        category: editCategory || null,
+      };
+
+      const endpoint = hasOzon
+        ? `/api/products/${product.id}/sync-to-marketplace`
+        : `/api/products/${product.id}`;
+      const method = hasOzon ? "POST" : "PUT";
+
+      const res = await apiRequest(method, endpoint, body);
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Ошибка сохранения" }));
+        const details = err.details?.join("\n") || err.message;
+        toast({
+          title: "Ошибка сохранения",
+          description: details,
+          variant: "destructive",
+        });
+        setIsSaving(false);
+        return;
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({ title: "Сохранено", description: "Товар обновлён" + (hasOzon ? " и синхронизирован с маркетплейсом" : "") });
+      onClose();
+    } catch (err: any) {
+      toast({
+        title: "Ошибка",
+        description: err.message || "Не удалось сохранить",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <Dialog open onOpenChange={(open) => !open && onClose()}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Package className="w-5 h-5" />
+              Карточка товара
+            </DialogTitle>
+            <DialogDescription>Редактирование информации о товаре</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-6 py-2">
+            <div className="flex gap-6">
+              <div className="w-48 h-48 rounded-xl border bg-muted flex items-center justify-center overflow-hidden shrink-0">
+                {product.imageUrl ? (
+                  <img
+                    src={product.imageUrl}
+                    alt={product.name}
+                    className="w-full h-full object-cover"
+                    data-testid="img-product-detail"
+                  />
+                ) : (
+                  <Package className="w-16 h-16 text-muted-foreground" />
+                )}
+              </div>
+              <div className="flex-1 space-y-3">
+                <div>
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wide">Артикул (SKU)</Label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <Input
+                      value={product.sku}
+                      readOnly
+                      className="font-mono bg-muted cursor-not-allowed"
+                      data-testid="input-detail-sku"
+                    />
+                    <Badge variant="secondary" className="shrink-0 text-xs">Только чтение</Badge>
+                  </div>
+                </div>
+                {hasOzon && (
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-blue-600 text-white">Ozon</Badge>
+                    {product.ozonId && <span className="text-xs text-muted-foreground">ID: {product.ozonId}</span>}
+                  </div>
+                )}
+                <div className="flex items-center gap-4 text-sm">
+                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                    (product.centralStock || 0) < 10 ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" : "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+                  }`}>
+                    Остаток: {product.centralStock || 0} шт.
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 border-t pt-4">
+              <div className="grid gap-2">
+                <Label htmlFor="detail-name">Название</Label>
+                <Input
+                  id="detail-name"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  data-testid="input-detail-name"
+                />
+                {editName.trim().length === 0 && (
+                  <span className="text-xs text-destructive">Название обязательно</span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="detail-barcode">Штрих-код</Label>
+                  <Input
+                    id="detail-barcode"
+                    value={editBarcode}
+                    onChange={(e) => setEditBarcode(e.target.value)}
+                    className="font-mono"
+                    data-testid="input-detail-barcode"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="detail-price">Цена продажи, ₽</Label>
+                  <Input
+                    id="detail-price"
+                    type="number"
+                    step="0.01"
+                    value={editPrice}
+                    onChange={(e) => setEditPrice(Number(e.target.value))}
+                    data-testid="input-detail-price"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                <Label>Категория</Label>
+                <Select value={editCategory} onValueChange={setEditCategory}>
+                  <SelectTrigger data-testid="select-detail-category">
+                    <SelectValue placeholder="Выберите категорию" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CATEGORIES.map(cat => (
+                      <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {canSeePurchasePrice && (
+                <div className="bg-muted/50 rounded-lg p-3 text-sm">
+                  <span className="text-muted-foreground">Закупочная цена: </span>
+                  <span className="font-medium">{formatCurrency(product.purchasePrice || 0)}</span>
+                </div>
+              )}
+            </div>
+
+            {hasOzon && hasChanges && (
+              <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                <p className="text-xs text-amber-800 dark:text-amber-200">
+                  Изменения будут применены во всех подключённых магазинах (Ozon)
+                </p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="outline" onClick={onClose} data-testid="button-detail-cancel">
+                Отмена
+              </Button>
+              <Button
+                onClick={handleSaveClick}
+                disabled={!hasChanges || !isValid || isSaving}
+                className="premium-button"
+                data-testid="button-detail-save"
+              >
+                {isSaving ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4 mr-2" />
+                )}
+                {isSaving ? "Сохранение..." : "Сохранить"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              Подтверждение синхронизации
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Внимание: изменения будут применены во всех подключённых магазинах. Цена, название и атрибуты товара будут обновлены на маркетплейсе Ozon. Продолжить?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-sync-cancel">Отмена</AlertDialogCancel>
+            <AlertDialogAction onClick={doSave} data-testid="button-sync-confirm">
+              Сохранить и синхронизировать
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick }: { product: Product; onInflow: () => void; canSeePurchasePrice?: boolean; onClick?: () => void }) {
   const { mutate: deleteProduct } = useDeleteProduct();
   const { mutate: syncProduct, isPending: isSyncing } = useSyncProduct();
 
   return (
-    <TableRow className="group hover:bg-muted transition-colors">
+    <TableRow className="group hover:bg-muted transition-colors cursor-pointer" onClick={onClick} data-testid={`row-product-${product.id}`}>
       <TableCell className="font-medium">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded bg-slate-100 flex items-center justify-center text-slate-400">
@@ -722,20 +981,20 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true }: { product
       <TableCell>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="opacity-0 group-hover:opacity-100 transition-opacity">
+            <Button variant="ghost" size="icon" className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
               <MoreHorizontal className="w-4 h-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={onInflow}>
+            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onInflow(); }}>
               <PackagePlus className="w-4 h-4 mr-2" />
               Оприходовать
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => syncProduct(product.id)} disabled={isSyncing}>
+            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); syncProduct(product.id); }} disabled={isSyncing}>
               <RefreshCw className="w-4 h-4 mr-2" />
               Синхронизировать
             </DropdownMenuItem>
-            <DropdownMenuItem className="text-red-600" onClick={() => deleteProduct(product.id)}>
+            <DropdownMenuItem className="text-red-600" onClick={(e) => { e.stopPropagation(); deleteProduct(product.id); }}>
               <Trash2 className="w-4 h-4 mr-2" />
               Удалить
             </DropdownMenuItem>

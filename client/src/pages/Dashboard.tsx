@@ -8,6 +8,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Package, Warehouse, TrendingUp, Coins, ArrowUpRight, Building2, Store, ShoppingCart, ExternalLink, Database, AlertTriangle, RefreshCw, CheckCircle2, XCircle, Shield } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -46,6 +53,7 @@ export default function Dashboard() {
   });
 
   const [salesFilter, setSalesFilter] = useState<string>("all");
+  const [lowStockOpen, setLowStockOpen] = useState(false);
 
   const companyNames = useMemo(() => {
     if (!salesData) return [];
@@ -296,22 +304,47 @@ export default function Dashboard() {
 
         {lowStockProducts && lowStockProducts.length > 0 && (
           <div data-testid="section-low-stock">
-            <Card className="border-destructive/30 bg-destructive/5 dark:bg-destructive/10">
-              <CardHeader className="flex flex-row items-center gap-3 pb-4 flex-wrap">
-                <div className="icon-box" style={{ background: "hsl(0 84% 60% / 0.15)" }}>
-                  <AlertTriangle className="w-5 h-5 text-destructive" />
+            <Card
+              className="border-destructive/30 bg-destructive/5 dark:bg-destructive/10 cursor-pointer hover-elevate transition-all"
+              onClick={() => setLowStockOpen(true)}
+              data-testid="card-low-stock-summary"
+            >
+              <CardContent className="py-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="icon-box" style={{ background: "hsl(0 84% 60% / 0.15)" }}>
+                      <AlertTriangle className="w-5 h-5 text-destructive" />
+                    </div>
+                    <div>
+                      <p className="text-lg font-bold text-destructive">Критический остаток</p>
+                      <p className="text-sm text-muted-foreground">
+                        {lowStockProducts.length} {lowStockProducts.length === 1 ? "товар" : lowStockProducts.length < 5 ? "товара" : "товаров"} с остатком менее 10 шт.
+                      </p>
+                    </div>
+                  </div>
+                  <Badge variant="destructive" className="text-base px-3 py-1" data-testid="badge-low-stock-count">
+                    {lowStockProducts.length}
+                  </Badge>
                 </div>
-                <CardTitle className="text-lg font-bold text-destructive">
-                  Критический остаток
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
+              </CardContent>
+            </Card>
+
+            <Dialog open={lowStockOpen} onOpenChange={setLowStockOpen}>
+              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 text-destructive">
+                    <AlertTriangle className="w-5 h-5" />
+                    Критический остаток — {lowStockProducts.length} {lowStockProducts.length === 1 ? "товар" : lowStockProducts.length < 5 ? "товара" : "товаров"}
+                  </DialogTitle>
+                  <DialogDescription>
+                    Товары с остатком менее 10 единиц на центральном складе
+                  </DialogDescription>
+                </DialogHeader>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-destructive/20">
                         <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Товар</th>
-                        <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Компания</th>
                         <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Артикул</th>
                         <th className="text-right py-2 font-medium text-muted-foreground">Остаток</th>
                       </tr>
@@ -324,7 +357,6 @@ export default function Dashboard() {
                           data-testid={`row-low-stock-${product.id}`}
                         >
                           <td className="py-2 pr-4 font-medium">{product.name}</td>
-                          <td className="py-2 pr-4 text-muted-foreground">{product.companyName}</td>
                           <td className="py-2 pr-4 text-muted-foreground font-mono text-xs">{product.sku}</td>
                           <td className="py-2 text-right font-bold text-destructive">
                             {formatNumber(product.stockQuantity)} шт.
@@ -334,8 +366,8 @@ export default function Dashboard() {
                     </tbody>
                   </table>
                 </div>
-              </CardContent>
-            </Card>
+              </DialogContent>
+            </Dialog>
           </div>
         )}
 

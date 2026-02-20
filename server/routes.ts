@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
-import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts } from "./marketplace-import";
+import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, syncProductToOzon } from "./marketplace-import";
 import { api } from "@shared/routes";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { z } from "zod";
@@ -672,6 +672,89 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Ozon enrich error:", error);
       res.status(500).json({ message: `Ошибка обогащения: ${error.message}` });
+    }
+  });
+
+  app.post("/api/products/:id/sync-to-marketplace", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const productId = Number(req.params.id);
+      const orgId = getOrgId(req);
+      const product = await storage.getProduct(productId);
+      if (!product) return res.status(404).json({ message: "Товар не найден" });
+      if (product.organizationId !== orgId) return res.status(403).json({ message: "Доступ запрещён" });
+
+      const { name, barcode, sellingPrice, category } = req.body;
+      const syncResults: any = { ozon: null, errors: [] };
+
+      if (product.ozonId) {
+        const allSettings = await storage.getMarketplaceSettings(orgId);
+        const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.isActive);
+
+        if (ozonSetting && ozonSetting.apiKey && ozonSetting.clientId) {
+          const offerId = product.sku;
+          const updates: any = {};
+
+          if (name && name !== product.name) updates.name = name;
+          if (barcode && barcode !== product.barcode) updates.barcode = barcode;
+          if (sellingPrice !== undefined) {
+            const newPrice = Number(sellingPrice);
+            const oldPrice = Number(product.sellingPrice) || 0;
+            if (newPrice !== oldPrice) {
+              updates.sellingPrice = newPrice;
+              if (oldPrice > newPrice) updates.oldPrice = oldPrice;
+            }
+          }
+
+          if (Object.keys(updates).length > 0) {
+            const ozonResult = await syncProductToOzon(
+              ozonSetting.apiKey,
+              ozonSetting.clientId,
+              offerId,
+              updates
+            );
+            syncResults.ozon = ozonResult;
+
+            if (ozonResult.errors.length > 0) {
+              syncResults.errors.push(...ozonResult.errors);
+            }
+          }
+        }
+      }
+
+      if (syncResults.errors.length > 0) {
+        return res.status(422).json({
+          message: "Маркетплейс отклонил изменения",
+          details: syncResults.errors,
+          syncResults,
+        });
+      }
+
+      const updateData: any = {};
+      if (name) updateData.name = name;
+      if (barcode !== undefined) updateData.barcode = barcode;
+      if (sellingPrice !== undefined) {
+        updateData.sellingPrice = String(sellingPrice);
+        updateData.price = String(sellingPrice);
+      }
+      if (category !== undefined) updateData.category = category;
+
+      const updated = await storage.updateProduct(productId, updateData);
+
+      const { userId, userName } = getUserInfo(req);
+      await storage.createAuditLog({
+        organizationId: orgId,
+        userId,
+        userName,
+        action: "product_update_with_sync",
+        entityType: "product",
+        entityId: productId,
+        details: `Обновлён товар «${updated.name}» с синхронизацией на маркетплейсы`,
+      });
+
+      res.json({ product: updated, syncResults });
+    } catch (error: any) {
+      console.error("Product sync error:", error);
+      res.status(500).json({ message: `Ошибка синхронизации: ${error.message}` });
     }
   });
 
