@@ -914,15 +914,30 @@ export async function syncProductToWb(
   return result;
 }
 
+function buildYandexHeaders(apiKey: string, businessId: string): { headers: HeadersInit; cleanBusinessId: string } {
+  const cleanToken = apiKey.replace(/\s+/g, " ").trim();
+  const cleanBusinessId = businessId.replace(/\s/g, "").trim();
+  const isAcmaKey = cleanToken.startsWith("ACMA:");
+  if (isAcmaKey) {
+    console.log(`[Yandex Sync] Using Api-Key auth mode for ACMA token, tokenLen=${cleanToken.length}, businessId="${cleanBusinessId}"`);
+  } else {
+    console.log(`[Yandex Sync] Using Bearer auth mode, tokenLen=${cleanToken.length}, first5="${cleanToken.substring(0, 5)}…", businessId="${cleanBusinessId}"`);
+  }
+  return {
+    headers: {
+      ...(isAcmaKey
+        ? { "Api-Key": cleanToken }
+        : { "Authorization": `Bearer ${cleanToken}` }),
+      "Content-Type": "application/json",
+      "Business-Id": cleanBusinessId,
+    },
+    cleanBusinessId,
+  };
+}
+
 export async function fetchYandexProducts(oauthToken: string, businessId: string): Promise<NormalizedProduct[]> {
   const BASE = "https://api.partner.market.yandex.ru";
-  const cleanToken = oauthToken.replace(/\s+/g, " ").trim();
-  const cleanBusinessId = businessId.replace(/\s/g, "").trim();
-  console.log(`[fetchYandexProducts] tokenLen=${cleanToken.length}, first5="${cleanToken.substring(0, 5)}…", businessId="${cleanBusinessId}"`);
-  const headers: HeadersInit = {
-    "Authorization": `Bearer ${cleanToken}`,
-    "Content-Type": "application/json",
-  };
+  const { headers, cleanBusinessId } = buildYandexHeaders(oauthToken, businessId);
 
   const allEntries: any[] = [];
   let pageToken: string | undefined;
