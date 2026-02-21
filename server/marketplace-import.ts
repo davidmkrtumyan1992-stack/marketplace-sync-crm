@@ -936,11 +936,18 @@ function buildYandexHeaders(apiKey: string, businessId: string): { headers: Head
 }
 
 function parseYandexEntries(allEntries: any[]): NormalizedProduct[] {
+  console.log(`[Yandex Sync] Parsing ${allEntries.length} entries...`);
+  if (allEntries.length > 0) {
+    const sample = allEntries[0]?.offer || {};
+    console.log(`[Yandex Sync] Sample offer keys: ${Object.keys(sample).join(", ")}`);
+    console.log(`[Yandex Sync] Sample offerId=${sample.offerId}, shopSku=${sample.shopSku}, name=${sample.name?.substring(0, 50)}`);
+  }
   return allEntries.map((entry: any) => {
     const offer = entry.offer || {};
+    const sku = offer.offerId || offer.shopSku || "";
     return {
-      name: offer.name || offer.shopSku || "Товар Яндекс",
-      sku: offer.shopSku || "",
+      name: offer.name || sku || "Товар Яндекс",
+      sku,
       barcode: offer.barcodes?.[0] || undefined,
       category: offer.category || undefined,
       price: offer.price?.value || offer.basicPrice?.value || 0,
