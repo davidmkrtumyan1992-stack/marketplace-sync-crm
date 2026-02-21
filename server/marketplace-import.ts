@@ -935,15 +935,28 @@ function buildYandexHeaders(apiKey: string, businessId: string): { headers: Head
   };
 }
 
-export async function fetchYandexProducts(oauthToken: string, businessId: string): Promise<NormalizedProduct[]> {
-  const BASE = "https://api.partner.market.yandex.ru";
-  const { headers, cleanBusinessId } = buildYandexHeaders(oauthToken, businessId);
+function parseYandexEntries(allEntries: any[]): NormalizedProduct[] {
+  return allEntries.map((entry: any) => {
+    const offer = entry.offer || {};
+    return {
+      name: offer.name || offer.shopSku || "Товар Яндекс",
+      sku: offer.shopSku || "",
+      barcode: offer.barcodes?.[0] || undefined,
+      category: offer.category || undefined,
+      price: offer.price?.value || offer.basicPrice?.value || 0,
+      stock: 0,
+      marketplaceId: entry.mapping?.marketSku ? String(entry.mapping.marketSku) : undefined,
+      imageUrl: offer.pictures?.[0] || undefined,
+    };
+  }).filter(p => p.sku);
+}
 
+async function fetchYandexOffersByBusiness(base: string, headers: HeadersInit, businessId: string): Promise<any[]> {
   const allEntries: any[] = [];
   let pageToken: string | undefined;
 
   while (true) {
-    let url = `${BASE}/businesses/${cleanBusinessId}/offer-mappings`;
+    let url = `${base}/businesses/${businessId}/offer-mappings`;
     const params: string[] = [];
     if (pageToken) params.push(`page_token=${encodeURIComponent(pageToken)}`);
     params.push("limit=200");
@@ -962,20 +975,79 @@ export async function fetchYandexProducts(oauthToken: string, businessId: string
     pageToken = data?.result?.paging?.nextPageToken;
     if (!pageToken || entries.length === 0) break;
   }
+  return allEntries;
+}
 
-  return allEntries.map((entry: any) => {
-    const offer = entry.offer || {};
-    return {
-      name: offer.name || offer.shopSku || "Товар Яндекс",
-      sku: offer.shopSku || "",
-      barcode: offer.barcodes?.[0] || undefined,
-      category: offer.category || undefined,
-      price: offer.price?.value || offer.basicPrice?.value || 0,
-      stock: 0,
-      marketplaceId: entry.mapping?.marketSku ? String(entry.mapping.marketSku) : undefined,
-      imageUrl: offer.pictures?.[0] || undefined,
-    };
-  }).filter(p => p.sku);
+async function fetchYandexOffersByCampaign(base: string, headers: HeadersInit, campaignId: string): Promise<any[]> {
+  const allEntries: any[] = [];
+  let pageToken: string | undefined;
+
+  while (true) {
+    let url = `${base}/campaigns/${campaignId}/offer-mappings`;
+    const params: string[] = [];
+    if (pageToken) params.push(`page_token=${encodeURIComponent(pageToken)}`);
+    params.push("limit=200");
+    if (params.length > 0) url += `?${params.join("&")}`;
+
+    const res = await fetchWithRetry(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    });
+
+    const data = await res.json();
+    const entries = data?.result?.offerMappings || data?.result?.offerMappingEntries || [];
+    allEntries.push(...entries);
+
+    pageToken = data?.result?.paging?.nextPageToken;
+    if (!pageToken || entries.length === 0) break;
+  }
+  return allEntries;
+}
+
+export async function fetchYandexProducts(oauthToken: string, businessId: string): Promise<NormalizedProduct[]> {
+  const BASE = "https://api.partner.market.yandex.ru";
+  const { headers, cleanBusinessId } = buildYandexHeaders(oauthToken, businessId);
+
+  // Step 1: Discover campaigns
+  let campaigns: Array<{ id: string; businessId: string }> = [];
+  try {
+    const campRes = await fetchWithRetry(`${BASE}/campaigns`, { method: "GET", headers });
+    const campData = await campRes.json();
+    const campList = campData?.campaigns || campData?.result?.campaigns || [];
+    campaigns = campList.map((c: any) => ({
+      id: String(c.id),
+      businessId: c.business?.id ? String(c.business.id) : (c.businessId ? String(c.businessId) : "unknown"),
+    }));
+    console.log(`[Yandex Sync] Found ${campaigns.length} campaign(s):`);
+    campaigns.forEach((c) => {
+      console.log(`  campaignId=${c.id}, businessId=${c.businessId}`);
+    });
+  } catch (err: any) {
+    console.log(`[Yandex Sync] Could not fetch campaigns: ${err.message}`);
+  }
+
+  // Step 2: Fetch products by businessId
+  console.log(`[Yandex Sync] Fetching products by businessId=${cleanBusinessId}...`);
+  let allEntries = await fetchYandexOffersByBusiness(BASE, headers, cleanBusinessId);
+  console.log(`[Yandex Sync] Business-level fetch returned ${allEntries.length} offer(s)`);
+
+  // Step 3: If 0 products, fall back to per-campaign fetch
+  if (allEntries.length === 0 && campaigns.length > 0) {
+    console.log(`[Yandex Sync] Business returned 0 products. Trying per-campaign deep search...`);
+    for (const camp of campaigns) {
+      try {
+        console.log(`[Yandex Sync] Fetching offers for campaignId=${camp.id}...`);
+        const campEntries = await fetchYandexOffersByCampaign(BASE, headers, camp.id);
+        console.log(`[Yandex Sync] campaignId=${camp.id} returned ${campEntries.length} offer(s)`);
+        allEntries.push(...campEntries);
+      } catch (err: any) {
+        console.log(`[Yandex Sync] Campaign ${camp.id} fetch error: ${err.message}`);
+      }
+    }
+  }
+
+  return parseYandexEntries(allEntries);
 }
 
 export type OzonSyncResult = {

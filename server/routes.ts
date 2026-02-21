@@ -626,7 +626,7 @@ export async function registerRoutes(
         details: `Импорт из «${marketplace}»: создано ${created}, обновлено ${updated}`,
       });
 
-      res.json({
+      const responseData: any = {
         success: true,
         marketplace,
         created,
@@ -634,7 +634,11 @@ export async function registerRoutes(
         failed,
         total: fetchedProducts.length,
         errors: errors.length > 0 ? errors : undefined,
-      });
+      };
+      if (marketplace === "yandex" && fetchedProducts.length === 0) {
+        responseData.noProductsMessage = "Авторизация успешна, но товары не найдены. Проверьте Campaign ID в логах";
+      }
+      res.json(responseData);
     } catch (error: any) {
       console.error("Marketplace import error:", error);
       res.status(500).json({ message: "Ошибка импорта товаров" });

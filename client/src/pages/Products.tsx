@@ -106,14 +106,22 @@ export default function Products() {
     onSuccess: (data: any) => {
       const label = data.marketplace === "ozon" ? "Ozon" : data.marketplace === "wildberries" ? "Wildberries" : "Yandex Market";
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({
-        title: `\u00ABДанные ${label}\u00BB успешно обновлены`,
-        description: data.marketplace === "wildberries"
-          ? `Товары: ${formatQuantity((data.created || 0) + (data.updated || 0))}, остатки: ${formatQuantity(data.stocksUpdated || 0)}, фото: ${formatQuantity(data.photosFixed || 0)}`
-          : data.marketplace === "ozon"
-          ? `Товары: ${formatQuantity((data.created || 0) + (data.updated || 0))}, обогащено: ${formatQuantity(data.enriched || 0)}`
-          : `Создано: ${formatQuantity(data.created || 0)}, обновлено: ${formatQuantity(data.updated || 0)}`,
-      });
+      if (data.noProductsMessage) {
+        toast({
+          title: `\u00AB${label}\u00BB — товары не найдены`,
+          description: data.noProductsMessage,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: `\u00ABДанные ${label}\u00BB успешно обновлены`,
+          description: data.marketplace === "wildberries"
+            ? `Товары: ${formatQuantity((data.created || 0) + (data.updated || 0))}, остатки: ${formatQuantity(data.stocksUpdated || 0)}, фото: ${formatQuantity(data.photosFixed || 0)}`
+            : data.marketplace === "ozon"
+            ? `Товары: ${formatQuantity((data.created || 0) + (data.updated || 0))}, обогащено: ${formatQuantity(data.enriched || 0)}`
+            : `Создано: ${formatQuantity(data.created || 0)}, обновлено: ${formatQuantity(data.updated || 0)}`,
+        });
+      }
       setImportingMarketplace(null);
     },
     onError: (error: Error) => {
