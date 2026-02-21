@@ -968,7 +968,11 @@ async function fetchYandexOffersByBusiness(base: string, headers: HeadersInit, b
       body: JSON.stringify({}),
     });
 
-    const data = await res.json();
+    console.log(`[Yandex Sync] Business offer-mappings HTTP status: ${res.status}`);
+    const text = await res.text();
+    console.log(`[Yandex Sync] Business offer-mappings response (first 1000 chars): ${text.substring(0, 1000)}`);
+    let data: any;
+    try { data = JSON.parse(text); } catch { data = null; }
     const entries = data?.result?.offerMappings || data?.result?.offerMappingEntries || [];
     allEntries.push(...entries);
 
@@ -995,7 +999,11 @@ async function fetchYandexOffersByCampaign(base: string, headers: HeadersInit, c
       body: JSON.stringify({}),
     });
 
-    const data = await res.json();
+    console.log(`[Yandex Sync] Campaign ${campaignId} offer-mappings HTTP status: ${res.status}`);
+    const text = await res.text();
+    console.log(`[Yandex Sync] Campaign ${campaignId} response (first 1000 chars): ${text.substring(0, 1000)}`);
+    let data: any;
+    try { data = JSON.parse(text); } catch { data = null; }
     const entries = data?.result?.offerMappings || data?.result?.offerMappingEntries || [];
     allEntries.push(...entries);
 
@@ -1012,8 +1020,13 @@ export async function fetchYandexProducts(oauthToken: string, businessId: string
   // Step 1: Discover campaigns
   let campaigns: Array<{ id: string; businessId: string }> = [];
   try {
+    console.log(`[Yandex Sync] === STEP 1: GET /campaigns ===`);
     const campRes = await fetchWithRetry(`${BASE}/campaigns`, { method: "GET", headers });
-    const campData = await campRes.json();
+    console.log(`[Yandex Sync] /campaigns HTTP status: ${campRes.status}`);
+    const campText = await campRes.text();
+    console.log(`[Yandex Sync] /campaigns raw response (first 2000 chars): ${campText.substring(0, 2000)}`);
+    let campData: any;
+    try { campData = JSON.parse(campText); } catch { campData = null; }
     const campList = campData?.campaigns || campData?.result?.campaigns || [];
     campaigns = campList.map((c: any) => ({
       id: String(c.id),
@@ -1028,16 +1041,16 @@ export async function fetchYandexProducts(oauthToken: string, businessId: string
   }
 
   // Step 2: Fetch products by businessId
-  console.log(`[Yandex Sync] Fetching products by businessId=${cleanBusinessId}...`);
+  console.log(`[Yandex Sync] === STEP 2: POST /businesses/${cleanBusinessId}/offer-mappings ===`);
   let allEntries = await fetchYandexOffersByBusiness(BASE, headers, cleanBusinessId);
   console.log(`[Yandex Sync] Business-level fetch returned ${allEntries.length} offer(s)`);
 
   // Step 3: If 0 products, fall back to per-campaign fetch
   if (allEntries.length === 0 && campaigns.length > 0) {
-    console.log(`[Yandex Sync] Business returned 0 products. Trying per-campaign deep search...`);
+    console.log(`[Yandex Sync] === STEP 3: Per-campaign deep search ===`);
     for (const camp of campaigns) {
       try {
-        console.log(`[Yandex Sync] Fetching offers for campaignId=${camp.id}...`);
+        console.log(`[Yandex Sync] POST /campaigns/${camp.id}/offer-mappings ...`);
         const campEntries = await fetchYandexOffersByCampaign(BASE, headers, camp.id);
         console.log(`[Yandex Sync] campaignId=${camp.id} returned ${campEntries.length} offer(s)`);
         allEntries.push(...campEntries);
