@@ -693,8 +693,9 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
 
   const hasOzon = !!product.ozonId;
   const hasWb = !!product.wbId;
-  const hasMarketplace = hasOzon || hasWb;
-  const marketplaceNames = [hasOzon && "Ozon", hasWb && "Wildberries"].filter(Boolean).join(", ");
+  const hasYandex = !!product.yandexId;
+  const hasMarketplace = hasOzon || hasWb || hasYandex;
+  const marketplaceNames = [hasOzon && "Ozon", hasWb && "Wildberries", hasYandex && "Yandex Market"].filter(Boolean).join(", ");
   const hasChanges = editName !== product.name ||
     editBarcode !== (product.barcode || "") ||
     editPrice !== Number(product.sellingPrice || product.price || 0) ||
@@ -803,6 +804,12 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
                   <div className="flex items-center gap-2">
                     <Badge className="text-white no-default-hover-elevate" style={{ backgroundColor: "#CB11AB" }}>Wildberries</Badge>
                     {product.wbId && <span className="text-xs text-muted-foreground">nmID: {product.wbId}</span>}
+                  </div>
+                )}
+                {hasYandex && (
+                  <div className="flex items-center gap-2">
+                    <Badge className="text-white no-default-hover-elevate" style={{ backgroundColor: "#FFCC00", color: "#000" }}>Yandex Market</Badge>
+                    {product.yandexId && <span className="text-xs text-muted-foreground">SKU: {product.yandexId}</span>}
                   </div>
                 )}
                 <div className="flex items-center gap-4 text-sm">
@@ -945,6 +952,7 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick }: 
               <span className="block">{product.name}</span>
               {product.ozonId && <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#005BFF" }} title="Ozon" />}
               {product.wbId && <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#CB11AB" }} title="Wildberries" />}
+              {product.yandexId && <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#FFCC00" }} title="Yandex Market" />}
             </div>
             {product.category && <span className="text-xs text-muted-foreground">{product.category}</span>}
           </div>
