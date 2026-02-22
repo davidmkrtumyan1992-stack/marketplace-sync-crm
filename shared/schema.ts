@@ -395,6 +395,8 @@ export type OrderWithDetails = Order & {
 export type StoreWithStats = Store & {
   productCount: number;
   pendingOrders: number;
+  activeOrdersCount: number;
+  activeOrdersRevenue: number;
 };
 
 export type CompanyWithStores = Company & {

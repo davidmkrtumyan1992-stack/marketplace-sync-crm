@@ -465,33 +465,45 @@ export default function Dashboard() {
                               {store.name}
                             </p>
 
-                            <div className="flex items-center gap-3 mb-4 flex-wrap">
-                              <div
-                                className="flex items-center gap-1.5 text-sm"
-                                data-testid={`text-store-stock-${store.id}`}
-                              >
-                                <Package className="w-4 h-4 text-muted-foreground" />
-                                <span className="font-medium">
-                                  {formatNumber(store.productCount)}
-                                </span>
-                                <span className="text-muted-foreground">шт.</span>
+                            <div className="flex flex-col gap-2 mb-4">
+                              <div className="flex items-center gap-3 flex-wrap">
+                                <div
+                                  className="flex items-center gap-1.5 text-sm"
+                                  data-testid={`text-store-stock-${store.id}`}
+                                >
+                                  <Package className="w-4 h-4 text-muted-foreground" />
+                                  <span className="font-medium">
+                                    {formatNumber(store.productCount)}
+                                  </span>
+                                  <span className="text-muted-foreground">шт.</span>
+                                </div>
+                                <div
+                                  className="flex items-center gap-1.5 text-sm"
+                                  data-testid={`text-store-orders-${store.id}`}
+                                >
+                                  <ShoppingCart className="w-4 h-4 text-muted-foreground" />
+                                  <span className="counter-badge">
+                                    {store.activeOrdersCount}
+                                  </span>
+                                  {store.activeOrdersCount > 0 && (
+                                    <span
+                                      className="inline-block w-2.5 h-2.5 rounded-full animate-pulse"
+                                      style={{ backgroundColor: "#ef4444", boxShadow: "0 0 6px 2px rgba(239,68,68,0.4)" }}
+                                      data-testid={`indicator-pending-${store.id}`}
+                                    />
+                                  )}
+                                  <span className="text-muted-foreground">в обработке</span>
+                                </div>
                               </div>
                               <div
                                 className="flex items-center gap-1.5 text-sm"
-                                data-testid={`text-store-orders-${store.id}`}
+                                data-testid={`text-store-revenue-${store.id}`}
                               >
-                                <ShoppingCart className="w-4 h-4 text-muted-foreground" />
-                                <span className="counter-badge">
-                                  {store.pendingOrders}
+                                <Coins className="w-4 h-4 text-muted-foreground" />
+                                <span className="font-semibold" style={{ color: store.activeOrdersRevenue > 0 ? "hsl(142 71% 45%)" : undefined }}>
+                                  {formatCurrency(store.activeOrdersRevenue)}
                                 </span>
-                                {store.pendingOrders > 0 && (
-                                  <span
-                                    className="inline-block w-2.5 h-2.5 rounded-full animate-pulse"
-                                    style={{ backgroundColor: "#ef4444", boxShadow: "0 0 6px 2px rgba(239,68,68,0.4)" }}
-                                    data-testid={`indicator-pending-${store.id}`}
-                                  />
-                                )}
-                                <span className="text-muted-foreground">в обработке</span>
+                                <span className="text-muted-foreground">выручка</span>
                               </div>
                             </div>
 

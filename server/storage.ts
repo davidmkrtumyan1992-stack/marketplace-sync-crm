@@ -614,10 +614,16 @@ export class DatabaseStorage implements IStorage {
       const storesWithStats: StoreWithStats[] = companyStores.map(store => {
         const storeOrders = companyOrders.filter(o => o.storeId === store.id);
         const pendingOrders = storeOrders.filter(o => o.status === "pending").length;
+        const activeOrders = storeOrders.filter(o => {
+          if (o.status === "completed" || o.status === "cancelled") return false;
+          return true;
+        });
+        const activeOrdersCount = activeOrders.length;
+        const activeOrdersRevenue = activeOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
         
         const productCount = companyProducts.length;
 
-        return { ...store, productCount, pendingOrders };
+        return { ...store, productCount, pendingOrders, activeOrdersCount, activeOrdersRevenue };
       });
 
       let companyTotalStock = 0;
