@@ -1,7 +1,7 @@
 import { 
   companies, stores, userRoles, expenses,
   products, customers, orders, orderItems, marketplaceSettings, taxSettings, auditLog, stockInflow, syncHistory,
-  stockSyncLog, inventorySyncSettings, productStoreExclusions,
+  stockSyncLog, inventorySyncSettings, productStoreExclusions, webhookLogs,
   type Company, type InsertCompany,
   type Store, type InsertStore,
   type UserRole, type InsertUserRole,
@@ -17,6 +17,7 @@ import {
   type StockSyncLogEntry, type InsertStockSyncLog,
   type InventorySyncSetting, type InsertInventorySyncSettings,
   type ProductStoreExclusion, type InsertProductStoreExclusion,
+  type WebhookLog, type InsertWebhookLog,
   type DashboardKPI, type CompanyWithStores, type StoreWithStats,
   type ABCProduct, type LowStockProduct, type SalesDataPoint,
   type SyncStatusSummary,
@@ -68,8 +69,14 @@ export interface IStorage {
   getOrders(organizationId: string, companyId?: number): Promise<OrderWithDetails[]>;
   getOrder(id: number): Promise<OrderWithDetails | undefined>;
   getOrdersByCustomerId(customerId: number, organizationId: string): Promise<OrderWithDetails[]>;
+  getOrderByPostingNumber(postingNumber: string, organizationId: string): Promise<Order | undefined>;
   createOrder(order: InsertOrder, items: { productId: number; quantity: number; price: number }[]): Promise<Order>;
   updateOrderStatus(id: number, status: string): Promise<Order>;
+  updateOrderOzonStatus(id: number, ozonStatus: string, status?: string): Promise<Order>;
+
+  // Webhook Logs
+  createWebhookLog(log: InsertWebhookLog): Promise<WebhookLog>;
+  getWebhookLogs(organizationId: string, limit?: number): Promise<WebhookLog[]>;
 
   // Marketplace
   getMarketplaceSettings(organizationId: string): Promise<MarketplaceSetting[]>;
@@ -404,6 +411,31 @@ export class DatabaseStorage implements IStorage {
   async updateOrderStatus(id: number, status: string): Promise<Order> {
     const [order] = await db.update(orders).set({ status }).where(eq(orders.id, id)).returning();
     return order;
+  }
+
+  async getOrderByPostingNumber(postingNumber: string, organizationId: string): Promise<Order | undefined> {
+    const [order] = await db.select().from(orders)
+      .where(and(eq(orders.postingNumber, postingNumber), eq(orders.organizationId, organizationId)));
+    return order;
+  }
+
+  async updateOrderOzonStatus(id: number, ozonStatus: string, status?: string): Promise<Order> {
+    const updates: Record<string, any> = { ozonStatus };
+    if (status) updates.status = status;
+    const [order] = await db.update(orders).set(updates).where(eq(orders.id, id)).returning();
+    return order;
+  }
+
+  async createWebhookLog(log: InsertWebhookLog): Promise<WebhookLog> {
+    const [entry] = await db.insert(webhookLogs).values(log).returning();
+    return entry;
+  }
+
+  async getWebhookLogs(organizationId: string, limit = 50): Promise<WebhookLog[]> {
+    return await db.select().from(webhookLogs)
+      .where(eq(webhookLogs.organizationId, organizationId))
+      .orderBy(desc(webhookLogs.createdAt))
+      .limit(limit);
   }
 
   // Marketplace

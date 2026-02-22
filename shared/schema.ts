@@ -102,6 +102,8 @@ export const orders = pgTable("orders", {
   totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull().default("0"),
   source: text("source").notNull().default("manual"),
   externalId: text("external_id"),
+  postingNumber: text("posting_number"),
+  ozonStatus: text("ozon_status"),
   companyId: integer("company_id").references(() => companies.id),
   storeId: integer("store_id").references(() => stores.id),
   organizationId: text("organization_id").notNull(),
@@ -176,6 +178,18 @@ export const stockInflow = pgTable("stock_inflow", {
   toYandex: integer("to_yandex").notNull().default(0),
   purchasePrice: decimal("purchase_price", { precision: 10, scale: 2 }),
   notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const webhookLogs = pgTable("webhook_logs", {
+  id: serial("id").primaryKey(),
+  organizationId: text("organization_id"),
+  source: text("source").notNull(),
+  eventType: text("event_type"),
+  payload: text("payload"),
+  status: text("status").notNull().default("received"),
+  errorMessage: text("error_message"),
+  orderId: integer("order_id").references(() => orders.id),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -288,6 +302,7 @@ export const insertAuditLogSchema = createInsertSchema(auditLog).omit({ id: true
 export const insertStockInflowSchema = createInsertSchema(stockInflow).omit({ id: true, createdAt: true });
 export const insertSyncHistorySchema = createInsertSchema(syncHistory).omit({ id: true, createdAt: true });
 export const insertStockSyncLogSchema = createInsertSchema(stockSyncLog).omit({ id: true, createdAt: true });
+export const insertWebhookLogSchema = createInsertSchema(webhookLogs).omit({ id: true, createdAt: true });
 export const insertInventorySyncSettingsSchema = createInsertSchema(inventorySyncSettings).omit({ id: true, updatedAt: true });
 export const insertProductStoreExclusionSchema = createInsertSchema(productStoreExclusions).omit({ id: true, createdAt: true });
 
@@ -325,6 +340,8 @@ export type InventorySyncSetting = typeof inventorySyncSettings.$inferSelect;
 export type InsertInventorySyncSettings = z.infer<typeof insertInventorySyncSettingsSchema>;
 export type ProductStoreExclusion = typeof productStoreExclusions.$inferSelect;
 export type InsertProductStoreExclusion = z.infer<typeof insertProductStoreExclusionSchema>;
+export type WebhookLog = typeof webhookLogs.$inferSelect;
+export type InsertWebhookLog = z.infer<typeof insertWebhookLogSchema>;
 
 // API Requests
 export type CreateProductRequest = InsertProduct;

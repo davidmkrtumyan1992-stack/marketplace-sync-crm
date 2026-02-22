@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus, useCreateDirectSale } from "@/hooks/use-orders";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders } from "@/hooks/use-orders";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +24,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone } from "lucide-react";
+import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, RefreshCw, Truck, XCircle, Loader2 } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
 import { useQuery } from "@tanstack/react-query";
@@ -42,10 +42,22 @@ interface DirectSaleItem {
   maxStock: number;
 }
 
+const OZON_STATUS_LABELS: Record<string, string> = {
+  awaiting_approve: "Ожидает подтверждения",
+  awaiting_packaging: "Ожидает сборки",
+  awaiting_deliver: "Ожидает отгрузки",
+  arbitration: "Арбитраж",
+  delivering: "Доставляется",
+  delivered: "Доставлен",
+  cancelled: "Отменён",
+  not_accepted: "Не принят",
+};
+
 export default function Orders() {
   const { data: orders, isLoading } = useOrders();
   const [isDirectSaleOpen, setIsDirectSaleOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
+  const syncOzonOrders = useSyncOzonOrders();
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -98,13 +110,24 @@ export default function Orders() {
             <h1 className="text-4xl font-bold tracking-tight" data-testid="text-orders-title">Заказы</h1>
             <p className="text-muted-foreground mt-2 text-lg">Отслеживание и выполнение заказов</p>
           </div>
-          <Button
-            data-testid="button-direct-sale"
-            onClick={() => setIsDirectSaleOpen(true)}
-          >
-            <Store className="w-4 h-4 mr-2" />
-            Прямая продажа
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => syncOzonOrders.mutate()}
+              disabled={syncOzonOrders.isPending}
+              data-testid="button-sync-ozon-orders"
+            >
+              {syncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+              Загрузить заказы Ozon
+            </Button>
+            <Button
+              data-testid="button-direct-sale"
+              onClick={() => setIsDirectSaleOpen(true)}
+            >
+              <Store className="w-4 h-4 mr-2" />
+              Прямая продажа
+            </Button>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-3">
@@ -205,7 +228,20 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge, onCl
                   <User className="w-4 h-4" />
                   {order.customer?.name || "Гость"}
                 </span>
+                {order.postingNumber && (
+                  <span className="flex items-center gap-1.5 font-mono text-xs">
+                    <Truck className="w-3.5 h-3.5" />
+                    {order.postingNumber}
+                  </span>
+                )}
               </div>
+              {order.ozonStatus && (
+                <div className="mt-1.5">
+                  <Badge variant="outline" className="text-xs border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400" data-testid={`badge-ozon-status-${order.id}`}>
+                    Ozon: {OZON_STATUS_LABELS[order.ozonStatus] || order.ozonStatus}
+                  </Badge>
+                </div>
+              )}
               {order.items && order.items.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {order.items.slice(0, 3).map((item: any) => (
@@ -264,8 +300,14 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
   getStatusColor: (s: string) => string;
 }) {
   const [, navigate] = useLocation();
+  const ozonShip = useOzonShipOrder();
+  const ozonCancel = useOzonCancelOrder();
 
   if (!order) return null;
+
+  const isOzon = order.source === "ozon" && order.postingNumber;
+  const canShip = isOzon && ["awaiting_packaging", "awaiting_deliver"].includes(order.ozonStatus || "");
+  const canCancel = isOzon && ["awaiting_approve", "awaiting_packaging"].includes(order.ozonStatus || "");
 
   const getSourceLabel = (source: string) => {
     switch (source) {
@@ -302,11 +344,50 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
             <Badge className={`${getStatusColor(order.status)}`}>
               {getStatusLabel(order.status)}
             </Badge>
+            {order.ozonStatus && (
+              <Badge variant="outline" className="text-xs border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400">
+                Ozon: {OZON_STATUS_LABELS[order.ozonStatus] || order.ozonStatus}
+              </Badge>
+            )}
             <span className="text-sm text-muted-foreground flex items-center gap-1.5">
               <Calendar className="w-4 h-4" />
               {order.createdAt ? format(new Date(order.createdAt), "d MMMM yyyy, HH:mm", { locale: ru }) : "-"}
             </span>
           </div>
+
+          {isOzon && (
+            <div className="flex flex-wrap items-center gap-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="flex-1">
+                <p className="text-xs text-muted-foreground">Номер отправления Ozon</p>
+                <p className="font-mono font-medium text-sm" data-testid="text-posting-number">{order.postingNumber}</p>
+              </div>
+              <div className="flex gap-2">
+                {canShip && (
+                  <Button
+                    size="sm"
+                    onClick={() => ozonShip.mutate(order.id)}
+                    disabled={ozonShip.isPending}
+                    data-testid="button-ozon-ship"
+                  >
+                    {ozonShip.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Truck className="w-4 h-4 mr-1.5" />}
+                    Собрать заказ
+                  </Button>
+                )}
+                {canCancel && (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => ozonCancel.mutate({ orderId: order.id })}
+                    disabled={ozonCancel.isPending}
+                    data-testid="button-ozon-cancel"
+                  >
+                    {ozonCancel.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <XCircle className="w-4 h-4 mr-1.5" />}
+                    Отменить
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
 
           <div>
             <h4 className="text-sm font-medium mb-3 flex items-center gap-2">

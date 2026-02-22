@@ -4,7 +4,10 @@ import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
 import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, fixWbPhotos, syncProductToOzon, syncProductToWb } from "./marketplace-import";
 import { api } from "@shared/routes";
+import { marketplaceSettings as marketplaceSettingsTable, products as productsTable } from "@shared/schema";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { db } from "./db";
+import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -1536,6 +1539,388 @@ export async function registerRoutes(
       console.error("Import error:", error);
       res.status(500).json({ message: `Ошибка импорта: ${error.message}` });
     }
+  });
+
+  // ===== OZON ORDER MANAGEMENT =====
+
+  // Ozon FBS Status Mapping
+  const ozonStatusToInternal = (ozonStatus: string): string => {
+    switch (ozonStatus) {
+      case "awaiting_approve": return "pending";
+      case "awaiting_packaging": return "processing";
+      case "awaiting_deliver": return "processing";
+      case "delivering": return "shipped";
+      case "delivered": return "completed";
+      case "cancelled": return "cancelled";
+      case "not_accepted": return "cancelled";
+      default: return "pending";
+    }
+  };
+
+  const ozonStatusLabel = (status: string): string => {
+    const map: Record<string, string> = {
+      awaiting_approve: "Ожидает подтверждения",
+      awaiting_packaging: "Ожидает сборки",
+      awaiting_deliver: "Ожидает отгрузки",
+      arbitration: "Арбитраж",
+      delivering: "Доставляется",
+      delivered: "Доставлен",
+      cancelled: "Отменён",
+      not_accepted: "Не принят",
+    };
+    return map[status] || status;
+  };
+
+  // Webhook: receive Ozon push notifications for FBS orders
+  app.post("/api/webhooks/ozon/orders", async (req, res) => {
+    const clientId = req.headers["client-id"] as string || "";
+    const apiKey = req.headers["api-key"] as string || "";
+    const payload = JSON.stringify(req.body);
+
+    console.log(`[ozon-webhook] Incoming webhook, Client-Id: ${clientId}, body size: ${payload.length}`);
+
+    try {
+      if (!clientId) {
+        console.warn("[ozon-webhook] Missing Client-Id header");
+        await storage.createWebhookLog({ source: "ozon", eventType: "order", payload, status: "error", errorMessage: "Missing Client-Id header", organizationId: null });
+        return res.status(401).json({ message: "Missing Client-Id" });
+      }
+
+      const allSettings = await db.select().from(marketplaceSettingsTable)
+        .where(and(
+          eq(marketplaceSettingsTable.marketplace, "ozon"),
+          eq(marketplaceSettingsTable.clientId, clientId)
+        ));
+
+      if (allSettings.length === 0) {
+        console.warn(`[ozon-webhook] No marketplace setting found for Client-Id: ${clientId}`);
+        await storage.createWebhookLog({ source: "ozon", eventType: "order", payload, status: "error", errorMessage: `Unknown Client-Id: ${clientId}`, organizationId: null });
+        return res.status(403).json({ message: "Unknown Client-Id" });
+      }
+
+      const setting = allSettings[0];
+      const orgId = setting.organizationId;
+
+      if (setting.apiKey !== apiKey) {
+        console.warn(`[ozon-webhook] API key mismatch for Client-Id: ${clientId}`);
+        await storage.createWebhookLog({ source: "ozon", eventType: "order", payload, status: "error", errorMessage: "API key mismatch", organizationId: orgId });
+        return res.status(403).json({ message: "Invalid Api-Key" });
+      }
+
+      const data = req.body;
+      const postingNumber = data?.posting_number || data?.posting?.posting_number;
+      const ozonStatus = data?.status || data?.posting?.status;
+      const products_list = data?.products || data?.posting?.products || [];
+
+      console.log(`[ozon-webhook] Processing posting ${postingNumber}, status: ${ozonStatus}, products: ${products_list.length}`);
+
+      const existingOrder = postingNumber ? await storage.getOrderByPostingNumber(postingNumber, orgId) : null;
+
+      if (existingOrder) {
+        console.log(`[ozon-webhook] Updating existing order #${existingOrder.id} for posting ${postingNumber}`);
+        const internalStatus = ozonStatusToInternal(ozonStatus);
+        await storage.updateOrderOzonStatus(existingOrder.id, ozonStatus, internalStatus);
+        await storage.createWebhookLog({ source: "ozon", eventType: "order_update", payload, status: "processed", organizationId: orgId, orderId: existingOrder.id });
+        return res.json({ success: true, action: "updated", orderId: existingOrder.id });
+      }
+
+      const orderItems: { productId: number; quantity: number; price: number }[] = [];
+      let totalAmount = 0;
+
+      for (const prod of products_list) {
+        const sku = prod.offer_id || prod.sku || "";
+        const qty = prod.quantity || 1;
+        const price = parseFloat(prod.price || "0");
+
+        if (sku) {
+          const [dbProduct] = await db.select().from(productsTable)
+            .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+
+          if (dbProduct) {
+            orderItems.push({ productId: dbProduct.id, quantity: qty, price });
+            totalAmount += price * qty;
+          } else {
+            console.warn(`[ozon-webhook] Product not found by SKU: ${sku}`);
+          }
+        }
+      }
+
+      if (orderItems.length === 0) {
+        console.warn(`[ozon-webhook] No products matched for posting ${postingNumber}`);
+        await storage.createWebhookLog({ source: "ozon", eventType: "order_no_match", payload, status: "warning", errorMessage: "No products matched by SKU", organizationId: orgId });
+        return res.json({ success: false, message: "No matching products" });
+      }
+
+      const internalStatus = ozonStatusToInternal(ozonStatus);
+      const order = await storage.createOrder({
+        orderNumber: postingNumber || `OZON-${Date.now()}`,
+        status: internalStatus,
+        totalAmount: totalAmount.toFixed(2),
+        source: "ozon",
+        externalId: data?.order_id?.toString() || postingNumber,
+        postingNumber: postingNumber || null,
+        ozonStatus: ozonStatus || null,
+        storeId: setting.id,
+        organizationId: orgId,
+      }, orderItems);
+
+      console.log(`[ozon-webhook] Created order #${order.id} for posting ${postingNumber} with ${orderItems.length} items`);
+      await storage.createWebhookLog({ source: "ozon", eventType: "order_created", payload, status: "processed", organizationId: orgId, orderId: order.id });
+
+      res.status(201).json({ success: true, action: "created", orderId: order.id });
+    } catch (error: any) {
+      console.error("[ozon-webhook] Error processing webhook:", error);
+      await storage.createWebhookLog({ source: "ozon", eventType: "order", payload, status: "error", errorMessage: error.message, organizationId: null });
+      res.status(500).json({ message: "Internal error" });
+    }
+  });
+
+  // Pull Ozon FBS orders (polling fallback)
+  app.post("/api/marketplace/ozon/sync-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+
+      if (!ozonSetting) {
+        return res.status(400).json({ message: "Настройки Ozon не найдены" });
+      }
+
+      const BASE = "https://api-seller.ozon.ru";
+      const headers = {
+        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+        "Api-Key": ozonSetting.apiKey.trim(),
+        "Content-Type": "application/json",
+      };
+
+      const since = new Date();
+      since.setDate(since.getDate() - 7);
+      const body = {
+        dir: "ASC",
+        filter: {
+          since: since.toISOString(),
+          to: new Date().toISOString(),
+          status: "",
+        },
+        limit: 50,
+        offset: 0,
+      };
+
+      console.log(`[ozon-sync-orders] Fetching FBS orders since ${since.toISOString()}`);
+
+      const response = await fetch(`${BASE}/v3/posting/fbs/list`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        console.error(`[ozon-sync-orders] API error ${response.status}: ${errText.slice(0, 500)}`);
+        return res.status(502).json({ message: `Ozon API error: ${response.status}` });
+      }
+
+      const data = await response.json();
+      const postings = data?.result?.postings || [];
+      console.log(`[ozon-sync-orders] Received ${postings.length} postings`);
+
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
+
+      for (const posting of postings) {
+        const postingNumber = posting.posting_number;
+        const ozonStatus = posting.status;
+        const existingOrder = await storage.getOrderByPostingNumber(postingNumber, orgId);
+
+        if (existingOrder) {
+          const internalStatus = ozonStatusToInternal(ozonStatus);
+          if (existingOrder.ozonStatus !== ozonStatus) {
+            await storage.updateOrderOzonStatus(existingOrder.id, ozonStatus, internalStatus);
+            updated++;
+          } else {
+            skipped++;
+          }
+          continue;
+        }
+
+        const items: { productId: number; quantity: number; price: number }[] = [];
+        let totalAmount = 0;
+
+        for (const prod of posting.products || []) {
+          const sku = prod.offer_id || "";
+          const qty = prod.quantity || 1;
+          const price = parseFloat(prod.price || "0");
+
+          if (sku) {
+            const [dbProduct] = await db.select().from(productsTable)
+              .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+
+            if (dbProduct) {
+              items.push({ productId: dbProduct.id, quantity: qty, price });
+              totalAmount += price * qty;
+            }
+          }
+        }
+
+        if (items.length > 0) {
+          const internalStatus = ozonStatusToInternal(ozonStatus);
+          await storage.createOrder({
+            orderNumber: postingNumber,
+            status: internalStatus,
+            totalAmount: totalAmount.toFixed(2),
+            source: "ozon",
+            externalId: posting.order_id?.toString() || postingNumber,
+            postingNumber,
+            ozonStatus,
+            storeId: ozonSetting.id,
+            organizationId: orgId,
+          }, items);
+          created++;
+        }
+      }
+
+      console.log(`[ozon-sync-orders] Sync complete: created=${created}, updated=${updated}, skipped=${skipped}`);
+      res.json({ success: true, created, updated, skipped, total: postings.length });
+    } catch (error: any) {
+      console.error("[ozon-sync-orders] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Ozon FBS: Ship order (Собрать заказ)
+  app.post("/api/orders/:id/ozon-ship", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const orderId = Number(req.params.id);
+      const order = await storage.getOrder(orderId);
+
+      if (!order || order.organizationId !== orgId) {
+        return res.status(404).json({ message: "Заказ не найден" });
+      }
+      if (!order.postingNumber || order.source !== "ozon") {
+        return res.status(400).json({ message: "Это не заказ Ozon" });
+      }
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+      if (!ozonSetting) {
+        return res.status(400).json({ message: "Настройки Ozon не найдены" });
+      }
+
+      const BASE = "https://api-seller.ozon.ru";
+      const headers = {
+        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+        "Api-Key": ozonSetting.apiKey.trim(),
+        "Content-Type": "application/json",
+      };
+
+      const packages = order.items.map(item => ({
+        products: [{
+          product_id: item.product?.ozonId ? parseInt(item.product.ozonId) : 0,
+          quantity: item.quantity,
+        }],
+      }));
+
+      const shipBody = {
+        posting_number: order.postingNumber,
+        packages,
+      };
+
+      console.log(`[ozon-ship] Shipping posting ${order.postingNumber}`);
+
+      const response = await fetch(`${BASE}/v3/posting/fbs/ship`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(shipBody),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        console.error(`[ozon-ship] API error ${response.status}:`, JSON.stringify(result).slice(0, 500));
+        return res.status(502).json({ message: `Ozon API: ${result?.message || response.status}` });
+      }
+
+      await storage.updateOrderOzonStatus(orderId, "awaiting_deliver", "processing");
+      console.log(`[ozon-ship] Successfully shipped posting ${order.postingNumber}`);
+      res.json({ success: true, result });
+    } catch (error: any) {
+      console.error("[ozon-ship] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Ozon FBS: Cancel order (Отменить)
+  app.post("/api/orders/:id/ozon-cancel", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const orderId = Number(req.params.id);
+      const order = await storage.getOrder(orderId);
+
+      if (!order || order.organizationId !== orgId) {
+        return res.status(404).json({ message: "Заказ не найден" });
+      }
+      if (!order.postingNumber || order.source !== "ozon") {
+        return res.status(400).json({ message: "Это не заказ Ozon" });
+      }
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+      if (!ozonSetting) {
+        return res.status(400).json({ message: "Настройки Ozon не найдены" });
+      }
+
+      const BASE = "https://api-seller.ozon.ru";
+      const headers = {
+        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+        "Api-Key": ozonSetting.apiKey.trim(),
+        "Content-Type": "application/json",
+      };
+
+      const cancelReason = req.body.reason || "seller_other";
+      const cancelBody = {
+        posting_number: order.postingNumber,
+        cancel_reason_id: 352,
+        cancel_reason_message: cancelReason,
+      };
+
+      console.log(`[ozon-cancel] Cancelling posting ${order.postingNumber}, reason: ${cancelReason}`);
+
+      const response = await fetch(`${BASE}/v2/posting/fbs/cancel`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(cancelBody),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        console.error(`[ozon-cancel] API error ${response.status}:`, JSON.stringify(result).slice(0, 500));
+        return res.status(502).json({ message: `Ozon API: ${result?.message || response.status}` });
+      }
+
+      await storage.updateOrderOzonStatus(orderId, "cancelled", "cancelled");
+      console.log(`[ozon-cancel] Successfully cancelled posting ${order.postingNumber}`);
+      res.json({ success: true, result });
+    } catch (error: any) {
+      console.error("[ozon-cancel] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get Ozon status label (for frontend)
+  app.get("/api/ozon/status-labels", isAuthenticated, async (_req, res) => {
+    res.json({
+      awaiting_approve: "Ожидает подтверждения",
+      awaiting_packaging: "Ожидает сборки",
+      awaiting_deliver: "Ожидает отгрузки",
+      arbitration: "Арбитраж",
+      delivering: "Доставляется",
+      delivered: "Доставлен",
+      cancelled: "Отменён",
+      not_accepted: "Не принят",
+    });
   });
 
   return httpServer;
