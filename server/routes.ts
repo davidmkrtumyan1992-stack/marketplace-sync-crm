@@ -1607,12 +1607,21 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Invalid Api-Key" });
       }
 
+      let resolvedStoreId: number | null = null;
+      let resolvedCompanyId: number | null = null;
+      if (setting.companyId) {
+        resolvedCompanyId = setting.companyId;
+        const companyStores = await storage.getStores(setting.companyId);
+        const ozonStore = companyStores.find(s => s.marketplace === "ozon");
+        if (ozonStore) resolvedStoreId = ozonStore.id;
+      }
+
       const data = req.body;
       const postingNumber = data?.posting_number || data?.posting?.posting_number;
       const ozonStatus = data?.status || data?.posting?.status;
       const products_list = data?.products || data?.posting?.products || [];
 
-      console.log(`[ozon-webhook] Processing posting ${postingNumber}, status: ${ozonStatus}, products: ${products_list.length}`);
+      console.log(`[ozon-webhook] Processing posting ${postingNumber}, status: ${ozonStatus}, products: ${products_list.length}, storeId: ${resolvedStoreId}, companyId: ${resolvedCompanyId}`);
 
       const existingOrder = postingNumber ? await storage.getOrderByPostingNumber(postingNumber, orgId) : null;
 
@@ -1660,7 +1669,8 @@ export async function registerRoutes(
         externalId: data?.order_id?.toString() || postingNumber,
         postingNumber: postingNumber || null,
         ozonStatus: ozonStatus || null,
-        storeId: setting.id,
+        storeId: resolvedStoreId,
+        companyId: resolvedCompanyId,
         organizationId: orgId,
       }, orderItems);
 
@@ -1686,6 +1696,15 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Настройки Ozon не найдены" });
       }
 
+      let resolvedStoreId: number | null = null;
+      let resolvedCompanyId: number | null = null;
+      if (ozonSetting.companyId) {
+        resolvedCompanyId = ozonSetting.companyId;
+        const companyStores = await storage.getStores(ozonSetting.companyId);
+        const ozonStore = companyStores.find(s => s.marketplace === "ozon");
+        if (ozonStore) resolvedStoreId = ozonStore.id;
+      }
+
       const BASE = "https://api-seller.ozon.ru";
       const headers = {
         "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
@@ -1706,7 +1725,7 @@ export async function registerRoutes(
         offset: 0,
       };
 
-      console.log(`[ozon-sync-orders] Fetching FBS orders since ${since.toISOString()}`);
+      console.log(`[ozon-sync-orders] Fetching FBS orders since ${since.toISOString()}, storeId: ${resolvedStoreId}, companyId: ${resolvedCompanyId}`);
 
       const response = await fetch(`${BASE}/v3/posting/fbs/list`, {
         method: "POST",
@@ -1773,7 +1792,8 @@ export async function registerRoutes(
             externalId: posting.order_id?.toString() || postingNumber,
             postingNumber,
             ozonStatus,
-            storeId: ozonSetting.id,
+            storeId: resolvedStoreId,
+            companyId: resolvedCompanyId,
             organizationId: orgId,
           }, items);
           created++;
