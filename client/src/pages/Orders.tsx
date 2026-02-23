@@ -114,6 +114,18 @@ export default function Orders() {
   const syncOzonOrders = useSyncOzonOrders();
   const bulkLabels = useOzonBulkLabels();
 
+  const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number }[]>({
+    queryKey: ["/api/stores"],
+  });
+
+  const storesMap = useMemo(() => {
+    const map = new Map<number, string>();
+    if (storesList) {
+      for (const s of storesList) map.set(s.id, s.name);
+    }
+    return map;
+  }, [storesList]);
+
   const filteredOrders = useMemo(() => {
     if (!orders) return [];
     let result = orders;
@@ -345,6 +357,7 @@ export default function Orders() {
                     <OrderCard
                       key={order.id}
                       order={order}
+                      storeName={order.storeId ? storesMap.get(order.storeId) : undefined}
                       getStatusColor={getStatusColor}
                       getStatusLabel={getStatusLabel}
                       getSourceBadge={getSourceBadge}
@@ -375,8 +388,9 @@ export default function Orders() {
   );
 }
 
-function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge, onClick }: { 
+function OrderCard({ order, storeName, getStatusColor, getStatusLabel, getSourceBadge, onClick }: { 
   order: any; 
+  storeName?: string;
   getStatusColor: (s: string) => string; 
   getStatusLabel: (s: string) => string;
   getSourceBadge: (s: string) => React.ReactNode;
@@ -426,6 +440,12 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge, onCl
               <div className="flex items-center gap-3 flex-wrap">
                 <h3 className="font-bold text-lg">{order.orderNumber}</h3>
                 {getSourceBadge(order.source)}
+                {storeName && (
+                  <Badge variant="outline" className="text-xs" data-testid={`badge-store-name-${order.id}`}>
+                    <Store className="w-3 h-3 mr-1" />
+                    {storeName}
+                  </Badge>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-4 mt-2 text-sm text-muted-foreground">
                 <span className="flex items-center gap-1.5">

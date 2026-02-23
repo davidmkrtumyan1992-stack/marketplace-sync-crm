@@ -485,14 +485,16 @@ const CYRILLIC_REGEX = /[А-Яа-яЁё]/;
 const ASCII_ONLY_REGEX = /^[\x00-\x7F]*$/;
 const DIGITS_ONLY_REGEX = /^\d+$/;
 
-const storeFormSchema = z.object({
+const storeFormBaseSchema = z.object({
   storeName: z.string().min(1, "Название обязательно"),
   marketplace: z.enum(["ozon", "wildberries", "yandex"]),
   apiKey: z.string().min(1, "API-ключ обязателен"),
   clientId: z.string().optional(),
   warehouseId: z.string().optional(),
   isActive: z.boolean(),
-}).superRefine((data, ctx) => {
+});
+
+const storeRefinement = (data: z.infer<typeof storeFormBaseSchema>, ctx: z.RefinementCtx) => {
   if (data.marketplace === "ozon" && (!data.clientId || data.clientId.trim() === "")) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Client ID обязателен для Ozon", path: ["clientId"] });
   }
@@ -508,7 +510,13 @@ const storeFormSchema = z.object({
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Business ID обязателен для Yandex Market", path: ["warehouseId"] });
     }
   }
-});
+};
+
+const storeFormSchema = storeFormBaseSchema.superRefine(storeRefinement);
+
+const addStoreFormSchema = storeFormBaseSchema.extend({
+  companyId: z.string().min(1, "Выберите компанию"),
+}).superRefine((data, ctx) => storeRefinement(data, ctx));
 
 function AddStoreDialog({ companies, onClose }: { companies: Company[]; onClose: () => void }) {
   const queryClient = useQueryClient();
@@ -516,12 +524,8 @@ function AddStoreDialog({ companies, onClose }: { companies: Company[]; onClose:
   const [marketplace, setMarketplace] = useState<string>("ozon");
   const [companyId, setCompanyId] = useState<string>(companies.length > 0 ? String(companies[0].id) : "");
 
-  const storeFormSchemaExt = storeFormSchema.extend({
-    companyId: z.string().min(1, "Выберите компанию"),
-  });
-
-  const form = useForm<z.infer<typeof storeFormSchemaExt>>({
-    resolver: zodResolver(storeFormSchemaExt),
+  const form = useForm<z.infer<typeof addStoreFormSchema>>({
+    resolver: zodResolver(addStoreFormSchema),
     defaultValues: {
       storeName: "",
       marketplace: "ozon",
@@ -534,7 +538,7 @@ function AddStoreDialog({ companies, onClose }: { companies: Company[]; onClose:
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: z.infer<typeof storeFormSchemaExt>) => {
+    mutationFn: async (data: z.infer<typeof addStoreFormSchema>) => {
       const sanitize = (s: string) => s.replace(/[^\x00-\x7F]/g, "").trim();
       const apiKey = data.marketplace === "yandex" ? sanitize(data.apiKey) : data.apiKey.trim();
 
