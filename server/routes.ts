@@ -1835,14 +1835,42 @@ export async function registerRoutes(
         "Content-Type": "application/json",
       };
 
-      const items = order.items.map(item => ({
-        item_id: item.product?.ozonId ? parseInt(item.product.ozonId) : 0,
-        quantity: item.quantity,
+      console.log(`[ozon-ship] Fetching posting details for ${order.postingNumber}`);
+      const getPostingRes = await fetch(`${BASE}/v3/posting/fbs/get`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ posting_number: order.postingNumber, with: { product_exemplars: false } }),
+      });
+
+      const getPostingText = await getPostingRes.text();
+      let postingData: any;
+      try {
+        postingData = JSON.parse(getPostingText);
+      } catch {
+        console.error(`[ozon-ship] Failed to fetch posting details (${getPostingRes.status}):`, getPostingText.slice(0, 500));
+        return res.status(502).json({ message: `Не удалось получить данные заказа из Ozon (${getPostingRes.status})` });
+      }
+
+      if (!getPostingRes.ok) {
+        console.error(`[ozon-ship] Get posting error ${getPostingRes.status}:`, JSON.stringify(postingData).slice(0, 500));
+        const errMsg = postingData?.message || `Ошибка ${getPostingRes.status}`;
+        return res.status(502).json({ message: `Ozon API: ${errMsg}` });
+      }
+
+      const ozonProducts = postingData?.result?.products || [];
+      if (ozonProducts.length === 0) {
+        console.error(`[ozon-ship] No products found in Ozon posting ${order.postingNumber}`);
+        return res.status(400).json({ message: "Нет товаров в отправлении Ozon" });
+      }
+
+      const items = ozonProducts.map((p: any) => ({
+        item_id: p.sku,
+        quantity: p.quantity || 1,
       }));
 
       const shipBody = {
-        posting_number: order.postingNumber,
         packages: [{ items }],
+        posting_number: order.postingNumber,
       };
 
       console.log(`[ozon-ship] Shipping posting ${order.postingNumber}, payload:`, JSON.stringify(shipBody).slice(0, 500));
@@ -1854,6 +1882,7 @@ export async function registerRoutes(
       });
 
       const rawText = await response.text();
+      console.log(`[ozon-ship] Response (${response.status}):`, rawText.slice(0, 1000));
       let result: any;
       try {
         result = JSON.parse(rawText);
