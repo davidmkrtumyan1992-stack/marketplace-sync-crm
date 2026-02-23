@@ -591,7 +591,7 @@ export class DatabaseStorage implements IStorage {
     const allOrders = await db.select().from(orders).where(eq(orders.organizationId, organizationId));
 
     const activeOrders = allOrders.filter(o => {
-      return o.source === "ozon" && 
+      return o.source === "ozon" && o.fulfillmentType === "FBS" &&
         (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver");
     });
     const activeOrderIds = activeOrders.map(o => o.id);
