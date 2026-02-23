@@ -1286,8 +1286,11 @@ export async function registerRoutes(
   });
 
   app.get(api.analytics.sales.path, isAuthenticated, requireRole("owner"), async (req, res) => {
-    const days = req.query.days ? Number(req.query.days) : 30;
-    const sales = await storage.getSalesData(getOrgId(req), days);
+    const days = req.query.days ? Number(req.query.days) : undefined;
+    const from = req.query.from ? String(req.query.from) : undefined;
+    const to = req.query.to ? String(req.query.to) : undefined;
+    const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
+    const sales = await storage.getSalesData(getOrgId(req), { days, from, to, storeId });
     res.json(sales);
   });
 
@@ -1382,6 +1385,30 @@ export async function registerRoutes(
     const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", "attachment; filename=products.xlsx");
+    res.send(Buffer.from(buffer));
+  });
+
+  app.get("/api/export/sales", isAuthenticated, requireRole("owner"), async (req, res) => {
+    const orgId = getOrgId(req);
+    const from = req.query.from ? String(req.query.from) : undefined;
+    const to = req.query.to ? String(req.query.to) : undefined;
+    const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
+    const sales = await storage.getSalesData(orgId, { from, to, storeId });
+
+    const totalRevenue = sales.reduce((sum, s) => sum + s.revenue, 0);
+    const rows = sales.map(s => ({
+      "Дата": s.date,
+      "Компания": s.companyName,
+      "Выручка": s.revenue,
+    }));
+    rows.push({ "Дата": "ИТОГО", "Компания": "", "Выручка": totalRevenue });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Выручка");
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename=sales-${from || "all"}-${to || "all"}.xlsx`);
     res.send(Buffer.from(buffer));
   });
 

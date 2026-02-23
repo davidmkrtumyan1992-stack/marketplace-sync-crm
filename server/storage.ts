@@ -112,7 +112,7 @@ export interface IStorage {
   // Analytics
   getABCAnalysis(organizationId: string): Promise<ABCProduct[]>;
   getLowStockProducts(organizationId: string, threshold?: number): Promise<LowStockProduct[]>;
-  getSalesData(organizationId: string, days?: number): Promise<SalesDataPoint[]>;
+  getSalesData(organizationId: string, options?: { days?: number; from?: string; to?: string; storeId?: number }): Promise<SalesDataPoint[]>;
   
   // Stock Sync Log
   getStockSyncLogs(organizationId: string, limit?: number): Promise<StockSyncLogEntry[]>;
@@ -769,20 +769,42 @@ export class DatabaseStorage implements IStorage {
       .sort((a, b) => (a.centralStock || 0) - (b.centralStock || 0));
   }
 
-  async getSalesData(organizationId: string, days: number = 30): Promise<SalesDataPoint[]> {
+  async getSalesData(organizationId: string, options: { days?: number; from?: string; to?: string; storeId?: number } = {}): Promise<SalesDataPoint[]> {
     const companyList = await this.getCompanies(organizationId);
     const companyMap = new Map(companyList.map(c => [c.id, c.name]));
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - days);
 
     const ordersList = await db.select().from(orders)
       .where(eq(orders.organizationId, organizationId));
 
-    const recentOrders = ordersList.filter(o => o.createdAt && new Date(o.createdAt) >= cutoffDate);
+    let fromDate: Date;
+    let toDate: Date;
+
+    if (options.from && options.to) {
+      fromDate = new Date(options.from);
+      fromDate.setHours(0, 0, 0, 0);
+      toDate = new Date(options.to);
+      toDate.setHours(23, 59, 59, 999);
+    } else {
+      const days = options.days || 30;
+      toDate = new Date();
+      toDate.setHours(23, 59, 59, 999);
+      fromDate = new Date();
+      fromDate.setDate(fromDate.getDate() - days + 1);
+      fromDate.setHours(0, 0, 0, 0);
+    }
+
+    const filtered = ordersList.filter(o => {
+      if (!o.createdAt) return false;
+      const created = new Date(o.createdAt);
+      if (created < fromDate || created > toDate) return false;
+      if (o.status === "cancelled" || o.ozonStatus === "cancelled") return false;
+      if (options.storeId && o.storeId !== options.storeId) return false;
+      return true;
+    });
 
     const dataByDateCompany: Record<string, SalesDataPoint> = {};
 
-    for (const order of recentOrders) {
+    for (const order of filtered) {
       const dateStr = order.createdAt ? new Date(order.createdAt).toISOString().split("T")[0] : "unknown";
       const key = `${dateStr}_${order.companyId || 0}`;
       if (!dataByDateCompany[key]) {

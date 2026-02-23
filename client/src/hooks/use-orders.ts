@@ -31,6 +31,7 @@ export function useCreateOrder() {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
       toast({ title: "Заказ создан" });
     },
     onError: (error: Error) => {
@@ -61,6 +62,7 @@ export function useCreateDirectSale() {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
       queryClient.invalidateQueries({ queryKey: ["/api/analytics/low-stock"] });
       queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
       toast({ title: "Продажа оформлена", description: "Остатки обновлены и синхронизированы" });
@@ -90,6 +92,7 @@ export function useUpdateOrderStatus() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
       toast({ title: "Статус обновлён" });
     },
   });
@@ -115,6 +118,7 @@ export function useOzonShipOrder() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
       toast({ title: "Заказ собран", description: "Статус обновлён в Ozon" });
     },
     onError: (error: Error) => {
@@ -144,6 +148,7 @@ export function useOzonCancelOrder() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
       toast({ title: "Заказ отменён", description: "Статус обновлён в Ozon" });
     },
     onError: (error: Error) => {
@@ -172,6 +177,7 @@ export function useSyncOzonOrders() {
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
       toast({ 
         title: "Синхронизация завершена", 
         description: `Создано: ${data.created}, обновлено: ${data.updated}` 

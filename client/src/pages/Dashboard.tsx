@@ -1,11 +1,11 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Layout } from "@/components/Layout";
 import { useProducts } from "@/hooks/use-products";
 import { useOrders } from "@/hooks/use-orders";
 import { useKPI } from "@/hooks/use-kpi";
 import { useRole } from "@/hooks/use-role";
 import { useQuery } from "@tanstack/react-query";
-import { Package, Warehouse, TrendingUp, Coins, ArrowUpRight, Building2, Store, ShoppingCart, ExternalLink, Database, AlertTriangle, RefreshCw, CheckCircle2, XCircle, Shield, CalendarDays, Boxes } from "lucide-react";
+import { Package, Warehouse, TrendingUp, Coins, ArrowUpRight, Building2, Store, ShoppingCart, ExternalLink, Database, AlertTriangle, RefreshCw, CheckCircle2, XCircle, Shield, CalendarDays, Boxes, Calendar as CalendarIcon, Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -23,7 +23,14 @@ import { formatCurrency, formatQuantity, formatNumber } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
 import type { DashboardKPI, LowStockProduct, SalesDataPoint, SyncStatusSummary } from "@shared/schema";
 import { Link } from "wouter";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { format, subDays, startOfMonth } from "date-fns";
+import { ru } from "date-fns/locale";
+import type { DateRange } from "react-day-picker";
+import { api } from "@shared/routes";
 
 const CHART_COLORS = ['#0FC2C0', '#0CABA8', '#008F8C', '#015958'];
 
@@ -38,8 +45,8 @@ export default function Dashboard() {
     queryKey: ["/api/analytics/low-stock"],
   });
 
-  const { data: salesData } = useQuery<SalesDataPoint[]>({
-    queryKey: ["/api/analytics/sales"],
+  const { data: storesList } = useQuery<any[]>({
+    queryKey: [api.stores.list.path],
   });
 
   const { data: syncStatus } = useQuery<SyncStatusSummary>({
@@ -47,33 +54,85 @@ export default function Dashboard() {
     refetchInterval: 15000,
   });
 
-  const [salesFilter, setSalesFilter] = useState<string>("all");
+  const today = useMemo(() => new Date(), []);
+  const [dateRange, setDateRange] = useState<DateRange | undefined>({
+    from: today,
+    to: today,
+  });
+  const [datePreset, setDatePreset] = useState<string>("today");
+  const [storeFilter, setStoreFilter] = useState<string>("all");
   const [lowStockOpen, setLowStockOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [activeBarIndex, setActiveBarIndex] = useState<number | null>(null);
 
-  const companyNames = useMemo(() => {
-    if (!salesData) return [];
-    const names = new Set<string>();
-    salesData.forEach((p) => {
-      if (p.companyName) names.add(p.companyName);
-    });
-    return Array.from(names);
-  }, [salesData]);
+  const applyPreset = useCallback((preset: string) => {
+    setDatePreset(preset);
+    const now = new Date();
+    switch (preset) {
+      case "today":
+        setDateRange({ from: now, to: now });
+        break;
+      case "yesterday":
+        const y = subDays(now, 1);
+        setDateRange({ from: y, to: y });
+        break;
+      case "7days":
+        setDateRange({ from: subDays(now, 6), to: now });
+        break;
+      case "month":
+        setDateRange({ from: startOfMonth(now), to: now });
+        break;
+    }
+  }, []);
+
+  const salesQueryParams = useMemo(() => {
+    const params = new URLSearchParams();
+    if (dateRange?.from) params.set("from", format(dateRange.from, "yyyy-MM-dd"));
+    if (dateRange?.to) params.set("to", format(dateRange.to, "yyyy-MM-dd"));
+    if (storeFilter !== "all") params.set("storeId", storeFilter);
+    return params.toString();
+  }, [dateRange, storeFilter]);
+
+  const { data: salesData } = useQuery<SalesDataPoint[]>({
+    queryKey: ["/api/analytics/sales", salesQueryParams],
+    queryFn: async () => {
+      const res = await fetch(`/api/analytics/sales?${salesQueryParams}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch sales");
+      return res.json();
+    },
+    staleTime: 0,
+  });
 
   const chartData = useMemo(() => {
     if (!salesData) return [];
-    const filtered = salesFilter === "all"
-      ? salesData
-      : salesData.filter((p) => p.companyName === salesFilter);
-
     const grouped: Record<string, number> = {};
-    filtered.forEach((p) => {
+    salesData.forEach((p) => {
       grouped[p.date] = (grouped[p.date] || 0) + p.revenue;
     });
-
     return Object.entries(grouped)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, revenue]) => ({ date, revenue }));
-  }, [salesData, salesFilter]);
+  }, [salesData]);
+
+  const totalRevenue = useMemo(() => {
+    return chartData.reduce((sum, d) => sum + d.revenue, 0);
+  }, [chartData]);
+
+  const dateRangeLabel = useMemo(() => {
+    if (!dateRange?.from) return "Выберите период";
+    if (!dateRange.to || dateRange.from.toDateString() === dateRange.to.toDateString()) {
+      return format(dateRange.from, "d MMMM yyyy", { locale: ru });
+    }
+    return `${format(dateRange.from, "d MMM", { locale: ru })} — ${format(dateRange.to, "d MMM yyyy", { locale: ru })}`;
+  }, [dateRange]);
+
+  const handleExport = useCallback(() => {
+    const params = new URLSearchParams();
+    if (dateRange?.from) params.set("from", format(dateRange.from, "yyyy-MM-dd"));
+    if (dateRange?.to) params.set("to", format(dateRange.to, "yyyy-MM-dd"));
+    if (storeFilter !== "all") params.set("storeId", storeFilter);
+    window.open(`/api/export/sales?${params.toString()}`, "_blank");
+  }, [dateRange, storeFilter]);
 
   const seedMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/seed"),
@@ -584,77 +643,164 @@ export default function Dashboard() {
           </div>
         )}
 
-        {salesData && salesData.length > 0 && (
-          <div className="space-y-4" data-testid="section-sales-chart">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <h2 className="text-2xl font-bold tracking-tight">
-                Выручка за последние 30 дней
-              </h2>
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button
-                  variant={salesFilter === "all" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setSalesFilter("all")}
-                  data-testid="button-sales-filter-all"
-                >
-                  Все
-                </Button>
-                {companyNames.map((name) => (
-                  <Button
-                    key={name}
-                    variant={salesFilter === name ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setSalesFilter(name)}
-                    data-testid={`button-sales-filter-${name}`}
-                  >
-                    {name}
-                  </Button>
-                ))}
+        <div className="space-y-5" data-testid="section-sales-chart">
+          <Card className="kpi-card overflow-hidden">
+            <CardContent className="p-6 sm:p-8">
+              <div className="flex flex-col gap-6">
+                <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-1">Выручка</p>
+                    <p className="text-4xl sm:text-5xl font-extrabold tracking-tight" data-testid="text-total-revenue">
+                      {formatCurrency(totalRevenue)}
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1">{dateRangeLabel}</p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-1 rounded-lg border bg-muted/30 p-0.5">
+                      {[
+                        { key: "today", label: "Сегодня" },
+                        { key: "yesterday", label: "Вчера" },
+                        { key: "7days", label: "7 дней" },
+                        { key: "month", label: "Месяц" },
+                      ].map((p) => (
+                        <Button
+                          key={p.key}
+                          variant={datePreset === p.key ? "default" : "ghost"}
+                          size="sm"
+                          className="h-7 px-3 text-xs"
+                          onClick={() => applyPreset(p.key)}
+                          data-testid={`button-preset-${p.key}`}
+                        >
+                          {p.label}
+                        </Button>
+                      ))}
+                    </div>
+
+                    <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" size="sm" className="h-8 gap-1.5" data-testid="button-calendar">
+                          <CalendarIcon className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Период</span>
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="end">
+                        <Calendar
+                          mode="range"
+                          selected={dateRange}
+                          onSelect={(range) => {
+                            setDateRange(range);
+                            setDatePreset("");
+                            if (range?.from && range?.to) setCalendarOpen(false);
+                          }}
+                          numberOfMonths={2}
+                          locale={ru}
+                        />
+                      </PopoverContent>
+                    </Popover>
+
+                    <Select value={storeFilter} onValueChange={setStoreFilter}>
+                      <SelectTrigger className="h-8 w-[160px] text-xs" data-testid="select-store-filter">
+                        <Store className="w-3.5 h-3.5 mr-1 shrink-0" />
+                        <SelectValue placeholder="Все магазины" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Все магазины</SelectItem>
+                        {storesList?.map((s: any) => (
+                          <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      onClick={handleExport}
+                      data-testid="button-export-sales"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Excel</span>
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="w-full" style={{ minHeight: 280 }}>
+                  {chartData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={280}>
+                      <BarChart
+                        data={chartData}
+                        barCategoryGap="20%"
+                        onMouseMove={(state: any) => {
+                          if (state?.activeTooltipIndex !== undefined) {
+                            setActiveBarIndex(state.activeTooltipIndex);
+                          }
+                        }}
+                        onMouseLeave={() => setActiveBarIndex(null)}
+                      >
+                        <defs>
+                          <linearGradient id="barGradientActive" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#ec4899" stopOpacity={0.95} />
+                            <stop offset="100%" stopColor="#a855f7" stopOpacity={0.85} />
+                          </linearGradient>
+                          <linearGradient id="barGradientInactive" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.15} />
+                            <stop offset="100%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.08} />
+                          </linearGradient>
+                        </defs>
+                        <XAxis
+                          dataKey="date"
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                          tickFormatter={(v: string) => {
+                            const parts = v.split("-");
+                            return parts.length >= 3 ? `${parts[2]}.${parts[1]}` : v;
+                          }}
+                        />
+                        <YAxis
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                          tickFormatter={(v: number) => v >= 1000 ? `${Math.round(v / 1000)}к` : String(v)}
+                          width={45}
+                        />
+                        <Tooltip
+                          cursor={false}
+                          formatter={(value: number) => [formatCurrency(value), "Выручка"]}
+                          labelFormatter={(label: string) => {
+                            const parts = label.split("-");
+                            return parts.length >= 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : label;
+                          }}
+                          contentStyle={{
+                            borderRadius: "12px",
+                            border: "none",
+                            boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+                            padding: "10px 14px",
+                            background: "hsl(var(--popover))",
+                            color: "hsl(var(--popover-foreground))",
+                          }}
+                        />
+                        <Bar dataKey="revenue" radius={[8, 8, 4, 4]} maxBarSize={48}>
+                          {chartData.map((_, index) => (
+                            <Cell
+                              key={`cell-${index}`}
+                              fill={activeBarIndex === index ? "url(#barGradientActive)" : "url(#barGradientInactive)"}
+                              style={{ transition: "fill 0.2s ease", cursor: "pointer" }}
+                            />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex items-center justify-center h-[280px] text-muted-foreground text-sm">
+                      Нет данных за выбранный период
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-            <Card className="kpi-card">
-              <CardContent className="pt-6">
-                <ResponsiveContainer width="100%" height={320}>
-                  <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(175 15% 88%)" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(v: string) => {
-                        const parts = v.split("-");
-                        return parts.length >= 3 ? `${parts[2]}.${parts[1]}` : v;
-                      }}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(v: number) => formatNumber(v)}
-                    />
-                    <Tooltip
-                      formatter={(value: number) => [formatCurrency(value), "Выручка"]}
-                      labelFormatter={(label: string) => {
-                        const parts = label.split("-");
-                        return parts.length >= 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : label;
-                      }}
-                      contentStyle={{
-                        borderRadius: "8px",
-                        border: "1px solid hsl(175 15% 88%)",
-                        boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-                      }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="revenue"
-                      stroke="#0FC2C0"
-                      strokeWidth={2.5}
-                      dot={{ fill: "#0CABA8", r: 3 }}
-                      activeDot={{ fill: "#0FC2C0", r: 5, strokeWidth: 2, stroke: "#fff" }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
-        )}
+            </CardContent>
+          </Card>
+        </div>
 
         {!hasCompanies && !kpiLoading && totalProducts === 0 && (
           <Card className="kpi-card" data-testid="card-empty-state">
