@@ -1,0 +1,60 @@
+1. Реорганизация структуры (Компании и Магазины):
+
+База данных: Ввести сущность «Компания» (Company/Entity), к которой привязываются магазины. У каждого магазина (marketplace_connection) теперь должен быть обязательный company_id.
+
+Настройки: В разделе «Настройки» добавить возможность создавать/удалять компании и привязывать к ним API-ключи маркетплейсов.
+
+Главный экран: Группировать карточки магазинов в блоки по компаниям (как на вашем фото: «ИП Тигран», «ИП Лаура»). Если магазин удаляется в настройках — он мгновенно исчезает с экрана.
+
+2. Обновление KPI на главной (строго за СЕГОДНЯ):
+
+Счетчик «в обработке» (голубой бейдж): Считать только новые заказы Ozon FBS со статусом awaiting_deliver, поступившие за текущие сутки.
+
+Сумма выручки: Суммировать стоимость этих конкретных сегодняшних заказов.
+
+Счетчик «шт.»: Суммировать количество единиц товара во всех новых заказах за сегодня.
+
+3. Разделение заказов от разных магазинов:
+
+В разделе «Заказы» добавить визуальную метку (бейдж) на каждую карточку с названием магазина (например, «Лаура — Ozon» или «Тигран — Ozon»).
+
+Добавить фильтр по магазинам в верхней части страницы заказов, чтобы можно было смотреть либо всё сразу, либо заказы конкретного ИП.
+
+Промт для Replit Agent (скопируйте и отправьте):
+Multi-Entity Architecture & Dashboard KPI Overhaul:
+
+Database & Structure:
+
+Create a companies table. Link marketplace_connections to companies via company_id.
+
+Update the Settings page to allow creating/editing companies and assigning marketplace stores to them.
+
+Dashboard (Main Screen) Update:
+
+Group marketplace cards by Company. Use the layout from the uploaded photo: Company Header (Name + INN) -> Grid of connected stores.
+
+KPI Logic (Strictly for TODAY):
+
+Orders Count: Show only new FBS orders received today with status awaiting_deliver.
+
+Total Revenue: Sum price of these specific today's orders.
+
+Items Count (шт.): Sum quantity of all products within these today's orders.
+
+Orders Page - Multi-store Visibility:
+
+Add a visual "Store Name" badge to every order card (e.g., "Laura — Ozon").
+
+Ensure that if two Ozon stores are connected, their orders are distinguishable in the "Orders" feed.
+
+Add a global "Filter by Store" dropdown at the top of the Orders page.
+
+Scaling Ozon Features:
+
+All previously implemented features (58x40 labels, sub-filters, product thumbnails, auto-sync) must work identically for ANY new Ozon store added to the system.
+
+UI/UX Refinement:
+
+Disable all "shaking/moving" hover animations globally, except for a subtle color highlight.
+
+Convert manual status dropdowns to read-only badges for all marketplace orders.
