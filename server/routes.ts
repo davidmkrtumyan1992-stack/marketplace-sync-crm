@@ -1835,19 +1835,17 @@ export async function registerRoutes(
         "Content-Type": "application/json",
       };
 
-      const packages = order.items.map(item => ({
-        products: [{
-          product_id: item.product?.ozonId ? parseInt(item.product.ozonId) : 0,
-          quantity: item.quantity,
-        }],
+      const items = order.items.map(item => ({
+        item_id: item.product?.ozonId ? parseInt(item.product.ozonId) : 0,
+        quantity: item.quantity,
       }));
 
       const shipBody = {
         posting_number: order.postingNumber,
-        packages,
+        packages: [{ items }],
       };
 
-      console.log(`[ozon-ship] Shipping posting ${order.postingNumber}`);
+      console.log(`[ozon-ship] Shipping posting ${order.postingNumber}, payload:`, JSON.stringify(shipBody).slice(0, 500));
 
       const response = await fetch(`${BASE}/v3/posting/fbs/ship`, {
         method: "POST",
@@ -1855,11 +1853,19 @@ export async function registerRoutes(
         body: JSON.stringify(shipBody),
       });
 
-      const result = await response.json();
+      const rawText = await response.text();
+      let result: any;
+      try {
+        result = JSON.parse(rawText);
+      } catch {
+        console.error(`[ozon-ship] Non-JSON response (${response.status}):`, rawText.slice(0, 500));
+        return res.status(502).json({ message: `Ozon вернул некорректный ответ (${response.status}). Проверьте права API-ключа.` });
+      }
 
       if (!response.ok) {
         console.error(`[ozon-ship] API error ${response.status}:`, JSON.stringify(result).slice(0, 500));
-        return res.status(502).json({ message: `Ozon API: ${result?.message || response.status}` });
+        const errMsg = result?.message || result?.error?.message || result?.error?.[0] || `Ошибка ${response.status}`;
+        return res.status(502).json({ message: `Ozon API: ${errMsg}` });
       }
 
       await storage.updateOrderOzonStatus(orderId, "awaiting_deliver", "processing");
@@ -1913,11 +1919,19 @@ export async function registerRoutes(
         body: JSON.stringify(cancelBody),
       });
 
-      const result = await response.json();
+      const rawText = await response.text();
+      let result: any;
+      try {
+        result = JSON.parse(rawText);
+      } catch {
+        console.error(`[ozon-cancel] Non-JSON response (${response.status}):`, rawText.slice(0, 500));
+        return res.status(502).json({ message: `Ozon вернул некорректный ответ (${response.status}). Проверьте права API-ключа.` });
+      }
 
       if (!response.ok) {
         console.error(`[ozon-cancel] API error ${response.status}:`, JSON.stringify(result).slice(0, 500));
-        return res.status(502).json({ message: `Ozon API: ${result?.message || response.status}` });
+        const errMsg = result?.message || result?.error?.message || result?.error?.[0] || `Ошибка ${response.status}`;
+        return res.status(502).json({ message: `Ozon API: ${errMsg}` });
       }
 
       await storage.updateOrderOzonStatus(orderId, "cancelled", "cancelled");
