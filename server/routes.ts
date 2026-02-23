@@ -1547,12 +1547,13 @@ export async function registerRoutes(
   const ozonStatusToInternal = (ozonStatus: string): string => {
     switch (ozonStatus) {
       case "awaiting_approve": return "pending";
-      case "awaiting_packaging": return "processing";
-      case "awaiting_deliver": return "processing";
+      case "awaiting_packaging": return "pending";
+      case "awaiting_deliver": return "pending";
       case "delivering": return "shipped";
       case "delivered": return "completed";
       case "cancelled": return "cancelled";
       case "not_accepted": return "cancelled";
+      case "arbitration": return "disputed";
       default: return "pending";
     }
   };

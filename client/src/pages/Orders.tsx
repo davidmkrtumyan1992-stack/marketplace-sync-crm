@@ -56,6 +56,26 @@ const OZON_STATUS_LABELS: Record<string, string> = {
 type FulfillmentFilter = "all" | "FBS" | "FBO" | "direct";
 type FbsSubFilter = "all" | "awaiting_shipment" | "delivering" | "dispute" | "delivered" | "cancelled";
 
+function getMarketplaceStatusLabel(ozonStatus: string | null | undefined): string {
+  if (!ozonStatus) return "Новый";
+  switch (ozonStatus) {
+    case "awaiting_packaging":
+    case "awaiting_deliver":
+    case "awaiting_approve":
+      return "Новый";
+    case "delivering":
+      return "Отправлен";
+    case "delivered":
+      return "Завершён";
+    case "cancelled":
+      return "Отменён";
+    case "arbitration":
+      return "Спорный";
+    default:
+      return "Новый";
+  }
+}
+
 const FBS_SUB_FILTERS: { key: FbsSubFilter; label: string; icon: any }[] = [
   { key: "all", label: "Все", icon: Package },
   { key: "awaiting_shipment", label: "Ожидают отгрузки", icon: Clock },
@@ -147,6 +167,7 @@ export default function Orders() {
       case "pending": return "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800";
       case "shipped": return "bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-800";
       case "cancelled": return "bg-muted text-muted-foreground border-border";
+      case "disputed": return "bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800";
       default: return "bg-muted text-muted-foreground";
     }
   };
@@ -362,6 +383,7 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge, onCl
   onClick: () => void;
 }) {
   const { mutate: updateStatus, isPending } = useUpdateOrderStatus();
+  const isDirectSale = order.source === "direct" || order.source === "manual";
 
   const itemImages = useMemo(() => {
     if (!order.items) return [];
@@ -456,27 +478,36 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge, onCl
             <div className="text-right">
               <p className="text-2xl font-bold">{formatCurrency(Number(order.totalAmount))}</p>
             </div>
-            <div onClick={(e) => e.stopPropagation()}>
-              <Select 
-                defaultValue={order.status} 
-                onValueChange={(val) => updateStatus({ id: order.id, status: val })}
-                disabled={isPending}
-              >
-                <SelectTrigger 
-                  className={`w-[150px] text-sm font-medium border ${getStatusColor(order.status)}`}
-                  data-testid={`select-status-${order.id}`}
+            {isDirectSale ? (
+              <div onClick={(e) => e.stopPropagation()}>
+                <Select 
+                  defaultValue={order.status} 
+                  onValueChange={(val) => updateStatus({ id: order.id, status: val })}
+                  disabled={isPending}
                 >
-                  <SelectValue>{getStatusLabel(order.status)}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="pending">Новый</SelectItem>
-                  <SelectItem value="processing">В обработке</SelectItem>
-                  <SelectItem value="shipped">Отправлен</SelectItem>
-                  <SelectItem value="completed">Завершён</SelectItem>
-                  <SelectItem value="cancelled">Отменён</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+                  <SelectTrigger 
+                    className={`w-[150px] text-sm font-medium border ${getStatusColor(order.status)}`}
+                    data-testid={`select-status-${order.id}`}
+                  >
+                    <SelectValue>{getStatusLabel(order.status)}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Новый</SelectItem>
+                    <SelectItem value="processing">В обработке</SelectItem>
+                    <SelectItem value="shipped">Отправлен</SelectItem>
+                    <SelectItem value="completed">Завершён</SelectItem>
+                    <SelectItem value="cancelled">Отменён</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <Badge
+                className={`text-sm font-medium px-3 py-1.5 ${getStatusColor(order.status)}`}
+                data-testid={`badge-status-${order.id}`}
+              >
+                {getMarketplaceStatusLabel(order.ozonStatus)}
+              </Badge>
+            )}
           </div>
         </div>
       </CardContent>
@@ -499,6 +530,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
 
   if (!order) return null;
 
+  const isDirectSale = order.source === "direct" || order.source === "manual";
   const isOzon = order.source === "ozon" && order.postingNumber;
   const isFbs = order.fulfillmentType === "FBS" || (!order.fulfillmentType && order.source === "ozon");
   const canShip = isOzon && isFbs && order.ozonStatus === "awaiting_packaging";
@@ -538,7 +570,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
               <span className="text-sm font-medium">{getSourceLabel(order.source)}</span>
             </div>
             <Badge className={`${getStatusColor(order.status)}`}>
-              {getStatusLabel(order.status)}
+              {isDirectSale ? getStatusLabel(order.status) : getMarketplaceStatusLabel(order.ozonStatus)}
             </Badge>
             {order.source === "ozon" && (
               <Badge variant="outline" className={`text-xs ${order.fulfillmentType === "FBO" ? "border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-400" : "border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400"}`}>
