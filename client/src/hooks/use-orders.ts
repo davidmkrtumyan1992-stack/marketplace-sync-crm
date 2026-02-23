@@ -89,6 +89,7 @@ export function useUpdateOrderStatus() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
       toast({ title: "Статус обновлён" });
     },
   });
@@ -113,6 +114,7 @@ export function useOzonShipOrder() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
       toast({ title: "Заказ собран", description: "Статус обновлён в Ozon" });
     },
     onError: (error: Error) => {
@@ -141,6 +143,7 @@ export function useOzonCancelOrder() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
       toast({ title: "Заказ отменён", description: "Статус обновлён в Ozon" });
     },
     onError: (error: Error) => {
@@ -168,6 +171,7 @@ export function useSyncOzonOrders() {
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
       toast({ 
         title: "Синхронизация завершена", 
         description: `Создано: ${data.created}, обновлено: ${data.updated}` 

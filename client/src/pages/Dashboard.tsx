@@ -222,7 +222,7 @@ export default function Dashboard() {
           )}
         </div>
 
-        {kpi?.today && (kpi.today.ordersCount > 0 || kpi.today.revenue > 0) && (
+        {kpi?.today && (
           <div className="grid gap-6 sm:grid-cols-3">
             <Card className="kpi-card" data-testid="card-active-items">
               <CardContent className="pt-6">
