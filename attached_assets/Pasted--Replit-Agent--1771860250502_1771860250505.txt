@@ -1,0 +1,45 @@
+Вот финальный, максимально подробный промт для Replit Agent. В него я включил все ваши требования: от визуального стиля («стеклянные столбцы») до точной математики и фильтрации по вашим 6 магазинам.
+
+Просто скопируйте и отправьте этот текст целиком:
+
+Task: Premium Revenue Analytics & Multi-Store Filter (Final Specification)
+
+1. Visual Overhaul (Match Reference Style):
+
+Chart Type: Replace the current line chart at the bottom of the Dashboard with a Modern Bar Chart.
+
+Bar Styling: Bars must be rendered as rounded glass cylinders.
+
+Colors: Use a vibrant Pink/Magenta gradient for the selected/active day and a subtle semi-transparent gray for others.
+
+Typography: Display the total revenue for the selected period in a very large, bold font at the top left of the block.
+
+Formatting: Strictly follow user rules: space as thousands separator («1 450 000 руб.») and «quotes».
+
+2. Advanced Filtering System:
+
+Calendar (Date Range Picker): Add a calendar button to select any period.
+
+Default: The chart should show data for Today by default.
+
+Presets: Add quick buttons for "Yesterday", "Last 7 Days", "Current Month".
+
+Store Selector: Add a dropdown menu to filter the data.
+
+Options: "All Stores" (aggregated) and individual selectors for each connected store (Ozon, WB, Yandex, etc.).
+
+Dynamic Sync: This list must automatically update whenever a new store is added or removed in Settings.
+
+3. Backend Logic & Precision:
+
+Accuracy: The calculation must be 100% precise. Sum total_price from the orders table filtered by storeId and createdAt.
+
+Status Filter: Revenue should count all orders except those with "Cancelled" status.
+
+Performance: Ensure the chart re-renders instantly when the user changes the date range or selects a different store.
+
+4. Additional Feature - Export:
+
+Add a small "Export" button next to the filters to download the filtered statistics as an Excel or PDF file.
+
+5. Clean UI: Remove all heavy grid lines and borders. The background should be clean and minimal, matching a premium business dashboard.
