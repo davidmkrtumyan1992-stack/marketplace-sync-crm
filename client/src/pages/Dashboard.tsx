@@ -21,7 +21,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatCurrency, formatQuantity, formatNumber } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
-import type { DashboardKPI, LowStockProduct, SalesDataPoint, SyncStatusSummary } from "@shared/schema";
+import type { DashboardKPI, LowStockProduct, SalesDataPoint, SalesResponse, SyncStatusSummary } from "@shared/schema";
 import { Link } from "wouter";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -93,7 +93,7 @@ export default function Dashboard() {
     return params.toString();
   }, [dateRange, storeFilter]);
 
-  const { data: salesData } = useQuery<SalesDataPoint[]>({
+  const { data: salesResponse } = useQuery<SalesResponse>({
     queryKey: ["/api/analytics/sales", salesQueryParams],
     queryFn: async () => {
       const res = await fetch(`/api/analytics/sales?${salesQueryParams}`, { credentials: "include" });
@@ -104,19 +104,18 @@ export default function Dashboard() {
   });
 
   const chartData = useMemo(() => {
-    if (!salesData) return [];
+    if (!salesResponse?.data) return [];
     const grouped: Record<string, number> = {};
-    salesData.forEach((p) => {
+    salesResponse.data.forEach((p) => {
       grouped[p.date] = (grouped[p.date] || 0) + p.revenue;
     });
     return Object.entries(grouped)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, revenue]) => ({ date, revenue }));
-  }, [salesData]);
+  }, [salesResponse]);
 
-  const totalRevenue = useMemo(() => {
-    return chartData.reduce((sum, d) => sum + d.revenue, 0);
-  }, [chartData]);
+  const totalRevenue = salesResponse?.totalRevenue ?? 0;
+  const totalOrders = salesResponse?.totalOrders ?? 0;
 
   const dateRangeLabel = useMemo(() => {
     if (!dateRange?.from) return "Выберите период";
@@ -654,6 +653,9 @@ export default function Dashboard() {
                       {formatCurrency(totalRevenue)}
                     </p>
                     <p className="text-sm text-muted-foreground mt-1">{dateRangeLabel}</p>
+                    <p className="text-xs text-muted-foreground/60 mt-0.5 font-mono" data-testid="text-debug-orders">
+                      Total DB Orders: {totalOrders}
+                    </p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="flex items-center gap-1 rounded-lg border bg-muted/30 p-0.5">

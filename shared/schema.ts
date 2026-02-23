@@ -377,6 +377,12 @@ export type SalesDataPoint = {
   companyName: string;
 };
 
+export type SalesResponse = {
+  data: SalesDataPoint[];
+  totalOrders: number;
+  totalRevenue: number;
+};
+
 // Sync Status
 export type SyncStatusSummary = {
   lastSyncAt: string | null;

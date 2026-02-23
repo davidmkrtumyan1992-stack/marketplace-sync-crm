@@ -112,7 +112,7 @@ export interface IStorage {
   // Analytics
   getABCAnalysis(organizationId: string): Promise<ABCProduct[]>;
   getLowStockProducts(organizationId: string, threshold?: number): Promise<LowStockProduct[]>;
-  getSalesData(organizationId: string, options?: { days?: number; from?: string; to?: string; storeId?: number }): Promise<SalesDataPoint[]>;
+  getSalesData(organizationId: string, options?: { days?: number; from?: string; to?: string; storeId?: number }): Promise<{ data: SalesDataPoint[]; totalOrders: number; totalRevenue: number }>;
   
   // Stock Sync Log
   getStockSyncLogs(organizationId: string, limit?: number): Promise<StockSyncLogEntry[]>;
@@ -769,34 +769,32 @@ export class DatabaseStorage implements IStorage {
       .sort((a, b) => (a.centralStock || 0) - (b.centralStock || 0));
   }
 
-  async getSalesData(organizationId: string, options: { days?: number; from?: string; to?: string; storeId?: number } = {}): Promise<SalesDataPoint[]> {
+  async getSalesData(organizationId: string, options: { days?: number; from?: string; to?: string; storeId?: number } = {}): Promise<{ data: SalesDataPoint[]; totalOrders: number; totalRevenue: number }> {
     const companyList = await this.getCompanies(organizationId);
     const companyMap = new Map(companyList.map(c => [c.id, c.name]));
 
     const ordersList = await db.select().from(orders)
       .where(eq(orders.organizationId, organizationId));
 
-    let fromDate: Date;
-    let toDate: Date;
+    let fromDateStr: string;
+    let toDateStr: string;
 
     if (options.from && options.to) {
-      fromDate = new Date(options.from);
-      fromDate.setHours(0, 0, 0, 0);
-      toDate = new Date(options.to);
-      toDate.setHours(23, 59, 59, 999);
+      fromDateStr = options.from;
+      toDateStr = options.to;
     } else {
       const days = options.days || 30;
-      toDate = new Date();
-      toDate.setHours(23, 59, 59, 999);
-      fromDate = new Date();
-      fromDate.setDate(fromDate.getDate() - days + 1);
-      fromDate.setHours(0, 0, 0, 0);
+      const now = new Date();
+      toDateStr = now.toISOString().split("T")[0];
+      const fromD = new Date(now);
+      fromD.setDate(fromD.getDate() - days + 1);
+      fromDateStr = fromD.toISOString().split("T")[0];
     }
 
     const filtered = ordersList.filter(o => {
       if (!o.createdAt) return false;
-      const created = new Date(o.createdAt);
-      if (created < fromDate || created > toDate) return false;
+      const createdDateStr = new Date(o.createdAt).toISOString().split("T")[0];
+      if (createdDateStr < fromDateStr || createdDateStr > toDateStr) return false;
       if (o.status === "cancelled" || o.ozonStatus === "cancelled") return false;
       if (options.storeId && o.storeId !== options.storeId) return false;
       return true;
@@ -818,7 +816,10 @@ export class DatabaseStorage implements IStorage {
       dataByDateCompany[key].revenue += Number(order.totalAmount || 0);
     }
 
-    return Object.values(dataByDateCompany).sort((a, b) => a.date.localeCompare(b.date));
+    const data = Object.values(dataByDateCompany).sort((a, b) => a.date.localeCompare(b.date));
+    const totalRevenue = data.reduce((sum, d) => sum + d.revenue, 0);
+
+    return { data, totalOrders: filtered.length, totalRevenue };
   }
 
   // Stock Sync Log

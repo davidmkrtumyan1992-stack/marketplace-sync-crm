@@ -1290,8 +1290,8 @@ export async function registerRoutes(
     const from = req.query.from ? String(req.query.from) : undefined;
     const to = req.query.to ? String(req.query.to) : undefined;
     const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
-    const sales = await storage.getSalesData(getOrgId(req), { days, from, to, storeId });
-    res.json(sales);
+    const result = await storage.getSalesData(getOrgId(req), { days, from, to, storeId });
+    res.json(result);
   });
 
   app.get(api.analytics.lowStock.path, isAuthenticated, async (req, res) => {
@@ -1393,15 +1393,14 @@ export async function registerRoutes(
     const from = req.query.from ? String(req.query.from) : undefined;
     const to = req.query.to ? String(req.query.to) : undefined;
     const storeId = req.query.storeId ? Number(req.query.storeId) : undefined;
-    const sales = await storage.getSalesData(orgId, { from, to, storeId });
+    const result = await storage.getSalesData(orgId, { from, to, storeId });
 
-    const totalRevenue = sales.reduce((sum, s) => sum + s.revenue, 0);
-    const rows = sales.map(s => ({
+    const rows = result.data.map(s => ({
       "Дата": s.date,
       "Компания": s.companyName,
       "Выручка": s.revenue,
     }));
-    rows.push({ "Дата": "ИТОГО", "Компания": "", "Выручка": totalRevenue });
+    rows.push({ "Дата": "ИТОГО", "Компания": "", "Выручка": result.totalRevenue });
 
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -1701,6 +1700,17 @@ export async function registerRoutes(
         const companyStores = await storage.getStores(setting.companyId);
         const ozonStore = companyStores.find(s => s.marketplace === "ozon");
         if (ozonStore) resolvedStoreId = ozonStore.id;
+      } else {
+        const orgCompanies = await storage.getCompanies(orgId);
+        for (const company of orgCompanies) {
+          const companyStores = await storage.getStores(company.id);
+          const ozonStore = companyStores.find(s => s.marketplace === "ozon");
+          if (ozonStore) {
+            resolvedStoreId = ozonStore.id;
+            resolvedCompanyId = company.id;
+            break;
+          }
+        }
       }
 
       const data = req.body;
@@ -1791,6 +1801,17 @@ export async function registerRoutes(
         const companyStores = await storage.getStores(ozonSetting.companyId);
         const ozonStore = companyStores.find(s => s.marketplace === "ozon");
         if (ozonStore) resolvedStoreId = ozonStore.id;
+      } else {
+        const orgCompanies = await storage.getCompanies(orgId);
+        for (const company of orgCompanies) {
+          const companyStores = await storage.getStores(company.id);
+          const ozonStore = companyStores.find(s => s.marketplace === "ozon");
+          if (ozonStore) {
+            resolvedStoreId = ozonStore.id;
+            resolvedCompanyId = company.id;
+            break;
+          }
+        }
       }
 
       const BASE = "https://api-seller.ozon.ru";
