@@ -170,7 +170,7 @@ function MarketplaceStoresSection({ settings, isLoading, onAddStore }: { setting
                             {setting.storeName || `${mpStyle.label} магазин`}
                           </span>
                           <Badge
-                            className="text-[10px] font-bold shrink-0 no-default-hover-elevate"
+                            className="text-[10px] font-bold shrink-0"
                             style={{ backgroundColor: mpStyle.bg, color: mpStyle.color }}
                             data-testid={`badge-store-marketplace-${setting.id}`}
                           >
@@ -473,7 +473,7 @@ function EditStoreDialog({ store, onClose }: { store: MarketplaceSetting; onClos
             <Pencil className="w-5 h-5" />
             Редактировать магазин
             <Badge
-              className="text-[10px] font-bold no-default-hover-elevate ml-1"
+              className="text-[10px] font-bold ml-1"
               style={{ backgroundColor: mpStyle.bg, color: mpStyle.color }}
             >
               {mpStyle.label}
@@ -730,7 +730,7 @@ function SyncHistorySection() {
                       <TableCell data-testid={`text-sync-status-${entry.id}`}>
                         <Badge
                           variant={entry.status === "success" ? "default" : "destructive"}
-                          className={entry.status === "success" ? "bg-green-600 text-white no-default-hover-elevate no-default-active-elevate" : ""}
+                          className={entry.status === "success" ? "bg-green-600 text-white" : ""}
                         >
                           {entry.status === "success" ? "Успешно" : "Ошибка"}
                         </Badge>

@@ -305,9 +305,9 @@ export default function Reports() {
 
   const getAbcBadgeClass = (category: "A" | "B" | "C") => {
     switch (category) {
-      case "A": return "bg-green-600 text-white no-default-hover-elevate no-default-active-elevate";
-      case "B": return "bg-yellow-500 text-white no-default-hover-elevate no-default-active-elevate";
-      case "C": return "bg-red-500 text-white no-default-hover-elevate no-default-active-elevate";
+      case "A": return "bg-green-600 text-white";
+      case "B": return "bg-yellow-500 text-white";
+      case "C": return "bg-red-500 text-white";
     }
   };
 

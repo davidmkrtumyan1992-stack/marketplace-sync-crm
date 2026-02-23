@@ -130,7 +130,7 @@ export default function Dashboard() {
         </div>
 
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          <Card className="kpi-card hover-elevate" data-testid="card-total-stock">
+          <Card className="kpi-card" data-testid="card-total-stock">
             <CardContent className="pt-6">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
@@ -150,7 +150,7 @@ export default function Dashboard() {
           </Card>
 
           {canSeePnL && (
-            <Card className="kpi-card hover-elevate" data-testid="card-capitalization">
+            <Card className="kpi-card" data-testid="card-capitalization">
               <CardContent className="pt-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
@@ -170,7 +170,7 @@ export default function Dashboard() {
             </Card>
           )}
 
-          <Card className="kpi-card hover-elevate" data-testid="card-revenue">
+          <Card className="kpi-card" data-testid="card-revenue">
             <CardContent className="pt-6">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
@@ -190,7 +190,7 @@ export default function Dashboard() {
           </Card>
 
           {canSeePnL && (
-            <Card className="stat-card-premium hover-elevate" data-testid="card-profit">
+            <Card className="stat-card-premium" data-testid="card-profit">
               <CardContent className="pt-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
@@ -300,7 +300,7 @@ export default function Dashboard() {
         {lowStockProducts && lowStockProducts.length > 0 && (
           <div data-testid="section-low-stock">
             <Card
-              className="border-destructive/30 bg-destructive/5 dark:bg-destructive/10 cursor-pointer hover-elevate transition-all"
+              className="border-destructive/30 bg-destructive/5 dark:bg-destructive/10 cursor-pointer transition-colors duration-150 hover:bg-destructive/10 dark:hover:bg-destructive/15"
               onClick={() => setLowStockOpen(true)}
               data-testid="card-low-stock-summary"
             >
@@ -436,7 +436,7 @@ export default function Dashboard() {
                       return (
                         <Card
                           key={store.id}
-                          className="hover-elevate"
+                          className=""
                           data-testid={`card-store-${store.id}`}
                         >
                           <CardContent className="pt-5 pb-5">

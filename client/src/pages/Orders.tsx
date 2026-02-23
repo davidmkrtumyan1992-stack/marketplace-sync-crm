@@ -170,7 +170,7 @@ export default function Orders() {
     if (["ozon", "wildberries", "wb", "yandex", "yandex_market"].includes(source)) {
       return (
         <Badge
-          className="no-default-hover-elevate border-0"
+          className="border-0"
           style={{ backgroundColor: mpStyle.bg, color: mpStyle.color }}
         >
           {mpStyle.label}

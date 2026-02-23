@@ -166,7 +166,7 @@
 }
 
 .kpi-card {
-  @apply bg-card rounded-2xl p-6 border border-border/50 shadow-lg transition-all duration-300;
+  @apply bg-card rounded-2xl p-6 border border-border/50 shadow-lg transition-colors duration-200;
   background: linear-gradient(145deg, hsl(var(--card)) 0%, hsl(180 20% 97%) 100%);
 }
 
@@ -175,12 +175,11 @@
 }
 
 .kpi-card:hover {
-  @apply shadow-xl -translate-y-1;
   border-color: hsl(175 98% 41% / 0.3);
 }
 
 .stat-card-premium {
-  @apply relative overflow-hidden rounded-2xl p-6 transition-all duration-300;
+  @apply relative overflow-hidden rounded-2xl p-6 transition-colors duration-200;
   background: linear-gradient(135deg, hsl(180 50% 10%) 0%, hsl(175 45% 15%) 100%);
   box-shadow: 
     0 4px 20px -4px hsl(175 98% 41% / 0.25),
@@ -199,7 +198,6 @@
 }
 
 .stat-card-premium:hover {
-  transform: translateY(-4px);
   box-shadow: 
     0 8px 30px -4px hsl(175 98% 41% / 0.35),
     0 0 0 1px hsl(175 98% 41% / 0.2),
@@ -276,7 +274,7 @@
 }
 
 .premium-button {
-  @apply px-6 py-3 rounded-xl font-semibold transition-all duration-300;
+  @apply px-6 py-3 rounded-xl font-semibold transition-colors duration-200;
   background: linear-gradient(135deg, hsl(175 98% 41%) 0%, hsl(175 90% 35%) 100%);
   color: hsl(180 50% 98%);
   box-shadow: 
@@ -285,10 +283,7 @@
 }
 
 .premium-button:hover {
-  transform: translateY(-2px);
-  box-shadow: 
-    0 8px 25px -3px hsl(175 98% 41% / 0.5),
-    inset 0 1px 0 hsl(175 80% 60% / 0.3);
+  opacity: 0.9;
 }
 
 @media (max-width: 640px) {

@@ -807,19 +807,19 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
                 </div>
                 {hasOzon && (
                   <div className="flex items-center gap-2">
-                    <Badge className="text-white no-default-hover-elevate" style={{ backgroundColor: "#005BFF" }}>Ozon</Badge>
+                    <Badge className="text-white" style={{ backgroundColor: "#005BFF" }}>Ozon</Badge>
                     {product.ozonId && <span className="text-xs text-muted-foreground">ID: {product.ozonId}</span>}
                   </div>
                 )}
                 {hasWb && (
                   <div className="flex items-center gap-2">
-                    <Badge className="text-white no-default-hover-elevate" style={{ backgroundColor: "#CB11AB" }}>Wildberries</Badge>
+                    <Badge className="text-white" style={{ backgroundColor: "#CB11AB" }}>Wildberries</Badge>
                     {product.wbId && <span className="text-xs text-muted-foreground">nmID: {product.wbId}</span>}
                   </div>
                 )}
                 {hasYandex && (
                   <div className="flex items-center gap-2">
-                    <Badge className="text-white no-default-hover-elevate" style={{ backgroundColor: "#FFCC00", color: "#000" }}>Yandex Market</Badge>
+                    <Badge className="text-white" style={{ backgroundColor: "#FFCC00", color: "#000" }}>Yandex Market</Badge>
                     {product.yandexId && <span className="text-xs text-muted-foreground">SKU: {product.yandexId}</span>}
                   </div>
                 )}

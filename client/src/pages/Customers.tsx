@@ -85,7 +85,7 @@ export default function Customers() {
             {customers?.map((customer) => (
               <Card
                 key={customer.id}
-                className="kpi-card cursor-pointer hover-elevate"
+                className="kpi-card cursor-pointer transition-colors duration-150 hover:bg-accent/50"
                 data-testid={`customer-card-${customer.id}`}
                 onClick={() => setSelectedCustomer(customer)}
               >
