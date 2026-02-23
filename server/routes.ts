@@ -1671,6 +1671,7 @@ export async function registerRoutes(
         ozonStatus: ozonStatus || null,
         storeId: resolvedStoreId,
         companyId: resolvedCompanyId,
+        fulfillmentType: "FBS",
         organizationId: orgId,
       }, orderItems);
 
@@ -1725,83 +1726,94 @@ export async function registerRoutes(
         offset: 0,
       };
 
-      console.log(`[ozon-sync-orders] Fetching FBS orders since ${since.toISOString()}, storeId: ${resolvedStoreId}, companyId: ${resolvedCompanyId}`);
-
-      const response = await fetch(`${BASE}/v3/posting/fbs/list`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => "");
-        console.error(`[ozon-sync-orders] API error ${response.status}: ${errText.slice(0, 500)}`);
-        return res.status(502).json({ message: `Ozon API error: ${response.status}` });
-      }
-
-      const data = await response.json();
-      const postings = data?.result?.postings || [];
-      console.log(`[ozon-sync-orders] Received ${postings.length} postings`);
+      console.log(`[ozon-sync-orders] Fetching FBS+FBO orders since ${since.toISOString()}, storeId: ${resolvedStoreId}, companyId: ${resolvedCompanyId}`);
 
       let created = 0;
       let updated = 0;
       let skipped = 0;
 
-      for (const posting of postings) {
-        const postingNumber = posting.posting_number;
-        const ozonStatus = posting.status;
-        const existingOrder = await storage.getOrderByPostingNumber(postingNumber, orgId);
+      const syncPostings = async (postings: any[], fulfillmentType: string) => {
+        for (const posting of postings) {
+          const postingNumber = posting.posting_number;
+          const ozonStatus = posting.status;
+          const existingOrder = await storage.getOrderByPostingNumber(postingNumber, orgId);
 
-        if (existingOrder) {
-          const internalStatus = ozonStatusToInternal(ozonStatus);
-          if (existingOrder.ozonStatus !== ozonStatus) {
-            await storage.updateOrderOzonStatus(existingOrder.id, ozonStatus, internalStatus);
-            updated++;
-          } else {
-            skipped++;
+          if (existingOrder) {
+            const internalStatus = ozonStatusToInternal(ozonStatus);
+            if (existingOrder.ozonStatus !== ozonStatus) {
+              await storage.updateOrderOzonStatus(existingOrder.id, ozonStatus, internalStatus);
+              updated++;
+            } else {
+              skipped++;
+            }
+            continue;
           }
-          continue;
-        }
 
-        const items: { productId: number; quantity: number; price: number }[] = [];
-        let totalAmount = 0;
+          const items: { productId: number; quantity: number; price: number }[] = [];
+          let totalAmount = 0;
 
-        for (const prod of posting.products || []) {
-          const sku = prod.offer_id || "";
-          const qty = prod.quantity || 1;
-          const price = parseFloat(prod.price || "0");
+          for (const prod of posting.products || []) {
+            const sku = prod.offer_id || "";
+            const qty = prod.quantity || 1;
+            const price = parseFloat(prod.price || "0");
 
-          if (sku) {
-            const [dbProduct] = await db.select().from(productsTable)
-              .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+            if (sku) {
+              const [dbProduct] = await db.select().from(productsTable)
+                .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
 
-            if (dbProduct) {
-              items.push({ productId: dbProduct.id, quantity: qty, price });
-              totalAmount += price * qty;
+              if (dbProduct) {
+                items.push({ productId: dbProduct.id, quantity: qty, price });
+                totalAmount += price * qty;
+              }
             }
           }
-        }
 
-        if (items.length > 0) {
-          const internalStatus = ozonStatusToInternal(ozonStatus);
-          await storage.createOrder({
-            orderNumber: postingNumber,
-            status: internalStatus,
-            totalAmount: totalAmount.toFixed(2),
-            source: "ozon",
-            externalId: posting.order_id?.toString() || postingNumber,
-            postingNumber,
-            ozonStatus,
-            storeId: resolvedStoreId,
-            companyId: resolvedCompanyId,
-            organizationId: orgId,
-          }, items);
-          created++;
+          if (items.length > 0) {
+            const internalStatus = ozonStatusToInternal(ozonStatus);
+            await storage.createOrder({
+              orderNumber: postingNumber,
+              status: internalStatus,
+              totalAmount: totalAmount.toFixed(2),
+              source: "ozon",
+              externalId: posting.order_id?.toString() || postingNumber,
+              postingNumber,
+              ozonStatus,
+              fulfillmentType,
+              storeId: resolvedStoreId,
+              companyId: resolvedCompanyId,
+              organizationId: orgId,
+            }, items);
+            created++;
+          }
         }
+      };
+
+      const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
+        method: "POST", headers, body: JSON.stringify(body),
+      });
+      if (fbsResponse.ok) {
+        const fbsData = await fbsResponse.json();
+        const fbsPostings = fbsData?.result?.postings || [];
+        console.log(`[ozon-sync-orders] FBS: ${fbsPostings.length} postings`);
+        await syncPostings(fbsPostings, "FBS");
+      } else {
+        console.error(`[ozon-sync-orders] FBS API error ${fbsResponse.status}`);
+      }
+
+      const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
+        method: "POST", headers, body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 50, offset: 0, with: { analytics_data: false, financial_data: false } }),
+      });
+      if (fboResponse.ok) {
+        const fboData = await fboResponse.json();
+        const fboPostings = fboData?.result || [];
+        console.log(`[ozon-sync-orders] FBO: ${fboPostings.length} postings`);
+        await syncPostings(fboPostings, "FBO");
+      } else {
+        console.error(`[ozon-sync-orders] FBO API error ${fboResponse.status}`);
       }
 
       console.log(`[ozon-sync-orders] Sync complete: created=${created}, updated=${updated}, skipped=${skipped}`);
-      res.json({ success: true, created, updated, skipped, total: postings.length });
+      res.json({ success: true, created, updated, skipped });
     } catch (error: any) {
       console.error("[ozon-sync-orders] Error:", error);
       res.status(500).json({ message: error.message });
@@ -1820,6 +1832,12 @@ export async function registerRoutes(
       }
       if (!order.postingNumber || order.source !== "ozon") {
         return res.status(400).json({ message: "Это не заказ Ozon" });
+      }
+      if (order.ozonStatus === "awaiting_deliver") {
+        return res.status(400).json({ message: "Заказ уже собран. Используйте печать этикетки." });
+      }
+      if (order.ozonStatus && !["awaiting_packaging"].includes(order.ozonStatus)) {
+        return res.status(400).json({ message: `Невозможно собрать заказ в статусе «${order.ozonStatus}»` });
       }
 
       const allSettings = await storage.getMarketplaceSettings(orgId);
@@ -1984,6 +2002,130 @@ export async function registerRoutes(
       cancelled: "Отменён",
       not_accepted: "Не принят",
     });
+  });
+
+  // Ozon FBS: Print label (Этикетка)
+  app.post("/api/orders/:id/ozon-label", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const orderId = Number(req.params.id);
+      const order = await storage.getOrder(orderId);
+
+      if (!order || order.organizationId !== orgId) {
+        return res.status(404).json({ message: "Заказ не найден" });
+      }
+      if (!order.postingNumber || order.source !== "ozon") {
+        return res.status(400).json({ message: "Это не заказ Ozon" });
+      }
+      if (order.fulfillmentType === "FBO") {
+        return res.status(400).json({ message: "Этикетки для FBO заказов недоступны — этикетки формирует Ozon" });
+      }
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+      if (!ozonSetting) {
+        return res.status(400).json({ message: "Настройки Ozon не найдены" });
+      }
+
+      const BASE = "https://api-seller.ozon.ru";
+      const headers = {
+        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+        "Api-Key": ozonSetting.apiKey.trim(),
+        "Content-Type": "application/json",
+      };
+
+      console.log(`[ozon-label] Fetching label for posting ${order.postingNumber}`);
+
+      const response = await fetch(`${BASE}/v2/posting/fbs/package-label`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ posting_number: [order.postingNumber] }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        console.error(`[ozon-label] API error ${response.status}:`, errText.slice(0, 500));
+        return res.status(502).json({ message: `Ozon API: ошибка получения этикетки (${response.status})` });
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/pdf") || contentType.includes("application/octet-stream")) {
+        const buffer = await response.arrayBuffer();
+        res.set("Content-Type", "application/pdf");
+        res.set("Content-Disposition", `inline; filename="label-${order.postingNumber}.pdf"`);
+        res.send(Buffer.from(buffer));
+      } else {
+        const rawText = await response.text();
+        console.error(`[ozon-label] Unexpected content-type: ${contentType}`, rawText.slice(0, 500));
+        res.status(502).json({ message: "Ozon вернул неожиданный формат ответа" });
+      }
+    } catch (error: any) {
+      console.error("[ozon-label] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Ozon FBO: Sync stock levels
+  app.post("/api/marketplace/ozon/sync-fbo-stock", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+
+      if (!ozonSetting) {
+        return res.status(400).json({ message: "Настройки Ozon не найдены" });
+      }
+
+      const BASE = "https://api-seller.ozon.ru";
+      const headers = {
+        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+        "Api-Key": ozonSetting.apiKey.trim(),
+        "Content-Type": "application/json",
+      };
+
+      console.log(`[ozon-fbo-stock] Fetching FBO stock levels`);
+
+      const response = await fetch(`${BASE}/v3/product/info/stocks`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ filter: { visibility: "ALL" }, limit: 1000, offset: 0 }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        console.error(`[ozon-fbo-stock] API error ${response.status}:`, errText.slice(0, 500));
+        return res.status(502).json({ message: `Ozon API error: ${response.status}` });
+      }
+
+      const data = await response.json();
+      const items = data?.result?.items || [];
+      console.log(`[ozon-fbo-stock] Received ${items.length} product stock entries`);
+
+      let updatedCount = 0;
+      for (const item of items) {
+        const offerId = item.offer_id || "";
+        if (!offerId) continue;
+
+        const fboStocks = item.stocks?.filter((s: any) => s.type === "fbo") || [];
+        const totalFbo = fboStocks.reduce((sum: number, s: any) => sum + (s.present || 0), 0);
+
+        const [dbProduct] = await db.select().from(productsTable)
+          .where(and(eq(productsTable.sku, offerId), eq(productsTable.organizationId, orgId)));
+
+        if (dbProduct && dbProduct.ozonFboStock !== totalFbo) {
+          await db.update(productsTable)
+            .set({ ozonFboStock: totalFbo })
+            .where(eq(productsTable.id, dbProduct.id));
+          updatedCount++;
+        }
+      }
+
+      console.log(`[ozon-fbo-stock] Updated ${updatedCount} products with FBO stock`);
+      res.json({ success: true, total: items.length, updated: updatedCount });
+    } catch (error: any) {
+      console.error("[ozon-fbo-stock] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
   });
 
   return httpServer;

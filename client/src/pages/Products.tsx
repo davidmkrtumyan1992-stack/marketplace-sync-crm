@@ -1,6 +1,7 @@
 import { Layout } from "@/components/Layout";
 import { useProducts, useCreateProduct, useDeleteProduct, useSyncProduct } from "@/hooks/use-products";
 import { useCreateStockInflow } from "@/hooks/use-stock-inflow";
+import { useSyncFboStock } from "@/hooks/use-orders";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -93,6 +94,7 @@ export default function Products() {
 
   const [importingMarketplace, setImportingMarketplace] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const syncFboStock = useSyncFboStock();
 
   const syncMutation = useMutation({
     mutationFn: async (marketplace: string) => {
@@ -191,6 +193,14 @@ export default function Products() {
                   <Package className="w-4 h-4 mr-2" />
                   Обновить Yandex Market
                 </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => syncFboStock.mutate()}
+                  disabled={syncFboStock.isPending}
+                  data-testid="button-sync-fbo-stock"
+                >
+                  <Package className="w-4 h-4 mr-2" />
+                  Обновить FBO остатки (Ozon)
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <Dialog open={isImportOpen} onOpenChange={setIsImportOpen}>
@@ -250,6 +260,7 @@ export default function Products() {
                 {canSeePurchasePrice && <TableHead className="text-right">Закупка</TableHead>}
                 <TableHead className="text-right">Продажа</TableHead>
                 <TableHead className="text-center">Остаток</TableHead>
+                <TableHead className="text-center">FBO</TableHead>
                 <TableHead>Склад</TableHead>
                 <TableHead className="w-[50px]"></TableHead>
               </TableRow>
@@ -257,11 +268,11 @@ export default function Products() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={canSeePurchasePrice ? 7 : 6} className="h-24 text-center">Загрузка товаров...</TableCell>
+                  <TableCell colSpan={canSeePurchasePrice ? 8 : 7} className="h-24 text-center">Загрузка товаров...</TableCell>
                 </TableRow>
               ) : filteredProducts?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={canSeePurchasePrice ? 7 : 6} className="h-32 text-center text-muted-foreground">
+                  <TableCell colSpan={canSeePurchasePrice ? 8 : 7} className="h-32 text-center text-muted-foreground">
                     Товары не найдены. Добавьте первый товар.
                   </TableCell>
                 </TableRow>
@@ -974,6 +985,15 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick }: 
               : "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
         }`} data-testid={`text-stock-${product.id}`}>
           {product.centralStock || 0} шт.
+        </span>
+      </TableCell>
+      <TableCell className="text-center">
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+          (product.ozonFboStock || 0) === 0
+            ? "bg-muted text-muted-foreground"
+            : "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400"
+        }`} data-testid={`text-fbo-stock-${product.id}`}>
+          {product.ozonFboStock || 0} шт.
         </span>
       </TableCell>
       <TableCell>

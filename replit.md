@@ -13,7 +13,8 @@ Key capabilities include:
 - Advanced analytics including ABC analysis for product categorization.
 - CRM for customer management and full audit logging for inventory changes.
 - Marketplace synchronization infrastructure with detailed history logging for Ozon, Wildberries, and Yandex Market.
-- Ozon FBS order management: webhook-based and polling-based order sync, ship/cancel actions via Ozon API, posting number tracking, and Ozon status display.
+- Ozon dual-mode FBS/FBO order management: webhook-based and polling-based order sync for both FBS and FBO, ship/cancel actions via Ozon API, FBS label printing, posting number tracking, Ozon status display, fulfillment type badges and filtering.
+- Ozon FBO inventory tracking: sync FBO stock levels from Ozon warehouse, display in products table.
 - Excel export functionality for products and P&L reports.
 The UI is fully localized in Russian.
 

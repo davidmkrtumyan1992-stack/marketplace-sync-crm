@@ -178,3 +178,60 @@ export function useSyncOzonOrders() {
     },
   });
 }
+
+export function useOzonPrintLabel() {
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (orderId: number) => {
+      const res = await fetch(`/api/orders/${orderId}/ozon-label`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Ошибка получения этикетки");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+    },
+    onSuccess: () => {
+      toast({ title: "Этикетка получена", description: "PDF открыт в новой вкладке" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useSyncFboStock() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/marketplace/ozon/sync-fbo-stock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Ошибка синхронизации FBO остатков");
+      }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({
+        title: "FBO остатки обновлены",
+        description: `Обновлено: ${data.updated} из ${data.total} товаров`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+}

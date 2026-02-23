@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders } from "@/hooks/use-orders";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders, useOzonPrintLabel } from "@/hooks/use-orders";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +24,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, RefreshCw, Truck, XCircle, Loader2 } from "lucide-react";
+import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, RefreshCw, Truck, XCircle, Loader2, Printer, Warehouse } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
 import { useQuery } from "@tanstack/react-query";
@@ -57,7 +57,16 @@ export default function Orders() {
   const { data: orders, isLoading } = useOrders();
   const [isDirectSaleOpen, setIsDirectSaleOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
+  const [fulfillmentFilter, setFulfillmentFilter] = useState<"all" | "FBS" | "FBO" | "direct">("all");
   const syncOzonOrders = useSyncOzonOrders();
+
+  const filteredOrders = useMemo(() => {
+    if (!orders) return [];
+    if (fulfillmentFilter === "all") return orders;
+    if (fulfillmentFilter === "direct") return orders.filter((o: any) => o.source === "direct" || o.source === "manual");
+    if (fulfillmentFilter === "FBS") return orders.filter((o: any) => o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon"));
+    return orders.filter((o: any) => o.fulfillmentType === fulfillmentFilter);
+  }, [orders, fulfillmentFilter]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -146,6 +155,28 @@ export default function Orders() {
           </span>
         </div>
 
+        <div className="flex gap-2" data-testid="fulfillment-filter-tabs">
+          {([
+            { key: "all", label: "Все заказы" },
+            { key: "FBS", label: "FBS (со склада продавца)" },
+            { key: "FBO", label: "FBO (со склада Ozon)" },
+            { key: "direct", label: "Прямые продажи" },
+          ] as const).map((tab) => (
+            <Button
+              key={tab.key}
+              variant={fulfillmentFilter === tab.key ? "default" : "outline"}
+              size="sm"
+              onClick={() => setFulfillmentFilter(tab.key)}
+              data-testid={`button-filter-${tab.key}`}
+            >
+              {tab.key === "FBO" && <Warehouse className="w-3.5 h-3.5 mr-1.5" />}
+              {tab.key === "FBS" && <Truck className="w-3.5 h-3.5 mr-1.5" />}
+              {tab.key === "direct" && <Store className="w-3.5 h-3.5 mr-1.5" />}
+              {tab.label}
+            </Button>
+          ))}
+        </div>
+
         {isLoading ? (
           <div className="grid gap-4">
             {[1, 2, 3].map((i) => (
@@ -156,7 +187,7 @@ export default function Orders() {
               </Card>
             ))}
           </div>
-        ) : orders?.length === 0 ? (
+        ) : filteredOrders.length === 0 ? (
           <Card className="kpi-card">
             <CardContent className="py-16 text-center">
               <ShoppingCart className="w-16 h-16 mx-auto text-muted-foreground/30 mb-4" />
@@ -166,7 +197,7 @@ export default function Orders() {
           </Card>
         ) : (
           <div className="grid gap-4">
-            {orders?.map((order: any) => (
+            {filteredOrders.map((order: any) => (
               <OrderCard 
                 key={order.id} 
                 order={order} 
@@ -235,11 +266,18 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge, onCl
                   </span>
                 )}
               </div>
-              {order.ozonStatus && (
-                <div className="mt-1.5">
-                  <Badge variant="outline" className="text-xs border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400" data-testid={`badge-ozon-status-${order.id}`}>
-                    Ozon: {OZON_STATUS_LABELS[order.ozonStatus] || order.ozonStatus}
-                  </Badge>
+              {(order.ozonStatus || order.source === "ozon") && (
+                <div className="mt-1.5 flex gap-1.5">
+                  {order.source === "ozon" && (
+                    <Badge variant="outline" className={`text-xs ${order.fulfillmentType === "FBO" ? "border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-400" : "border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400"}`} data-testid={`badge-fulfillment-${order.id}`}>
+                      {order.fulfillmentType === "FBO" ? "FBO (склад Ozon)" : "FBS (свой склад)"}
+                    </Badge>
+                  )}
+                  {order.ozonStatus && (
+                    <Badge variant="outline" className="text-xs border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400" data-testid={`badge-ozon-status-${order.id}`}>
+                      Ozon: {OZON_STATUS_LABELS[order.ozonStatus] || order.ozonStatus}
+                    </Badge>
+                  )}
                 </div>
               )}
               {order.items && order.items.length > 0 && (
@@ -302,11 +340,14 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
   const [, navigate] = useLocation();
   const ozonShip = useOzonShipOrder();
   const ozonCancel = useOzonCancelOrder();
+  const ozonLabel = useOzonPrintLabel();
 
   if (!order) return null;
 
   const isOzon = order.source === "ozon" && order.postingNumber;
-  const canShip = isOzon && ["awaiting_packaging", "awaiting_deliver"].includes(order.ozonStatus || "");
+  const isFbs = order.fulfillmentType === "FBS" || (!order.fulfillmentType && order.source === "ozon");
+  const canShip = isOzon && isFbs && order.ozonStatus === "awaiting_packaging";
+  const canLabel = isOzon && isFbs && ["awaiting_deliver", "awaiting_packaging"].includes(order.ozonStatus || "");
   const canCancel = isOzon && ["awaiting_approve", "awaiting_packaging"].includes(order.ozonStatus || "");
 
   const getSourceLabel = (source: string) => {
@@ -344,6 +385,11 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
             <Badge className={`${getStatusColor(order.status)}`}>
               {getStatusLabel(order.status)}
             </Badge>
+            {order.fulfillmentType && (
+              <Badge variant="outline" className={`text-xs ${order.fulfillmentType === "FBO" ? "border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-400" : "border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400"}`}>
+                {order.fulfillmentType === "FBO" ? "FBO (склад Ozon)" : "FBS (свой склад)"}
+              </Badge>
+            )}
             {order.ozonStatus && (
               <Badge variant="outline" className="text-xs border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400">
                 Ozon: {OZON_STATUS_LABELS[order.ozonStatus] || order.ozonStatus}
@@ -371,6 +417,18 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
                   >
                     {ozonShip.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Truck className="w-4 h-4 mr-1.5" />}
                     Собрать заказ
+                  </Button>
+                )}
+                {canLabel && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => ozonLabel.mutate(order.id)}
+                    disabled={ozonLabel.isPending}
+                    data-testid="button-ozon-label"
+                  >
+                    {ozonLabel.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Printer className="w-4 h-4 mr-1.5" />}
+                    Этикетка
                   </Button>
                 )}
                 {canCancel && (
