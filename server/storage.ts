@@ -38,6 +38,11 @@ export interface IStorage {
   getStoresByOrg(organizationId: string): Promise<Store[]>;
   createStore(store: InsertStore): Promise<Store>;
   updateStore(id: number, updates: Partial<InsertStore>): Promise<Store>;
+  deleteStore(id: number): Promise<void>;
+
+  // Companies (extended)
+  updateCompany(id: number, updates: Partial<InsertCompany>): Promise<Company>;
+  deleteCompany(id: number): Promise<void>;
 
   // User Roles
   getUserRole(userId: string, organizationId: string): Promise<UserRole | undefined>;
@@ -146,6 +151,16 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async updateCompany(id: number, updates: Partial<InsertCompany>): Promise<Company> {
+    const [updated] = await db.update(companies).set(updates).where(eq(companies.id, id)).returning();
+    return updated;
+  }
+
+  async deleteCompany(id: number): Promise<void> {
+    await db.delete(stores).where(eq(stores.companyId, id));
+    await db.delete(companies).where(eq(companies.id, id));
+  }
+
   // Stores
   async getStore(id: number): Promise<Store | undefined> {
     const [store] = await db.select().from(stores).where(eq(stores.id, id));
@@ -171,6 +186,10 @@ export class DatabaseStorage implements IStorage {
   async updateStore(id: number, updates: Partial<InsertStore>): Promise<Store> {
     const [updated] = await db.update(stores).set(updates).where(eq(stores.id, id)).returning();
     return updated;
+  }
+
+  async deleteStore(id: number): Promise<void> {
+    await db.delete(stores).where(eq(stores.id, id));
   }
 
   // User Roles
@@ -570,7 +589,24 @@ export class DatabaseStorage implements IStorage {
     const taxSetting = await this.getTaxSettings(organizationId);
     const companyList = await this.getCompanies(organizationId);
     const allOrders = await db.select().from(orders).where(eq(orders.organizationId, organizationId));
-    
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayOrders = allOrders.filter(o => {
+      if (!o.createdAt) return false;
+      const created = new Date(o.createdAt);
+      return created >= todayStart && o.source === "ozon" && 
+        (o.fulfillmentType === "FBS" || !o.fulfillmentType) &&
+        o.ozonStatus === "awaiting_deliver";
+    });
+    const todayOrderIds = todayOrders.map(o => o.id);
+    let todayItemsCount = 0;
+    if (todayOrderIds.length > 0) {
+      const todayItems = await db.select().from(orderItems).where(inArray(orderItems.orderId, todayOrderIds));
+      todayItemsCount = todayItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
+    }
+    const todayRevenue = todayOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+
     let totalStock = 0;
     let capitalization = 0;
     let expectedRevenue = 0;
@@ -646,6 +682,11 @@ export class DatabaseStorage implements IStorage {
       capitalization,
       expectedRevenue,
       expectedProfit,
+      today: {
+        ordersCount: todayOrders.length,
+        revenue: todayRevenue,
+        itemsCount: todayItemsCount,
+      },
       stockDistribution: { local: stockLocal, ozon: stockOzon, wb: stockWb, yandex: stockYandex },
       companies: companiesWithStores
     };

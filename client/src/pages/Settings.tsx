@@ -15,8 +15,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store, type StockSyncLogEntry, type InventorySyncSetting, type MarketplaceSetting } from "@shared/schema";
-import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff } from "lucide-react";
+import { type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store, type StockSyncLogEntry, type InventorySyncSetting, type MarketplaceSetting, type Company } from "@shared/schema";
+import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -44,6 +44,11 @@ export default function Settings() {
   const { mutate: syncAll, isPending: isSyncing } = useSyncAllMarketplaces();
   const { mutate: saveTax, isPending: savingTax } = useSaveTaxSettings();
   const [showAddStore, setShowAddStore] = useState(false);
+  const [showAddCompany, setShowAddCompany] = useState(false);
+
+  const { data: companiesList } = useQuery<Company[]>({
+    queryKey: ["/api/companies"],
+  });
 
   return (
     <Layout>
@@ -51,7 +56,7 @@ export default function Settings() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-4xl font-bold tracking-tight">Настройки</h1>
-            <p className="text-muted-foreground mt-2 text-lg">Интеграции и налоговые параметры</p>
+            <p className="text-muted-foreground mt-2 text-lg">Компании, интеграции и налоговые параметры</p>
           </div>
           <Button onClick={() => syncAll()} disabled={isSyncing} variant="outline" data-testid="button-sync-all-header">
             <RefreshCw className={`w-4 h-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
@@ -59,13 +64,22 @@ export default function Settings() {
           </Button>
         </div>
 
-        <Tabs defaultValue="settings">
+        <Tabs defaultValue="companies">
           <TabsList>
-            <TabsTrigger value="settings" data-testid="tab-settings">Настройки</TabsTrigger>
+            <TabsTrigger value="companies" data-testid="tab-companies">Компании</TabsTrigger>
+            <TabsTrigger value="settings" data-testid="tab-settings">Налоги</TabsTrigger>
             <TabsTrigger value="safety-stock" data-testid="tab-safety-stock">Резервный остаток</TabsTrigger>
             <TabsTrigger value="sync-log" data-testid="tab-sync-log">Лог синхронизации</TabsTrigger>
             <TabsTrigger value="sync-history" data-testid="tab-sync-history">Синхронизация</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="companies" className="space-y-6 mt-6">
+            <CompaniesSection
+              companies={companiesList || []}
+              onAddCompany={() => setShowAddCompany(true)}
+              onAddStore={() => setShowAddStore(true)}
+            />
+          </TabsContent>
 
           <TabsContent value="settings" className="space-y-6 mt-6">
             <TaxSettingsCard 
@@ -73,12 +87,6 @@ export default function Settings() {
               isLoading={taxLoading}
               onSave={saveTax}
               isSaving={savingTax}
-            />
-
-            <MarketplaceStoresSection 
-              settings={settings || []}
-              isLoading={settingsLoading}
-              onAddStore={() => setShowAddStore(true)}
             />
           </TabsContent>
 
@@ -96,67 +104,185 @@ export default function Settings() {
         </Tabs>
       </div>
 
+      {showAddCompany && (
+        <AddCompanyDialog onClose={() => setShowAddCompany(false)} />
+      )}
+
       {showAddStore && (
-        <AddStoreDialog onClose={() => setShowAddStore(false)} />
+        <AddStoreDialog companies={companiesList || []} onClose={() => setShowAddStore(false)} />
       )}
     </Layout>
   );
 }
 
-function MarketplaceStoresSection({ settings, isLoading, onAddStore }: { settings: MarketplaceSetting[]; isLoading: boolean; onAddStore: () => void }) {
-  const [editingStore, setEditingStore] = useState<MarketplaceSetting | null>(null);
-  const [deletingStore, setDeletingStore] = useState<MarketplaceSetting | null>(null);
-  const { mutate: deleteStore, isPending: isDeleting } = useDeleteMarketplaceSetting();
-  const { mutate: updateStore } = useUpdateMarketplaceSetting();
+function CompaniesSection({ companies, onAddCompany, onAddStore }: { companies: Company[]; onAddCompany: () => void; onAddStore: () => void }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [editingCompany, setEditingCompany] = useState<Company | null>(null);
+  const [deletingCompany, setDeletingCompany] = useState<Company | null>(null);
 
-  const handleDelete = () => {
-    if (!deletingStore) return;
-    deleteStore(deletingStore.id);
-    setDeletingStore(null);
-  };
-
-  const handleToggleActive = (setting: MarketplaceSetting) => {
-    updateStore({ id: setting.id, isActive: !setting.isActive });
-  };
+  const deleteCompanyMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/companies/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      toast({ title: "Удалено", description: "Компания и все её магазины удалены" });
+      setDeletingCompany(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
 
   return (
     <>
-      <Card className="dashboard-card overflow-hidden">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-card rounded-lg border shadow-sm text-primary">
+            <Building2 className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Компании и магазины</h2>
+            <p className="text-sm text-muted-foreground">Управление юрлицами и подключёнными маркетплейсами</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={onAddCompany} data-testid="button-add-company">
+            <Building2 className="w-4 h-4 mr-2" />
+            Добавить компанию
+          </Button>
+          <Button onClick={onAddStore} data-testid="button-add-store" disabled={companies.length === 0}>
+            <Plus className="w-4 h-4 mr-2" />
+            Добавить магазин
+          </Button>
+        </div>
+      </div>
+
+      {companies.length === 0 ? (
+        <Card className="dashboard-card">
+          <CardContent className="py-12 text-center">
+            <Building2 className="w-12 h-12 mx-auto text-muted-foreground/40 mb-4" />
+            <p className="text-lg font-semibold mb-2">Нет компаний</p>
+            <p className="text-sm text-muted-foreground mb-6">Создайте компанию (ИП или ООО), чтобы привязать к ней магазины маркетплейсов</p>
+            <Button onClick={onAddCompany} data-testid="button-add-company-empty">
+              <Building2 className="w-4 h-4 mr-2" />
+              Создать компанию
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        companies.map((company) => (
+          <CompanyCard
+            key={company.id}
+            company={company}
+            onEdit={() => setEditingCompany(company)}
+            onDelete={() => setDeletingCompany(company)}
+          />
+        ))
+      )}
+
+      {editingCompany && (
+        <EditCompanyDialog company={editingCompany} onClose={() => setEditingCompany(null)} />
+      )}
+
+      <AlertDialog open={!!deletingCompany} onOpenChange={(open) => !open && setDeletingCompany(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить компанию?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Компания «{deletingCompany?.name}» и все привязанные к ней магазины будут удалены. Это действие нельзя отменить.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete-company">Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deletingCompany && deleteCompanyMutation.mutate(deletingCompany.id)}
+              className="bg-destructive text-destructive-foreground"
+              data-testid="button-confirm-delete-company"
+            >
+              Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+function CompanyCard({ company, onEdit, onDelete }: { company: Company; onEdit: () => void; onDelete: () => void }) {
+  const { data: storesList } = useQuery<Store[]>({
+    queryKey: ["/api/companies", company.id, "stores"],
+    queryFn: async () => {
+      const res = await fetch(`/api/companies/${company.id}/stores`);
+      if (!res.ok) throw new Error("Failed to fetch stores");
+      return res.json();
+    },
+  });
+
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [deletingStore, setDeletingStore] = useState<Store | null>(null);
+
+  const deleteStoreMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/stores/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", company.id, "stores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      toast({ title: "Удалено", description: "Магазин удалён" });
+      setDeletingStore(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <>
+      <Card className="dashboard-card overflow-hidden" data-testid={`card-company-settings-${company.id}`}>
         <CardHeader className="bg-muted/50 border-b">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-card rounded-lg border shadow-sm text-primary">
-                <StoreIcon className="w-6 h-6" />
+                <Building2 className="w-5 h-5" />
               </div>
               <div>
-                <CardTitle>Магазины маркетплейсов</CardTitle>
-                <CardDescription>Подключённые аккаунты для синхронизации товаров и заказов</CardDescription>
+                <CardTitle className="text-lg" data-testid={`text-company-name-settings-${company.id}`}>{company.name}</CardTitle>
+                {company.inn && (
+                  <CardDescription>ИНН: {company.inn}</CardDescription>
+                )}
               </div>
             </div>
-            <Button onClick={onAddStore} data-testid="button-add-store">
-              <Plus className="w-4 h-4 mr-2" />
-              Добавить магазин
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="icon" onClick={onEdit} data-testid={`button-edit-company-${company.id}`}>
+                <Pencil className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={onDelete} data-testid={`button-delete-company-${company.id}`}>
+                <Trash2 className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          {isLoading ? (
-            <div className="text-center py-8 text-muted-foreground">Загрузка...</div>
-          ) : settings.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <StoreIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
-              <p className="text-lg font-medium">Нет подключённых магазинов</p>
-              <p className="text-sm mt-1">Нажмите «Добавить магазин» чтобы подключить маркетплейс</p>
+          {!storesList || storesList.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <StoreIcon className="w-8 h-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">Нет подключённых магазинов</p>
             </div>
           ) : (
             <div className="divide-y">
-              {settings.map((setting) => {
-                const mpStyle = getMarketplaceStyle(setting.marketplace);
-                const hasApiKey = !!setting.apiKey && setting.apiKey.length > 3;
-                const isConnected = hasApiKey && setting.isActive;
+              {storesList.map((store) => {
+                const mpStyle = getMarketplaceStyle(store.marketplace);
+                const hasApiKey = !!store.apiKey && store.apiKey.length > 3;
+                const isConnected = hasApiKey && store.isActive;
 
                 return (
-                  <div key={setting.id} className="flex items-center justify-between gap-4 p-4 hover:bg-muted/30 transition-colors" data-testid={`store-row-${setting.id}`}>
+                  <div key={store.id} className="flex items-center justify-between gap-4 p-4 hover:bg-muted/30 transition-colors" data-testid={`store-row-${store.id}`}>
                     <div className="flex items-center gap-3 min-w-0 flex-1">
                       <div
                         className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
@@ -166,53 +292,37 @@ function MarketplaceStoresSection({ settings, isLoading, onAddStore }: { setting
                       </div>
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="font-medium truncate" data-testid={`text-store-name-${setting.id}`}>
-                            {setting.storeName || `${mpStyle.label} магазин`}
+                          <span className="font-medium truncate" data-testid={`text-store-name-${store.id}`}>
+                            {store.name}
                           </span>
                           <Badge
                             className="text-[10px] font-bold shrink-0"
                             style={{ backgroundColor: mpStyle.bg, color: mpStyle.color }}
-                            data-testid={`badge-store-marketplace-${setting.id}`}
+                            data-testid={`badge-store-marketplace-${store.id}`}
                           >
                             {mpStyle.label}
                           </Badge>
                         </div>
                         <div className="flex items-center gap-3 mt-0.5">
                           {isConnected ? (
-                            <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400" data-testid={`status-connected-${setting.id}`}>
+                            <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
                               <Wifi className="w-3 h-3" />
                               Подключён
                             </span>
                           ) : (
-                            <span className="flex items-center gap-1 text-xs text-muted-foreground" data-testid={`status-disconnected-${setting.id}`}>
+                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
                               <WifiOff className="w-3 h-3" />
                               {!hasApiKey ? "API-ключ не задан" : "Неактивен"}
                             </span>
                           )}
-                          {setting.lastSync && (
-                            <span className="text-xs text-muted-foreground">
-                              Последняя синхронизация: {format(new Date(setting.lastSync), "dd.MM.yy HH:mm", { locale: ru })}
-                            </span>
-                          )}
-                          {setting.marketplace === "ozon" && setting.clientId && (
-                            <span className="text-xs text-muted-foreground">Client ID: {setting.clientId}</span>
-                          )}
-                          {setting.marketplace === "wildberries" && setting.warehouseId && (
-                            <span className="text-xs text-muted-foreground">Склад: {setting.warehouseId}</span>
+                          {store.marketplace === "ozon" && store.clientId && (
+                            <span className="text-xs text-muted-foreground">Client ID: {store.clientId}</span>
                           )}
                         </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-4">
-                      <Switch
-                        checked={setting.isActive ?? true}
-                        onCheckedChange={() => handleToggleActive(setting)}
-                        data-testid={`switch-store-active-${setting.id}`}
-                      />
-                      <Button variant="ghost" size="icon" onClick={() => setEditingStore(setting)} data-testid={`button-edit-store-${setting.id}`}>
-                        <Pencil className="w-4 h-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => setDeletingStore(setting)} data-testid={`button-delete-store-${setting.id}`}>
+                      <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => setDeletingStore(store)} data-testid={`button-delete-store-${store.id}`}>
                         <Trash2 className="w-4 h-4" />
                       </Button>
                     </div>
@@ -224,27 +334,150 @@ function MarketplaceStoresSection({ settings, isLoading, onAddStore }: { setting
         </CardContent>
       </Card>
 
-      {editingStore && (
-        <EditStoreDialog store={editingStore} onClose={() => setEditingStore(null)} />
-      )}
-
       <AlertDialog open={!!deletingStore} onOpenChange={(open) => !open && setDeletingStore(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Удалить магазин?</AlertDialogTitle>
             <AlertDialogDescription>
-              Магазин «{deletingStore?.storeName || "Без названия"}» будет удалён. Это действие нельзя отменить. API-ключ и все настройки будут потеряны.
+              Магазин «{deletingStore?.name}» будет удалён из компании «{company.name}». Это действие нельзя отменить.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel data-testid="button-cancel-delete-store">Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground" data-testid="button-confirm-delete-store">
+            <AlertDialogAction
+              onClick={() => deletingStore && deleteStoreMutation.mutate(deletingStore.id)}
+              className="bg-destructive text-destructive-foreground"
+              data-testid="button-confirm-delete-store"
+            >
               Удалить
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+const companyFormSchema = z.object({
+  name: z.string().min(1, "Название обязательно"),
+  inn: z.string().optional(),
+});
+
+function AddCompanyDialog({ onClose }: { onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const form = useForm<z.infer<typeof companyFormSchema>>({
+    resolver: zodResolver(companyFormSchema),
+    defaultValues: { name: "", inn: "" },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: z.infer<typeof companyFormSchema>) => {
+      const res = await apiRequest("POST", "/api/companies", data);
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      toast({ title: "Создано", description: "Компания добавлена" });
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md w-[95vw] sm:w-full">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Building2 className="w-5 h-5" />
+            Добавить компанию
+          </DialogTitle>
+          <DialogDescription>Создайте юридическое лицо (ИП или ООО)</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={form.handleSubmit((data) => createMutation.mutate(data))} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Название</Label>
+            <Input {...form.register("name")} placeholder="Например: ИП Иванов" data-testid="input-company-name" />
+            {form.formState.errors.name && (
+              <span className="text-xs text-destructive">{form.formState.errors.name.message}</span>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label>ИНН (опционально)</Label>
+            <Input {...form.register("inn")} placeholder="1234567890" data-testid="input-company-inn" />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Отмена</Button>
+            <Button type="submit" disabled={createMutation.isPending} data-testid="button-save-company">
+              {createMutation.isPending ? "Сохранение..." : "Создать"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditCompanyDialog({ company, onClose }: { company: Company; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const form = useForm<z.infer<typeof companyFormSchema>>({
+    resolver: zodResolver(companyFormSchema),
+    defaultValues: { name: company.name, inn: company.inn || "" },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async (data: z.infer<typeof companyFormSchema>) => {
+      const res = await apiRequest("PUT", `/api/companies/${company.id}`, data);
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      toast({ title: "Сохранено", description: "Компания обновлена" });
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md w-[95vw] sm:w-full">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Pencil className="w-5 h-5" />
+            Редактировать компанию
+          </DialogTitle>
+          <DialogDescription>Изменить данные компании</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={form.handleSubmit((data) => updateMutation.mutate(data))} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Название</Label>
+            <Input {...form.register("name")} data-testid="input-edit-company-name" />
+            {form.formState.errors.name && (
+              <span className="text-xs text-destructive">{form.formState.errors.name.message}</span>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label>ИНН</Label>
+            <Input {...form.register("inn")} data-testid="input-edit-company-inn" />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>Отмена</Button>
+            <Button type="submit" disabled={updateMutation.isPending} data-testid="button-save-edit-company">
+              {updateMutation.isPending ? "Сохранение..." : "Сохранить"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -277,12 +510,18 @@ const storeFormSchema = z.object({
   }
 });
 
-function AddStoreDialog({ onClose }: { onClose: () => void }) {
-  const { mutate: saveStore, isPending } = useSaveMarketplaceSettings();
+function AddStoreDialog({ companies, onClose }: { companies: Company[]; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [marketplace, setMarketplace] = useState<string>("ozon");
+  const [companyId, setCompanyId] = useState<string>(companies.length > 0 ? String(companies[0].id) : "");
 
-  const form = useForm<z.infer<typeof storeFormSchema>>({
-    resolver: zodResolver(storeFormSchema),
+  const storeFormSchemaExt = storeFormSchema.extend({
+    companyId: z.string().min(1, "Выберите компанию"),
+  });
+
+  const form = useForm<z.infer<typeof storeFormSchemaExt>>({
+    resolver: zodResolver(storeFormSchemaExt),
     defaultValues: {
       storeName: "",
       marketplace: "ozon",
@@ -290,33 +529,47 @@ function AddStoreDialog({ onClose }: { onClose: () => void }) {
       clientId: "",
       warehouseId: "",
       isActive: true,
+      companyId: companyId,
     },
   });
 
-  const onSubmit = (data: z.infer<typeof storeFormSchema>) => {
-    const sanitize = (s: string) => s.replace(/[^\x00-\x7F]/g, "").trim();
-    const apiKey = data.marketplace === "yandex" ? sanitize(data.apiKey) : data.apiKey.trim();
+  const createMutation = useMutation({
+    mutationFn: async (data: z.infer<typeof storeFormSchemaExt>) => {
+      const sanitize = (s: string) => s.replace(/[^\x00-\x7F]/g, "").trim();
+      const apiKey = data.marketplace === "yandex" ? sanitize(data.apiKey) : data.apiKey.trim();
 
-    const payload: any = {
-      storeName: data.storeName.trim(),
-      marketplace: data.marketplace,
-      apiKey,
-      isActive: data.isActive,
-    };
-    if (data.marketplace === "ozon" && data.clientId) {
-      payload.clientId = data.clientId.trim();
-    }
-    if (data.marketplace === "wildberries" && data.warehouseId) {
-      payload.warehouseId = data.warehouseId.trim();
-    }
-    if (data.marketplace === "yandex") {
-      if (data.warehouseId) payload.warehouseId = sanitize(data.warehouseId);
-    }
+      const payload: any = {
+        storeName: data.storeName.trim(),
+        marketplace: data.marketplace,
+        apiKey,
+        isActive: data.isActive,
+        companyId: Number(data.companyId),
+      };
+      if (data.marketplace === "ozon" && data.clientId) {
+        payload.clientId = data.clientId.trim();
+      }
+      if (data.marketplace === "wildberries" && data.warehouseId) {
+        payload.warehouseId = data.warehouseId.trim();
+      }
+      if (data.marketplace === "yandex" && data.warehouseId) {
+        payload.warehouseId = sanitize(data.warehouseId);
+      }
 
-    saveStore(payload as InsertMarketplaceSetting, {
-      onSuccess: () => onClose(),
-    });
-  };
+      const res = await apiRequest("POST", "/api/marketplace/settings", payload);
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      toast({ title: "Сохранено", description: "Магазин добавлен" });
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
 
   const handleMarketplaceChange = (val: string) => {
     setMarketplace(val);
@@ -333,9 +586,28 @@ function AddStoreDialog({ onClose }: { onClose: () => void }) {
             <Plus className="w-5 h-5" />
             Добавить магазин
           </DialogTitle>
-          <DialogDescription>Подключите новый аккаунт маркетплейса</DialogDescription>
+          <DialogDescription>Подключите новый аккаунт маркетплейса к компании</DialogDescription>
         </DialogHeader>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <form onSubmit={form.handleSubmit((data) => createMutation.mutate(data))} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Компания</Label>
+            <Select value={companyId} onValueChange={(val) => { setCompanyId(val); form.setValue("companyId", val); }}>
+              <SelectTrigger data-testid="select-company">
+                <SelectValue placeholder="Выберите компанию" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies.map((c) => (
+                  <SelectItem key={c.id} value={String(c.id)}>
+                    {c.name}{c.inn ? ` (ИНН: ${c.inn})` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {form.formState.errors.companyId && (
+              <span className="text-xs text-destructive">{form.formState.errors.companyId.message}</span>
+            )}
+          </div>
+
           <div className="space-y-2">
             <Label>Маркетплейс</Label>
             <Select value={marketplace} onValueChange={handleMarketplaceChange}>
@@ -377,9 +649,6 @@ function AddStoreDialog({ onClose }: { onClose: () => void }) {
             />
             {form.formState.errors.apiKey && (
               <span className="text-xs text-destructive">{form.formState.errors.apiKey.message}</span>
-            )}
-            {marketplace === "wildberries" && (
-              <p className="text-xs text-muted-foreground">Вставьте токен целиком — пробелы в начале и конце будут убраны автоматически</p>
             )}
           </div>
 
@@ -423,119 +692,8 @@ function AddStoreDialog({ onClose }: { onClose: () => void }) {
             <Button type="button" variant="outline" onClick={onClose} data-testid="button-cancel-add-store">
               Отмена
             </Button>
-            <Button type="submit" disabled={isPending} data-testid="button-save-new-store">
-              {isPending ? "Сохранение..." : "Добавить"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function EditStoreDialog({ store, onClose }: { store: MarketplaceSetting; onClose: () => void }) {
-  const { mutate: updateStore, isPending } = useUpdateMarketplaceSetting();
-  const mpStyle = getMarketplaceStyle(store.marketplace);
-
-  const form = useForm<z.infer<typeof storeFormSchema>>({
-    resolver: zodResolver(storeFormSchema),
-    defaultValues: {
-      storeName: store.storeName || "",
-      marketplace: store.marketplace as "ozon" | "wildberries" | "yandex",
-      apiKey: store.apiKey || "",
-      clientId: store.clientId || "",
-      warehouseId: store.warehouseId || "",
-      isActive: store.isActive ?? true,
-    },
-  });
-
-  const onSubmit = (data: z.infer<typeof storeFormSchema>) => {
-    const isYandex = store.marketplace === "yandex";
-    const sanitize = (s: string) => s.replace(/[^\x00-\x7F]/g, "").trim();
-
-    updateStore({
-      id: store.id,
-      storeName: data.storeName.trim(),
-      apiKey: isYandex ? sanitize(data.apiKey) : data.apiKey.trim(),
-      clientId: data.clientId?.trim() || null,
-      warehouseId: isYandex && data.warehouseId ? sanitize(data.warehouseId) : (data.warehouseId?.trim() || null),
-      isActive: data.isActive,
-    } as any, {
-      onSuccess: () => onClose(),
-    });
-  };
-
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-md w-[95vw] sm:w-full">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Pencil className="w-5 h-5" />
-            Редактировать магазин
-            <Badge
-              className="text-[10px] font-bold ml-1"
-              style={{ backgroundColor: mpStyle.bg, color: mpStyle.color }}
-            >
-              {mpStyle.label}
-            </Badge>
-          </DialogTitle>
-          <DialogDescription>Изменить настройки подключения</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-          <div className="space-y-2">
-            <Label>Название магазина</Label>
-            <Input {...form.register("storeName")} data-testid="input-edit-store-name" />
-            {form.formState.errors.storeName && (
-              <span className="text-xs text-destructive">{form.formState.errors.storeName.message}</span>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label>API-ключ</Label>
-            <Input
-              type="password"
-              {...form.register("apiKey")}
-              placeholder={store.marketplace === "wildberries" ? "eyJ... (JWT-токен WB)" : "API ключ"}
-              data-testid="input-edit-api-key"
-            />
-            {form.formState.errors.apiKey && (
-              <span className="text-xs text-destructive">{form.formState.errors.apiKey.message}</span>
-            )}
-          </div>
-
-          {store.marketplace === "ozon" && (
-            <div className="space-y-2">
-              <Label>Client ID</Label>
-              <Input {...form.register("clientId")} placeholder="Client ID" data-testid="input-edit-client-id" />
-            </div>
-          )}
-
-          {(store.marketplace === "wildberries" || store.marketplace === "yandex") && (
-            <div className="space-y-2">
-              <Label>{store.marketplace === "wildberries" ? "ID склада" : "Business ID"}</Label>
-              <Input {...form.register("warehouseId")} placeholder={store.marketplace === "wildberries" ? "ID склада WB" : "Business ID (только цифры)"} data-testid="input-edit-warehouse-id" />
-              {store.marketplace === "yandex" && form.formState.errors.warehouseId && (
-                <span className="text-xs text-destructive">{form.formState.errors.warehouseId.message}</span>
-              )}
-            </div>
-          )}
-
-
-          <div className="flex items-center gap-2">
-            <Switch
-              checked={form.watch("isActive")}
-              onCheckedChange={(val) => form.setValue("isActive", val)}
-              data-testid="switch-edit-store-active"
-            />
-            <Label className="text-sm text-muted-foreground">Активен</Label>
-          </div>
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose} data-testid="button-cancel-edit-store">
-              Отмена
-            </Button>
-            <Button type="submit" disabled={isPending} data-testid="button-save-edit-store">
-              {isPending ? "Сохранение..." : "Сохранить"}
+            <Button type="submit" disabled={createMutation.isPending} data-testid="button-save-new-store">
+              {createMutation.isPending ? "Сохранение..." : "Добавить"}
             </Button>
           </DialogFooter>
         </form>

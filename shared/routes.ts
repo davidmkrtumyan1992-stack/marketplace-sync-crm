@@ -31,12 +31,15 @@ export const api = {
   companies: {
     list: { method: 'GET' as const, path: '/api/companies' },
     create: { method: 'POST' as const, path: '/api/companies', input: insertCompanySchema },
+    update: { method: 'PUT' as const, path: '/api/companies/:id', input: insertCompanySchema.partial() },
+    delete: { method: 'DELETE' as const, path: '/api/companies/:id' },
   },
   stores: {
     list: { method: 'GET' as const, path: '/api/stores' },
     byCompany: { method: 'GET' as const, path: '/api/companies/:companyId/stores' },
     create: { method: 'POST' as const, path: '/api/stores', input: insertStoreSchema },
     update: { method: 'PUT' as const, path: '/api/stores/:id', input: insertStoreSchema.partial() },
+    delete: { method: 'DELETE' as const, path: '/api/stores/:id' },
   },
   userRoles: {
     get: { method: 'GET' as const, path: '/api/user-role' },

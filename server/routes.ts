@@ -91,6 +91,34 @@ export async function registerRoutes(
     res.status(201).json(company);
   });
 
+  app.put("/api/companies/:id", isAuthenticated, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const existing = await storage.getCompany(id);
+      if (!existing || existing.organizationId !== getOrgId(req)) {
+        return res.status(404).json({ message: "Компания не найдена" });
+      }
+      const updated = await storage.updateCompany(id, req.body);
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/companies/:id", isAuthenticated, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const existing = await storage.getCompany(id);
+      if (!existing || existing.organizationId !== getOrgId(req)) {
+        return res.status(404).json({ message: "Компания не найдена" });
+      }
+      await storage.deleteCompany(id);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Stores
   app.get(api.stores.list.path, isAuthenticated, async (req, res) => {
     const list = await storage.getStoresByOrg(getOrgId(req));
@@ -122,6 +150,20 @@ export async function registerRoutes(
     if (!company || company.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
     const store = await storage.updateStore(Number(req.params.id), req.body);
     res.json(store);
+  });
+
+  app.delete("/api/stores/:id", isAuthenticated, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const existing = await storage.getStore(id);
+      if (!existing) return res.status(404).json({ message: "Магазин не найден" });
+      const company = await storage.getCompany(existing.companyId);
+      if (!company || company.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
+      await storage.deleteStore(id);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
   });
 
   // User Roles
@@ -432,13 +474,30 @@ export async function registerRoutes(
   });
 
   app.post(api.marketplace.save.path, isAuthenticated, requireRole("owner"), async (req, res) => {
-    const body = { ...req.body, organizationId: getOrgId(req) };
+    const orgId = getOrgId(req);
+    const body = { ...req.body, organizationId: orgId };
     if (body.apiKey && typeof body.apiKey === "string") body.apiKey = body.apiKey.trim();
     if (body.clientId && typeof body.clientId === "string") body.clientId = body.clientId.trim();
     if (body.warehouseId && typeof body.warehouseId === "string") body.warehouseId = body.warehouseId.trim();
     if (body.storeName && typeof body.storeName === "string") body.storeName = body.storeName.trim();
     const input = api.marketplace.save.input.parse(body);
     const setting = await storage.createMarketplaceSetting(input);
+
+    if (body.companyId) {
+      const company = await storage.getCompany(Number(body.companyId));
+      if (company && company.organizationId === orgId) {
+        await storage.createStore({
+          companyId: company.id,
+          marketplace: body.marketplace,
+          name: body.storeName || `${body.marketplace} магазин`,
+          apiKey: body.apiKey || null,
+          clientId: body.clientId || null,
+          warehouseId: body.warehouseId || null,
+          isActive: body.isActive ?? true,
+        });
+      }
+    }
+
     res.status(201).json(setting);
   });
 
