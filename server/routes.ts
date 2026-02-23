@@ -1844,12 +1844,16 @@ export async function registerRoutes(
         for (const posting of postings) {
           const postingNumber = posting.posting_number;
           const ozonStatus = posting.status;
+          const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : undefined;
           const existingOrder = await storage.getOrderByPostingNumber(postingNumber, orgId);
 
           if (existingOrder) {
             const internalStatus = ozonStatusToInternal(ozonStatus);
-            if (existingOrder.ozonStatus !== ozonStatus) {
-              await storage.updateOrderOzonStatus(existingOrder.id, ozonStatus, internalStatus);
+            const needsStatusUpdate = existingOrder.ozonStatus !== ozonStatus;
+            const needsDateUpdate = ozonCreatedAt && existingOrder.createdAt &&
+              Math.abs(new Date(existingOrder.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
+            if (needsStatusUpdate || needsDateUpdate) {
+              await storage.updateOrderOzonStatus(existingOrder.id, ozonStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
               updated++;
             } else {
               skipped++;
@@ -1890,6 +1894,7 @@ export async function registerRoutes(
               storeId: resolvedStoreId,
               companyId: resolvedCompanyId,
               organizationId: orgId,
+              createdAt: ozonCreatedAt || undefined,
             }, items);
             created++;
           }
@@ -2406,6 +2411,102 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/marketplace/ozon/resync-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+
+      if (!ozonSetting) {
+        return res.status(400).json({ message: "Настройки Ozon не найдены" });
+      }
+
+      const BASE = "https://api-seller.ozon.ru";
+      const headers = {
+        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+        "Api-Key": ozonSetting.apiKey.trim(),
+        "Content-Type": "application/json",
+      };
+
+      const allOrders = await db.select().from(ordersTable)
+        .where(and(
+          eq(ordersTable.organizationId, orgId),
+          eq(ordersTable.source, "ozon"),
+        ));
+
+      const ozonOrders = allOrders.filter(o => o.postingNumber);
+      if (ozonOrders.length === 0) {
+        return res.json({ success: true, updated: 0, message: "No Ozon orders to resync" });
+      }
+
+      console.log(`[ozon-resync] Starting resync for ${ozonOrders.length} Ozon orders in org ${orgId}`);
+
+      const since = new Date();
+      since.setDate(since.getDate() - 60);
+      const body = {
+        dir: "ASC",
+        filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" },
+        limit: 1000,
+        offset: 0,
+      };
+
+      const allPostings = new Map<string, any>();
+
+      const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
+        method: "POST", headers, body: JSON.stringify(body),
+      });
+      if (fbsResponse.ok) {
+        const fbsData = await fbsResponse.json();
+        for (const p of (fbsData?.result?.postings || [])) {
+          allPostings.set(p.posting_number, p);
+        }
+      }
+
+      const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
+        method: "POST", headers,
+        body: JSON.stringify({ ...body, with: { analytics_data: false, financial_data: false } }),
+      });
+      if (fboResponse.ok) {
+        const fboData = await fboResponse.json();
+        for (const p of (fboData?.result || [])) {
+          allPostings.set(p.posting_number, p);
+        }
+      }
+
+      console.log(`[ozon-resync] Found ${allPostings.size} postings from Ozon API`);
+
+      let updated = 0;
+      for (const order of ozonOrders) {
+        const posting = allPostings.get(order.postingNumber!);
+        if (!posting) continue;
+
+        const newOzonStatus = posting.status;
+        const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : null;
+        const internalStatus = ozonStatusToInternal(newOzonStatus);
+
+        const needsStatusUpdate = order.ozonStatus !== newOzonStatus;
+        const needsDateUpdate = ozonCreatedAt && order.createdAt &&
+          Math.abs(new Date(order.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
+
+        if (needsStatusUpdate || needsDateUpdate) {
+          await storage.updateOrderOzonStatus(
+            order.id,
+            newOzonStatus,
+            internalStatus,
+            needsDateUpdate ? ozonCreatedAt : undefined
+          );
+          updated++;
+        }
+      }
+
+      console.log(`[ozon-resync] Resync complete: updated ${updated} of ${ozonOrders.length} orders`);
+      res.json({ success: true, updated, total: ozonOrders.length, apiPostings: allPostings.size });
+    } catch (error: any) {
+      console.error("[ozon-resync] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Background auto-sync: Poll Ozon order statuses every 30 minutes
   const OZON_SYNC_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
@@ -2451,22 +2552,32 @@ export async function registerRoutes(
 
         let updated = 0;
 
+        const syncAutoPostings = async (postings: any[]) => {
+          for (const posting of postings) {
+            const pn = posting.posting_number;
+            const newStatus = posting.status;
+            const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : undefined;
+            const existing = pendingOrders.find(o => o.postingNumber === pn);
+            if (existing) {
+              const needsStatusUpdate = existing.ozonStatus !== newStatus;
+              const needsDateUpdate = ozonCreatedAt && existing.createdAt &&
+                Math.abs(new Date(existing.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
+              if (needsStatusUpdate || needsDateUpdate) {
+                const internalStatus = ozonStatusToInternal(newStatus);
+                await storage.updateOrderOzonStatus(existing.id, newStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
+                updated++;
+              }
+            }
+          }
+        };
+
         const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
           method: "POST", headers, body: JSON.stringify(body),
         });
         if (fbsResponse.ok) {
           const fbsData = await fbsResponse.json();
           const fbsPostings = fbsData?.result?.postings || [];
-          for (const posting of fbsPostings) {
-            const pn = posting.posting_number;
-            const newStatus = posting.status;
-            const existing = pendingOrders.find(o => o.postingNumber === pn);
-            if (existing && existing.ozonStatus !== newStatus) {
-              const internalStatus = ozonStatusToInternal(newStatus);
-              await storage.updateOrderOzonStatus(existing.id, newStatus, internalStatus);
-              updated++;
-            }
-          }
+          await syncAutoPostings(fbsPostings);
         }
 
         const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
@@ -2476,16 +2587,7 @@ export async function registerRoutes(
         if (fboResponse.ok) {
           const fboData = await fboResponse.json();
           const fboPostings = fboData?.result || [];
-          for (const posting of fboPostings) {
-            const pn = posting.posting_number;
-            const newStatus = posting.status;
-            const existing = pendingOrders.find(o => o.postingNumber === pn);
-            if (existing && existing.ozonStatus !== newStatus) {
-              const internalStatus = ozonStatusToInternal(newStatus);
-              await storage.updateOrderOzonStatus(existing.id, newStatus, internalStatus);
-              updated++;
-            }
-          }
+          await syncAutoPostings(fboPostings);
         }
 
         if (updated > 0) {

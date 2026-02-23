@@ -75,9 +75,9 @@ export interface IStorage {
   getOrder(id: number): Promise<OrderWithDetails | undefined>;
   getOrdersByCustomerId(customerId: number, organizationId: string): Promise<OrderWithDetails[]>;
   getOrderByPostingNumber(postingNumber: string, organizationId: string): Promise<Order | undefined>;
-  createOrder(order: InsertOrder, items: { productId: number; quantity: number; price: number }[]): Promise<Order>;
+  createOrder(order: InsertOrder & { createdAt?: Date }, items: { productId: number; quantity: number; price: number }[]): Promise<Order>;
   updateOrderStatus(id: number, status: string): Promise<Order>;
-  updateOrderOzonStatus(id: number, ozonStatus: string, status?: string): Promise<Order>;
+  updateOrderOzonStatus(id: number, ozonStatus: string, status?: string, createdAt?: Date): Promise<Order>;
 
   // Webhook Logs
   createWebhookLog(log: InsertWebhookLog): Promise<WebhookLog>;
@@ -395,9 +395,9 @@ export class DatabaseStorage implements IStorage {
     return detailedOrders;
   }
 
-  async createOrder(orderData: InsertOrder, itemsData: { productId: number; quantity: number; price: number; originalPrice?: number; salePrice?: number }[]): Promise<Order> {
+  async createOrder(orderData: InsertOrder & { createdAt?: Date }, itemsData: { productId: number; quantity: number; price: number; originalPrice?: number; salePrice?: number }[]): Promise<Order> {
     return await db.transaction(async (tx) => {
-      const [order] = await tx.insert(orders).values(orderData).returning();
+      const [order] = await tx.insert(orders).values(orderData as any).returning();
       
       for (const item of itemsData) {
         await tx.insert(orderItems).values({
@@ -438,9 +438,10 @@ export class DatabaseStorage implements IStorage {
     return order;
   }
 
-  async updateOrderOzonStatus(id: number, ozonStatus: string, status?: string): Promise<Order> {
+  async updateOrderOzonStatus(id: number, ozonStatus: string, status?: string, createdAt?: Date): Promise<Order> {
     const updates: Record<string, any> = { ozonStatus };
     if (status) updates.status = status;
+    if (createdAt) updates.createdAt = createdAt;
     const [order] = await db.update(orders).set(updates).where(eq(orders.id, id)).returning();
     return order;
   }

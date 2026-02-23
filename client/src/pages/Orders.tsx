@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders, useOzonPrintLabel, useOzonBulkLabels } from "@/hooks/use-orders";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders, useOzonPrintLabel, useOzonBulkLabels, useResyncOzonOrders } from "@/hooks/use-orders";
 import { format, isToday, isYesterday } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
@@ -111,7 +111,9 @@ export default function Orders() {
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("all");
   const [fbsSubFilter, setFbsSubFilter] = useState<FbsSubFilter>("all");
+  const [fboSubFilter, setFboSubFilter] = useState<FbsSubFilter>("all");
   const syncOzonOrders = useSyncOzonOrders();
+  const resyncOzonOrders = useResyncOzonOrders();
   const bulkLabels = useOzonBulkLabels();
 
   const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number }[]>({
@@ -138,8 +140,9 @@ export default function Orders() {
       result = result.filter((o: any) => o.fulfillmentType === "FBO");
     }
 
-    if (fulfillmentFilter === "FBS" && fbsSubFilter !== "all") {
-      switch (fbsSubFilter) {
+    const activeSubFilter = fulfillmentFilter === "FBS" ? fbsSubFilter : fulfillmentFilter === "FBO" ? fboSubFilter : "all";
+    if ((fulfillmentFilter === "FBS" || fulfillmentFilter === "FBO") && activeSubFilter !== "all") {
+      switch (activeSubFilter) {
         case "awaiting_shipment":
           result = result.filter((o: any) => o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver");
           break;
@@ -159,7 +162,7 @@ export default function Orders() {
     }
 
     return result;
-  }, [orders, fulfillmentFilter, fbsSubFilter]);
+  }, [orders, fulfillmentFilter, fbsSubFilter, fboSubFilter]);
 
   const dateGroups = useMemo(() => groupOrdersByDate(filteredOrders), [filteredOrders]);
 
@@ -235,6 +238,15 @@ export default function Orders() {
               Загрузить заказы Ozon
             </Button>
             <Button
+              variant="outline"
+              onClick={() => resyncOzonOrders.mutate()}
+              disabled={resyncOzonOrders.isPending}
+              data-testid="button-resync-ozon-orders"
+            >
+              {resyncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+              Пересинхронизация
+            </Button>
+            <Button
               data-testid="button-direct-sale"
               onClick={() => setIsDirectSaleOpen(true)}
             >
@@ -271,7 +283,7 @@ export default function Orders() {
               key={tab.key}
               variant={fulfillmentFilter === tab.key ? "default" : "outline"}
               size="sm"
-              onClick={() => { setFulfillmentFilter(tab.key); if (tab.key !== "FBS") setFbsSubFilter("all"); }}
+              onClick={() => { setFulfillmentFilter(tab.key); setFbsSubFilter("all"); setFboSubFilter("all"); }}
               data-testid={`button-filter-${tab.key}`}
             >
               {tab.key === "FBO" && <Warehouse className="w-3.5 h-3.5 mr-1.5" />}
@@ -320,6 +332,27 @@ export default function Orders() {
                 Скачать все этикетки ({awaitingShipmentCount})
               </Button>
             )}
+          </div>
+        )}
+
+        {fulfillmentFilter === "FBO" && (
+          <div className="flex flex-wrap items-center gap-2" data-testid="fbo-sub-filter-tabs">
+            {FBS_SUB_FILTERS.map((sub) => {
+              const Icon = sub.icon;
+              return (
+                <Button
+                  key={sub.key}
+                  variant={fboSubFilter === sub.key ? "default" : "ghost"}
+                  size="sm"
+                  className={fboSubFilter === sub.key ? "" : "text-muted-foreground"}
+                  onClick={() => setFboSubFilter(sub.key)}
+                  data-testid={`button-fbo-sub-${sub.key}`}
+                >
+                  <Icon className="w-3.5 h-3.5 mr-1.5" />
+                  {sub.label}
+                </Button>
+              );
+            })}
           </div>
         )}
 

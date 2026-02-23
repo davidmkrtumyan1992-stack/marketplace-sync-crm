@@ -189,6 +189,38 @@ export function useSyncOzonOrders() {
   });
 }
 
+export function useResyncOzonOrders() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/marketplace/ozon/resync-orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Ошибка пересинхронизации заказов");
+      }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
+      toast({ 
+        title: "Пересинхронизация завершена", 
+        description: `Обновлено: ${data.updated} из ${data.total} заказов` 
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useOzonPrintLabel() {
   const { toast } = useToast();
 
