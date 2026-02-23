@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
 import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, fixWbPhotos, syncProductToOzon, syncProductToWb } from "./marketplace-import";
 import { api } from "@shared/routes";
-import { marketplaceSettings as marketplaceSettingsTable, products as productsTable } from "@shared/schema";
+import { marketplaceSettings as marketplaceSettingsTable, products as productsTable, orders as ordersTable } from "@shared/schema";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { db } from "./db";
 import { eq, and } from "drizzle-orm";
@@ -2034,33 +2034,203 @@ export async function registerRoutes(
         "Content-Type": "application/json",
       };
 
-      console.log(`[ozon-label] Fetching label for posting ${order.postingNumber}`);
+      console.log(`[ozon-label] Creating 58x40 label for posting ${order.postingNumber}`);
 
-      const response = await fetch(`${BASE}/v2/posting/fbs/package-label`, {
+      const createRes = await fetch(`${BASE}/v2/posting/fbs/package-label/create`, {
         method: "POST",
         headers,
         body: JSON.stringify({ posting_number: [order.postingNumber] }),
       });
 
-      if (!response.ok) {
-        const errText = await response.text().catch(() => "");
-        console.error(`[ozon-label] API error ${response.status}:`, errText.slice(0, 500));
-        return res.status(502).json({ message: `Ozon API: ошибка получения этикетки (${response.status})` });
+      if (!createRes.ok) {
+        const errText = await createRes.text().catch(() => "");
+        console.error(`[ozon-label] Create API error ${createRes.status}:`, errText.slice(0, 500));
+        const fallbackRes = await fetch(`${BASE}/v2/posting/fbs/package-label`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ posting_number: [order.postingNumber] }),
+        });
+        if (!fallbackRes.ok) {
+          return res.status(502).json({ message: `Ozon API: ошибка получения этикетки (${createRes.status})` });
+        }
+        const ct = fallbackRes.headers.get("content-type") || "";
+        if (ct.includes("application/pdf") || ct.includes("application/octet-stream")) {
+          const buffer = await fallbackRes.arrayBuffer();
+          res.set("Content-Type", "application/pdf");
+          res.set("Content-Disposition", `inline; filename="label-${order.postingNumber}.pdf"`);
+          return res.send(Buffer.from(buffer));
+        }
+        return res.status(502).json({ message: "Ozon вернул неожиданный формат ответа" });
       }
 
-      const contentType = response.headers.get("content-type") || "";
-      if (contentType.includes("application/pdf") || contentType.includes("application/octet-stream")) {
-        const buffer = await response.arrayBuffer();
-        res.set("Content-Type", "application/pdf");
-        res.set("Content-Disposition", `inline; filename="label-${order.postingNumber}.pdf"`);
-        res.send(Buffer.from(buffer));
-      } else {
-        const rawText = await response.text();
-        console.error(`[ozon-label] Unexpected content-type: ${contentType}`, rawText.slice(0, 500));
-        res.status(502).json({ message: "Ozon вернул неожиданный формат ответа" });
+      const createData = await createRes.json();
+      const taskId = createData?.result?.task_id;
+
+      if (!taskId) {
+        console.log(`[ozon-label] No task_id, trying direct download`);
+        const directRes = await fetch(`${BASE}/v2/posting/fbs/package-label`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ posting_number: [order.postingNumber] }),
+        });
+        if (directRes.ok) {
+          const ct = directRes.headers.get("content-type") || "";
+          if (ct.includes("application/pdf") || ct.includes("application/octet-stream")) {
+            const buffer = await directRes.arrayBuffer();
+            res.set("Content-Type", "application/pdf");
+            res.set("Content-Disposition", `inline; filename="label-${order.postingNumber}.pdf"`);
+            return res.send(Buffer.from(buffer));
+          }
+        }
+        return res.status(502).json({ message: "Не удалось создать этикетку" });
       }
+
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const getRes = await fetch(`${BASE}/v1/posting/fbs/package-label/get`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ task_id: taskId }),
+        });
+
+        if (getRes.ok) {
+          const ct = getRes.headers.get("content-type") || "";
+          if (ct.includes("application/pdf") || ct.includes("application/octet-stream")) {
+            const buffer = await getRes.arrayBuffer();
+            res.set("Content-Type", "application/pdf");
+            res.set("Content-Disposition", `inline; filename="label-${order.postingNumber}.pdf"`);
+            return res.send(Buffer.from(buffer));
+          }
+          const body = await getRes.json().catch(() => null);
+          if (body?.result?.status === "completed" && body?.result?.file_url) {
+            const fileRes = await fetch(body.result.file_url);
+            const buffer = await fileRes.arrayBuffer();
+            res.set("Content-Type", "application/pdf");
+            res.set("Content-Disposition", `inline; filename="label-${order.postingNumber}.pdf"`);
+            return res.send(Buffer.from(buffer));
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      return res.status(502).json({ message: "Этикетка ещё формируется, попробуйте позже" });
     } catch (error: any) {
       console.error("[ozon-label] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Ozon FBS: Bulk download labels for all orders awaiting shipment
+  app.post("/api/marketplace/ozon/bulk-labels", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+      if (!ozonSetting) {
+        return res.status(400).json({ message: "Настройки Ozon не найдены" });
+      }
+
+      const allOrders = await storage.getOrders(orgId);
+      const awaitingOrders = allOrders.filter(o =>
+        o.source === "ozon" &&
+        o.postingNumber &&
+        (o.fulfillmentType === "FBS" || !o.fulfillmentType) &&
+        (o.ozonStatus === "awaiting_deliver" || o.ozonStatus === "awaiting_packaging")
+      );
+
+      if (awaitingOrders.length === 0) {
+        return res.status(400).json({ message: "Нет заказов для печати этикеток" });
+      }
+
+      const postingNumbers = awaitingOrders.map(o => o.postingNumber!).slice(0, 20);
+      console.log(`[ozon-bulk-labels] Creating labels for ${postingNumbers.length} postings`);
+
+      const BASE = "https://api-seller.ozon.ru";
+      const headers = {
+        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+        "Api-Key": ozonSetting.apiKey.trim(),
+        "Content-Type": "application/json",
+      };
+
+      const createRes = await fetch(`${BASE}/v2/posting/fbs/package-label/create`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ posting_number: postingNumbers }),
+      });
+
+      if (!createRes.ok) {
+        const fallbackRes = await fetch(`${BASE}/v2/posting/fbs/package-label`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ posting_number: postingNumbers }),
+        });
+        if (!fallbackRes.ok) {
+          return res.status(502).json({ message: `Ozon API: ошибка получения этикеток` });
+        }
+        const ct = fallbackRes.headers.get("content-type") || "";
+        if (ct.includes("application/pdf") || ct.includes("application/octet-stream")) {
+          const buffer = await fallbackRes.arrayBuffer();
+          res.set("Content-Type", "application/pdf");
+          res.set("Content-Disposition", `inline; filename="labels-bulk.pdf"`);
+          return res.send(Buffer.from(buffer));
+        }
+        return res.status(502).json({ message: "Ozon вернул неожиданный формат" });
+      }
+
+      const createData = await createRes.json();
+      const taskId = createData?.result?.task_id;
+
+      if (!taskId) {
+        const directRes = await fetch(`${BASE}/v2/posting/fbs/package-label`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ posting_number: postingNumbers }),
+        });
+        if (directRes.ok) {
+          const ct = directRes.headers.get("content-type") || "";
+          if (ct.includes("application/pdf") || ct.includes("application/octet-stream")) {
+            const buffer = await directRes.arrayBuffer();
+            res.set("Content-Type", "application/pdf");
+            res.set("Content-Disposition", `inline; filename="labels-bulk.pdf"`);
+            return res.send(Buffer.from(buffer));
+          }
+        }
+        return res.status(502).json({ message: "Не удалось создать этикетки" });
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const getRes = await fetch(`${BASE}/v1/posting/fbs/package-label/get`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ task_id: taskId }),
+        });
+
+        if (getRes.ok) {
+          const ct = getRes.headers.get("content-type") || "";
+          if (ct.includes("application/pdf") || ct.includes("application/octet-stream")) {
+            const buffer = await getRes.arrayBuffer();
+            res.set("Content-Type", "application/pdf");
+            res.set("Content-Disposition", `inline; filename="labels-bulk.pdf"`);
+            return res.send(Buffer.from(buffer));
+          }
+          const body = await getRes.json().catch(() => null);
+          if (body?.result?.file_url) {
+            const fileRes = await fetch(body.result.file_url);
+            const buffer = await fileRes.arrayBuffer();
+            res.set("Content-Type", "application/pdf");
+            res.set("Content-Disposition", `inline; filename="labels-bulk.pdf"`);
+            return res.send(Buffer.from(buffer));
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      return res.status(502).json({ message: "Этикетки ещё формируются, попробуйте через минуту" });
+    } catch (error: any) {
+      console.error("[ozon-bulk-labels] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });
@@ -2127,6 +2297,101 @@ export async function registerRoutes(
       res.status(500).json({ message: error.message });
     }
   });
+
+  // Background auto-sync: Poll Ozon order statuses every 30 minutes
+  const OZON_SYNC_INTERVAL = 30 * 60 * 1000; // 30 minutes
+
+  const autoSyncOzonStatuses = async () => {
+    try {
+      const allSettings = await db.select().from(marketplaceSettingsTable)
+        .where(eq(marketplaceSettingsTable.marketplace, "ozon"));
+
+      for (const setting of allSettings) {
+        if (!setting.apiKey || !setting.clientId) continue;
+
+        const orgId = setting.organizationId;
+        const BASE = "https://api-seller.ozon.ru";
+        const headers = {
+          "Client-Id": String(parseInt(setting.clientId.trim(), 10)),
+          "Api-Key": setting.apiKey.trim(),
+          "Content-Type": "application/json",
+        };
+
+        const activeOrders = await db.select().from(ordersTable)
+          .where(and(
+            eq(ordersTable.organizationId, orgId),
+            eq(ordersTable.source, "ozon"),
+          ));
+
+        const pendingOrders = activeOrders.filter(o =>
+          o.postingNumber && o.ozonStatus &&
+          !["delivered", "cancelled"].includes(o.ozonStatus)
+        );
+
+        if (pendingOrders.length === 0) continue;
+
+        console.log(`[ozon-auto-sync] Checking ${pendingOrders.length} active orders for org ${orgId}`);
+
+        const since = new Date();
+        since.setDate(since.getDate() - 14);
+        const body = {
+          dir: "ASC",
+          filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" },
+          limit: 100,
+          offset: 0,
+        };
+
+        let updated = 0;
+
+        const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
+          method: "POST", headers, body: JSON.stringify(body),
+        });
+        if (fbsResponse.ok) {
+          const fbsData = await fbsResponse.json();
+          const fbsPostings = fbsData?.result?.postings || [];
+          for (const posting of fbsPostings) {
+            const pn = posting.posting_number;
+            const newStatus = posting.status;
+            const existing = pendingOrders.find(o => o.postingNumber === pn);
+            if (existing && existing.ozonStatus !== newStatus) {
+              const internalStatus = ozonStatusToInternal(newStatus);
+              await storage.updateOrderOzonStatus(existing.id, newStatus, internalStatus);
+              updated++;
+            }
+          }
+        }
+
+        const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
+          method: "POST", headers,
+          body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 100, offset: 0, with: { analytics_data: false, financial_data: false } }),
+        });
+        if (fboResponse.ok) {
+          const fboData = await fboResponse.json();
+          const fboPostings = fboData?.result || [];
+          for (const posting of fboPostings) {
+            const pn = posting.posting_number;
+            const newStatus = posting.status;
+            const existing = pendingOrders.find(o => o.postingNumber === pn);
+            if (existing && existing.ozonStatus !== newStatus) {
+              const internalStatus = ozonStatusToInternal(newStatus);
+              await storage.updateOrderOzonStatus(existing.id, newStatus, internalStatus);
+              updated++;
+            }
+          }
+        }
+
+        if (updated > 0) {
+          console.log(`[ozon-auto-sync] Updated ${updated} order statuses for org ${orgId}`);
+        }
+      }
+    } catch (error) {
+      console.error("[ozon-auto-sync] Error:", error);
+    }
+  };
+
+  setInterval(autoSyncOzonStatuses, OZON_SYNC_INTERVAL);
+  setTimeout(autoSyncOzonStatuses, 10000);
+  console.log(`[ozon-auto-sync] Background sync scheduled every ${OZON_SYNC_INTERVAL / 60000} minutes`);
 
   return httpServer;
 }

@@ -1,6 +1,6 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders, useOzonPrintLabel } from "@/hooks/use-orders";
-import { format } from "date-fns";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders, useOzonPrintLabel, useOzonBulkLabels } from "@/hooks/use-orders";
+import { format, isToday, isYesterday } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -24,7 +24,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, RefreshCw, Truck, XCircle, Loader2, Printer, Warehouse } from "lucide-react";
+import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, RefreshCw, Truck, XCircle, Loader2, Printer, Warehouse, Download, AlertTriangle, CheckCircle, Clock } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
 import { useQuery } from "@tanstack/react-query";
@@ -53,20 +53,92 @@ const OZON_STATUS_LABELS: Record<string, string> = {
   not_accepted: "Не принят",
 };
 
+type FulfillmentFilter = "all" | "FBS" | "FBO" | "direct";
+type FbsSubFilter = "all" | "awaiting_shipment" | "delivering" | "dispute" | "delivered" | "cancelled";
+
+const FBS_SUB_FILTERS: { key: FbsSubFilter; label: string; icon: any }[] = [
+  { key: "all", label: "Все", icon: Package },
+  { key: "awaiting_shipment", label: "Ожидают отгрузки", icon: Clock },
+  { key: "delivering", label: "Доставляются", icon: Truck },
+  { key: "dispute", label: "Спорные", icon: AlertTriangle },
+  { key: "delivered", label: "Доставлены", icon: CheckCircle },
+  { key: "cancelled", label: "Отменены", icon: XCircle },
+];
+
+function getDateGroupLabel(date: Date): string {
+  if (isToday(date)) return "Сегодня";
+  if (isYesterday(date)) return "Вчера";
+  return format(date, "d MMMM yyyy", { locale: ru });
+}
+
+function groupOrdersByDate(orders: any[]): { label: string; orders: any[] }[] {
+  const groups = new Map<string, { label: string; orders: any[] }>();
+  for (const order of orders) {
+    const date = order.createdAt ? new Date(order.createdAt) : new Date();
+    const dayKey = format(date, "yyyy-MM-dd");
+    const label = getDateGroupLabel(date);
+    if (!groups.has(dayKey)) {
+      groups.set(dayKey, { label, orders: [] });
+    }
+    groups.get(dayKey)!.orders.push(order);
+  }
+  return Array.from(groups.values());
+}
+
 export default function Orders() {
   const { data: orders, isLoading } = useOrders();
   const [isDirectSaleOpen, setIsDirectSaleOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
-  const [fulfillmentFilter, setFulfillmentFilter] = useState<"all" | "FBS" | "FBO" | "direct">("all");
+  const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("all");
+  const [fbsSubFilter, setFbsSubFilter] = useState<FbsSubFilter>("all");
   const syncOzonOrders = useSyncOzonOrders();
+  const bulkLabels = useOzonBulkLabels();
 
   const filteredOrders = useMemo(() => {
     if (!orders) return [];
-    if (fulfillmentFilter === "all") return orders;
-    if (fulfillmentFilter === "direct") return orders.filter((o: any) => o.source === "direct" || o.source === "manual");
-    if (fulfillmentFilter === "FBS") return orders.filter((o: any) => o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon"));
-    return orders.filter((o: any) => o.fulfillmentType === fulfillmentFilter);
-  }, [orders, fulfillmentFilter]);
+    let result = orders;
+
+    if (fulfillmentFilter === "direct") {
+      result = result.filter((o: any) => o.source === "direct" || o.source === "manual");
+    } else if (fulfillmentFilter === "FBS") {
+      result = result.filter((o: any) => o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon"));
+    } else if (fulfillmentFilter === "FBO") {
+      result = result.filter((o: any) => o.fulfillmentType === "FBO");
+    }
+
+    if (fulfillmentFilter === "FBS" && fbsSubFilter !== "all") {
+      switch (fbsSubFilter) {
+        case "awaiting_shipment":
+          result = result.filter((o: any) => o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver");
+          break;
+        case "delivering":
+          result = result.filter((o: any) => o.ozonStatus === "delivering");
+          break;
+        case "dispute":
+          result = result.filter((o: any) => o.ozonStatus === "arbitration");
+          break;
+        case "delivered":
+          result = result.filter((o: any) => o.ozonStatus === "delivered");
+          break;
+        case "cancelled":
+          result = result.filter((o: any) => o.ozonStatus === "cancelled");
+          break;
+      }
+    }
+
+    return result;
+  }, [orders, fulfillmentFilter, fbsSubFilter]);
+
+  const dateGroups = useMemo(() => groupOrdersByDate(filteredOrders), [filteredOrders]);
+
+  const awaitingShipmentCount = useMemo(() => {
+    if (!orders) return 0;
+    return orders.filter((o: any) =>
+      o.source === "ozon" &&
+      (o.fulfillmentType === "FBS" || !o.fulfillmentType) &&
+      (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver")
+    ).length;
+  }, [orders]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -155,7 +227,7 @@ export default function Orders() {
           </span>
         </div>
 
-        <div className="flex gap-2" data-testid="fulfillment-filter-tabs">
+        <div className="flex gap-2 flex-wrap" data-testid="fulfillment-filter-tabs">
           {([
             { key: "all", label: "Все заказы" },
             { key: "FBS", label: "FBS (со склада продавца)" },
@@ -166,7 +238,7 @@ export default function Orders() {
               key={tab.key}
               variant={fulfillmentFilter === tab.key ? "default" : "outline"}
               size="sm"
-              onClick={() => setFulfillmentFilter(tab.key)}
+              onClick={() => { setFulfillmentFilter(tab.key); if (tab.key !== "FBS") setFbsSubFilter("all"); }}
               data-testid={`button-filter-${tab.key}`}
             >
               {tab.key === "FBO" && <Warehouse className="w-3.5 h-3.5 mr-1.5" />}
@@ -176,6 +248,47 @@ export default function Orders() {
             </Button>
           ))}
         </div>
+
+        {fulfillmentFilter === "FBS" && (
+          <div className="flex flex-wrap items-center gap-2" data-testid="fbs-sub-filter-tabs">
+            {FBS_SUB_FILTERS.map((sub) => {
+              const Icon = sub.icon;
+              const count = sub.key === "awaiting_shipment" ? awaitingShipmentCount : undefined;
+              return (
+                <Button
+                  key={sub.key}
+                  variant={fbsSubFilter === sub.key ? "default" : "ghost"}
+                  size="sm"
+                  className={fbsSubFilter === sub.key ? "" : "text-muted-foreground"}
+                  onClick={() => setFbsSubFilter(sub.key)}
+                  data-testid={`button-fbs-sub-${sub.key}`}
+                >
+                  <Icon className="w-3.5 h-3.5 mr-1.5" />
+                  {sub.label}
+                  {count !== undefined && count > 0 && (
+                    <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid="badge-awaiting-count">
+                      {count}
+                    </Badge>
+                  )}
+                </Button>
+              );
+            })}
+
+            {(fbsSubFilter === "awaiting_shipment" || fbsSubFilter === "all") && awaitingShipmentCount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-auto border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                onClick={() => bulkLabels.mutate()}
+                disabled={bulkLabels.isPending}
+                data-testid="button-bulk-labels"
+              >
+                {bulkLabels.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Download className="w-4 h-4 mr-1.5" />}
+                Скачать все этикетки ({awaitingShipmentCount})
+              </Button>
+            )}
+          </div>
+        )}
 
         {isLoading ? (
           <div className="grid gap-4">
@@ -196,16 +309,29 @@ export default function Orders() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-4">
-            {filteredOrders.map((order: any) => (
-              <OrderCard 
-                key={order.id} 
-                order={order} 
-                getStatusColor={getStatusColor} 
-                getStatusLabel={getStatusLabel}
-                getSourceBadge={getSourceBadge}
-                onClick={() => setSelectedOrder(order)}
-              />
+          <div className="space-y-6">
+            {dateGroups.map((group) => (
+              <div key={group.label} data-testid={`date-group-${group.label}`}>
+                <div className="flex items-center gap-3 mb-3">
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider" data-testid={`text-date-header-${group.label}`}>
+                    {group.label}
+                  </h3>
+                  <div className="flex-1 h-px bg-border" />
+                  <span className="text-xs text-muted-foreground">{group.orders.length}</span>
+                </div>
+                <div className="grid gap-3">
+                  {group.orders.map((order: any) => (
+                    <OrderCard
+                      key={order.id}
+                      order={order}
+                      getStatusColor={getStatusColor}
+                      getStatusLabel={getStatusLabel}
+                      getSourceBadge={getSourceBadge}
+                      onClick={() => setSelectedOrder(order)}
+                    />
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         )}
@@ -237,14 +363,43 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge, onCl
 }) {
   const { mutate: updateStatus, isPending } = useUpdateOrderStatus();
 
+  const itemImages = useMemo(() => {
+    if (!order.items) return [];
+    return order.items
+      .filter((item: any) => item.product?.imageUrl)
+      .map((item: any) => ({ id: item.id, url: item.product.imageUrl, name: item.product?.name || "Товар" }))
+      .slice(0, 4);
+  }, [order.items]);
+
   return (
     <Card className="kpi-card cursor-pointer hover-elevate" data-testid={`order-card-${order.id}`} onClick={onClick}>
       <CardContent className="py-5">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start gap-4">
-            <div className="p-3 bg-primary/10 rounded-xl flex-shrink-0">
-              <Package className="w-6 h-6 text-primary" />
-            </div>
+            {itemImages.length > 0 ? (
+              <div className="flex-shrink-0 flex gap-1" data-testid={`order-thumbnails-${order.id}`}>
+                {itemImages.slice(0, 3).map((img: any) => (
+                  <div key={img.id} className="w-12 h-12 rounded-lg overflow-hidden border border-border bg-muted">
+                    <img
+                      src={img.url}
+                      alt={img.name}
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  </div>
+                ))}
+                {itemImages.length > 3 && (
+                  <div className="w-12 h-12 rounded-lg border border-border bg-muted flex items-center justify-center text-xs text-muted-foreground font-medium">
+                    +{itemImages.length - 3}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-3 bg-primary/10 rounded-xl flex-shrink-0">
+                <Package className="w-6 h-6 text-primary" />
+              </div>
+            )}
             <div>
               <div className="flex items-center gap-3 flex-wrap">
                 <h3 className="font-bold text-lg">{order.orderNumber}</h3>
@@ -267,7 +422,7 @@ function OrderCard({ order, getStatusColor, getStatusLabel, getSourceBadge, onCl
                 )}
               </div>
               {(order.ozonStatus || order.source === "ozon") && (
-                <div className="mt-1.5 flex gap-1.5">
+                <div className="mt-1.5 flex gap-1.5 flex-wrap">
                   {order.source === "ozon" && (
                     <Badge variant="outline" className={`text-xs ${order.fulfillmentType === "FBO" ? "border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-400" : "border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400"}`} data-testid={`badge-fulfillment-${order.id}`}>
                       {order.fulfillmentType === "FBO" ? "FBO (склад Ozon)" : "FBS (свой склад)"}
@@ -385,7 +540,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
             <Badge className={`${getStatusColor(order.status)}`}>
               {getStatusLabel(order.status)}
             </Badge>
-            {order.fulfillmentType && (
+            {order.source === "ozon" && (
               <Badge variant="outline" className={`text-xs ${order.fulfillmentType === "FBO" ? "border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-400" : "border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400"}`}>
                 {order.fulfillmentType === "FBO" ? "FBO (склад Ozon)" : "FBS (свой склад)"}
               </Badge>
@@ -428,7 +583,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
                     data-testid="button-ozon-label"
                   >
                     {ozonLabel.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Printer className="w-4 h-4 mr-1.5" />}
-                    Этикетка
+                    Этикетка 58x40
                   </Button>
                 )}
                 {canCancel && (
@@ -457,6 +612,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-12"></TableHead>
                       <TableHead>Товар</TableHead>
                       <TableHead>Артикул</TableHead>
                       <TableHead className="text-center">Кол-во</TableHead>
@@ -472,6 +628,22 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
                       const hasOverride = item.originalPrice && item.salePrice && Number(item.originalPrice) !== Number(item.salePrice);
                       return (
                         <TableRow key={item.id} data-testid={`row-order-item-${item.id}`}>
+                          <TableCell>
+                            {item.product?.imageUrl ? (
+                              <div className="w-10 h-10 rounded-md overflow-hidden border border-border bg-muted">
+                                <img
+                                  src={item.product.imageUrl}
+                                  alt={item.product?.name || "Товар"}
+                                  className="w-full h-full object-cover"
+                                  loading="lazy"
+                                />
+                              </div>
+                            ) : (
+                              <div className="w-10 h-10 rounded-md border border-border bg-muted flex items-center justify-center">
+                                <Package className="w-4 h-4 text-muted-foreground" />
+                              </div>
+                            )}
+                          </TableCell>
                           <TableCell>
                             <p className="font-medium text-sm">{item.product?.name || "Товар"}</p>
                           </TableCell>
@@ -667,16 +839,13 @@ function DirectSaleDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
         originalPrice: i.originalPrice,
         salePrice: i.salePrice,
       })),
-      notes: notes || undefined,
+      notes,
     };
 
     if (customerMode === "existing" && selectedCustomerId) {
       payload.customerId = Number(selectedCustomerId);
-    } else if (customerMode === "new" && newCustomerName.trim()) {
-      payload.newCustomer = {
-        name: newCustomerName.trim(),
-        phone: newCustomerPhone.trim() || undefined,
-      };
+    } else if (customerMode === "new") {
+      payload.newCustomer = { name: newCustomerName, phone: newCustomerPhone || undefined };
     }
 
     directSale.mutate(payload, {
@@ -693,163 +862,115 @@ function DirectSaleDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
     });
   };
 
-  const resetDialog = () => {
-    setItems([]);
-    setProductSearch("");
-    setShowProductList(false);
-    setCustomerMode("guest");
-    setSelectedCustomerId("");
-    setNewCustomerName("");
-    setNewCustomerPhone("");
-    setNotes("");
-  };
-
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) resetDialog(); onOpenChange(v); }}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl w-[95vw] sm:w-full max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Store className="w-5 h-5" />
-            Прямая продажа / Самовывоз
+            Оформление прямой продажи
           </DialogTitle>
           <DialogDescription>
-            Оформите продажу с выбором товаров, покупателя и ценой
+            Создайте заказ для клиента в магазине
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6">
           <div>
-            <Label className="text-sm font-medium mb-2 block">Товары</Label>
+            <Label className="text-sm font-medium flex items-center gap-2 mb-2">
+              <Package className="w-4 h-4" />
+              Товары
+            </Label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
+                placeholder="Поиск по названию, артикулу или штрихкоду..."
+                className="pl-9"
                 value={productSearch}
                 onChange={(e) => { setProductSearch(e.target.value); setShowProductList(true); }}
                 onFocus={() => setShowProductList(true)}
-                placeholder="Поиск по названию, артикулу или штрихкоду..."
-                className="pl-10"
                 data-testid="input-product-search"
               />
-              {showProductList && filteredProducts.length > 0 && (
-                <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-60 overflow-y-auto">
-                  {filteredProducts.map((product) => (
-                    <button
-                      key={product.id}
-                      className="w-full text-left px-3 py-2 hover-elevate flex items-center justify-between gap-2"
-                      onClick={() => addProduct(product)}
-                      data-testid={`button-add-product-${product.id}`}
-                    >
-                      <div>
-                        <p className="font-medium text-sm">{product.name}</p>
-                        <p className="text-xs text-muted-foreground">{product.sku}{product.barcode ? ` | ${product.barcode}` : ""}</p>
-                      </div>
-                      <div className="text-right flex-shrink-0">
-                        <p className="text-sm font-medium">{formatCurrency(Number(product.sellingPrice) || Number(product.price))}</p>
-                        <p className="text-xs text-muted-foreground">Склад: {product.centralStock}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
+            {showProductList && filteredProducts.length > 0 && (
+              <div className="mt-1 border rounded-lg bg-popover shadow-lg max-h-48 overflow-y-auto">
+                {filteredProducts.map((p) => (
+                  <button
+                    key={p.id}
+                    className="w-full text-left px-3 py-2 hover:bg-accent text-sm flex justify-between"
+                    onClick={() => addProduct(p)}
+                    data-testid={`button-add-product-${p.id}`}
+                  >
+                    <span>{p.name} <span className="text-muted-foreground">({p.sku})</span></span>
+                    <span className="text-muted-foreground">{formatCurrency(Number(p.sellingPrice) || Number(p.price) || 0)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
 
             {items.length > 0 && (
-              <div className="mt-3 overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Товар</TableHead>
-                      <TableHead className="text-center w-24">Кол-во</TableHead>
-                      <TableHead className="text-right w-32">Цена</TableHead>
-                      <TableHead className="text-right w-28">Сумма</TableHead>
-                      <TableHead className="w-10"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {items.map((item) => (
-                      <TableRow key={item.productId} data-testid={`row-sale-item-${item.productId}`}>
-                        <TableCell>
-                          <p className="font-medium text-sm">{item.productName}</p>
-                          <p className="text-xs text-muted-foreground">Склад: {item.maxStock} шт.</p>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Input
-                            type="number"
-                            min={1}
-                            max={item.maxStock || 999}
-                            value={item.quantity}
-                            onChange={(e) => updateItem(item.productId, "quantity", parseInt(e.target.value) || 1)}
-                            className="w-20 mx-auto text-center"
-                            data-testid={`input-quantity-${item.productId}`}
-                          />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={item.salePrice}
-                            onChange={(e) => updateItem(item.productId, "salePrice", parseFloat(e.target.value) || 0)}
-                            className="w-28 ml-auto text-right"
-                            data-testid={`input-price-${item.productId}`}
-                          />
-                          {item.salePrice !== item.originalPrice && (
-                            <p className="text-xs text-muted-foreground line-through mt-0.5">{formatCurrency(item.originalPrice)}</p>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right font-medium">
-                          {formatCurrency(item.salePrice * item.quantity)}
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => removeItem(item.productId)}
-                            data-testid={`button-remove-item-${item.productId}`}
-                          >
-                            <Trash2 className="w-4 h-4 text-destructive" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <div className="mt-3 space-y-2">
+                {items.map((item) => (
+                  <div key={item.productId} className="flex items-center gap-3 p-3 border rounded-lg bg-muted/30" data-testid={`direct-sale-item-${item.productId}`}>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{item.productName}</p>
+                      <p className="text-xs text-muted-foreground">Склад: {item.maxStock} шт.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        className="w-16 text-center"
+                        value={item.quantity}
+                        onChange={(e) => updateItem(item.productId, "quantity", Number(e.target.value))}
+                        min={1}
+                        max={item.maxStock || 999}
+                        data-testid={`input-quantity-${item.productId}`}
+                      />
+                      <span className="text-xs text-muted-foreground">x</span>
+                      <Input
+                        type="number"
+                        className="w-24"
+                        value={item.salePrice}
+                        onChange={(e) => updateItem(item.productId, "salePrice", Number(e.target.value))}
+                        min={0}
+                        data-testid={`input-price-${item.productId}`}
+                      />
+                      <span className="text-sm font-medium w-24 text-right">
+                        {formatCurrency(item.salePrice * item.quantity)}
+                      </span>
+                      <Button variant="ghost" size="sm" onClick={() => removeItem(item.productId)} data-testid={`button-remove-${item.productId}`}>
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                <div className="flex justify-end pt-2 border-t">
+                  <span className="text-lg font-bold" data-testid="text-direct-sale-total">Итого: {formatCurrency(totalAmount)}</span>
+                </div>
               </div>
             )}
           </div>
 
           <div>
-            <Label className="text-sm font-medium mb-2 block">Покупатель</Label>
-            <div className="flex flex-wrap gap-2 mb-3">
-              <Button
-                variant={customerMode === "guest" ? "default" : "outline"}
-                size="sm"
-                onClick={() => setCustomerMode("guest")}
-                data-testid="button-customer-guest"
-              >
-                <User className="w-3.5 h-3.5 mr-1.5" />
-                Гость
-              </Button>
-              <Button
-                variant={customerMode === "existing" ? "default" : "outline"}
-                size="sm"
-                onClick={() => setCustomerMode("existing")}
-                data-testid="button-customer-existing"
-              >
-                <Search className="w-3.5 h-3.5 mr-1.5" />
-                Из базы
-              </Button>
-              <Button
-                variant={customerMode === "new" ? "default" : "outline"}
-                size="sm"
-                onClick={() => setCustomerMode("new")}
-                data-testid="button-customer-new"
-              >
-                <UserPlus className="w-3.5 h-3.5 mr-1.5" />
-                Новый
-              </Button>
+            <Label className="text-sm font-medium flex items-center gap-2 mb-2">
+              <User className="w-4 h-4" />
+              Покупатель
+            </Label>
+            <div className="flex gap-2 mb-3">
+              {(["guest", "existing", "new"] as const).map((mode) => (
+                <Button
+                  key={mode}
+                  variant={customerMode === mode ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setCustomerMode(mode)}
+                  data-testid={`button-customer-mode-${mode}`}
+                >
+                  {mode === "guest" && "Гость"}
+                  {mode === "existing" && "Из базы"}
+                  {mode === "new" && <><UserPlus className="w-3.5 h-3.5 mr-1" />Новый</>}
+                </Button>
+              ))}
             </div>
-
             {customerMode === "existing" && (
               <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
                 <SelectTrigger data-testid="select-customer">
@@ -857,68 +978,30 @@ function DirectSaleDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                 </SelectTrigger>
                 <SelectContent>
                   {customers?.map((c: any) => (
-                    <SelectItem key={c.id} value={String(c.id)}>
-                      {c.name}{c.phone ? ` (${c.phone})` : ""}
-                    </SelectItem>
+                    <SelectItem key={c.id} value={String(c.id)}>{c.name}{c.phone ? ` (${c.phone})` : ""}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             )}
-
             {customerMode === "new" && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Имя</Label>
-                  <Input
-                    value={newCustomerName}
-                    onChange={(e) => setNewCustomerName(e.target.value)}
-                    placeholder="Имя покупателя"
-                    data-testid="input-new-customer-name"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Телефон</Label>
-                  <Input
-                    value={newCustomerPhone}
-                    onChange={(e) => setNewCustomerPhone(e.target.value)}
-                    placeholder="+7 (999) 123-45-67"
-                    data-testid="input-new-customer-phone"
-                  />
-                </div>
+              <div className="space-y-2">
+                <Input placeholder="Имя покупателя" value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)} data-testid="input-new-customer-name" />
+                <Input placeholder="Телефон (необязательно)" value={newCustomerPhone} onChange={(e) => setNewCustomerPhone(e.target.value)} data-testid="input-new-customer-phone" />
               </div>
             )}
           </div>
 
           <div>
-            <Label className="text-xs text-muted-foreground">Примечание</Label>
-            <Textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Необязательное примечание к продаже..."
-              className="resize-none"
-              rows={2}
-              data-testid="input-sale-notes"
-            />
+            <Label className="text-sm font-medium mb-2 block">Примечание</Label>
+            <Textarea placeholder="Примечание к заказу (необязательно)" value={notes} onChange={(e) => setNotes(e.target.value)} data-testid="input-order-notes" />
           </div>
-
-          {items.length > 0 && (
-            <div className="flex items-center justify-between p-4 bg-muted/50 rounded-md">
-              <span className="text-sm font-medium text-muted-foreground">Итого к оплате:</span>
-              <span className="text-2xl font-bold" data-testid="text-sale-total">{formatCurrency(totalAmount)}</span>
-            </div>
-          )}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => { resetDialog(); onOpenChange(false); }} data-testid="button-cancel-sale">
-            Отмена
-          </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={items.length === 0 || directSale.isPending}
-            data-testid="button-confirm-sale"
-          >
-            {directSale.isPending ? "Оформление..." : "Оформить продажу"}
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
+          <Button onClick={handleSubmit} disabled={directSale.isPending || items.length === 0} data-testid="button-submit-direct-sale">
+            {directSale.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CreditCard className="w-4 h-4 mr-2" />}
+            Оформить ({formatCurrency(totalAmount)})
           </Button>
         </DialogFooter>
       </DialogContent>
