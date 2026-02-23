@@ -224,15 +224,32 @@ export default function Dashboard() {
 
         {kpi?.today && (kpi.today.ordersCount > 0 || kpi.today.revenue > 0) && (
           <div className="grid gap-6 sm:grid-cols-3">
-            <Card className="kpi-card" data-testid="card-today-orders">
+            <Card className="kpi-card" data-testid="card-active-items">
               <CardContent className="pt-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                      Заказы сегодня
+                      Товаров
                     </p>
-                    <p className="text-3xl font-extrabold tracking-tight" data-testid="text-today-orders">
-                      {formatNumber(kpi.today.ordersCount)}
+                    <p className="text-3xl font-extrabold tracking-tight" data-testid="text-active-items">
+                      {formatNumber(kpi.today.itemsCount)} <span className="text-lg font-semibold text-muted-foreground">шт.</span>
+                    </p>
+                  </div>
+                  <div className="icon-box icon-box-lg shrink-0">
+                    <Boxes className="w-7 h-7 text-primary" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="kpi-card" data-testid="card-active-orders">
+              <CardContent className="pt-6">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
+                      Заказы
+                    </p>
+                    <p className="text-3xl font-extrabold tracking-tight" data-testid="text-active-orders">
+                      {formatNumber(kpi.today.ordersCount)} <span className="text-lg font-semibold text-muted-foreground">в обработке</span>
                     </p>
                   </div>
                   <div className="icon-box icon-box-lg shrink-0">
@@ -241,32 +258,14 @@ export default function Dashboard() {
                 </div>
               </CardContent>
             </Card>
-            <Card className="kpi-card" data-testid="card-today-items">
+            <Card className="kpi-card" data-testid="card-active-revenue">
               <CardContent className="pt-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                      Товаров сегодня
+                      Выручка
                     </p>
-                    <p className="text-3xl font-extrabold tracking-tight" data-testid="text-today-items">
-                      {formatNumber(kpi.today.itemsCount)}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-3">шт. в заказах</p>
-                  </div>
-                  <div className="icon-box icon-box-lg shrink-0">
-                    <Boxes className="w-7 h-7 text-primary" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="kpi-card" data-testid="card-today-revenue">
-              <CardContent className="pt-6">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                      Выручка сегодня
-                    </p>
-                    <p className="text-3xl font-extrabold tracking-tight" data-testid="text-today-revenue">
+                    <p className="text-3xl font-extrabold tracking-tight" data-testid="text-active-revenue">
                       {formatCurrency(kpi.today.revenue)}
                     </p>
                   </div>

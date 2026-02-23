@@ -590,22 +590,17 @@ export class DatabaseStorage implements IStorage {
     const companyList = await this.getCompanies(organizationId);
     const allOrders = await db.select().from(orders).where(eq(orders.organizationId, organizationId));
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayOrders = allOrders.filter(o => {
-      if (!o.createdAt) return false;
-      const created = new Date(o.createdAt);
-      return created >= todayStart && o.source === "ozon" && 
-        (o.fulfillmentType === "FBS" || !o.fulfillmentType) &&
-        o.ozonStatus === "awaiting_deliver";
+    const activeOrders = allOrders.filter(o => {
+      return o.source === "ozon" && 
+        (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver");
     });
-    const todayOrderIds = todayOrders.map(o => o.id);
-    let todayItemsCount = 0;
-    if (todayOrderIds.length > 0) {
-      const todayItems = await db.select().from(orderItems).where(inArray(orderItems.orderId, todayOrderIds));
-      todayItemsCount = todayItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
+    const activeOrderIds = activeOrders.map(o => o.id);
+    let activeItemsCount = 0;
+    if (activeOrderIds.length > 0) {
+      const activeItems = await db.select().from(orderItems).where(inArray(orderItems.orderId, activeOrderIds));
+      activeItemsCount = activeItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
     }
-    const todayRevenue = todayOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+    const activeRevenue = activeOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
 
     let totalStock = 0;
     let capitalization = 0;
@@ -683,9 +678,9 @@ export class DatabaseStorage implements IStorage {
       expectedRevenue,
       expectedProfit,
       today: {
-        ordersCount: todayOrders.length,
-        revenue: todayRevenue,
-        itemsCount: todayItemsCount,
+        ordersCount: activeOrders.length,
+        revenue: activeRevenue,
+        itemsCount: activeItemsCount,
       },
       stockDistribution: { local: stockLocal, ozon: stockOzon, wb: stockWb, yandex: stockYandex },
       companies: companiesWithStores
