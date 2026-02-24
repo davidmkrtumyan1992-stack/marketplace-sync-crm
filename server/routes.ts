@@ -2372,10 +2372,22 @@ export async function registerRoutes(
         return res.json({ connected: false, error: "Настройки Ozon не найдены. Добавьте API-ключ в настройках." });
       }
 
+      const clientId = ozonSetting.clientId?.trim();
+      const apiKey = ozonSetting.apiKey?.trim();
+
+      if (!clientId || !apiKey) {
+        return res.json({ connected: false, error: "Client-Id или Api-Key не заполнены" });
+      }
+
+      const parsedClientId = parseInt(clientId, 10);
+      if (isNaN(parsedClientId)) {
+        return res.json({ connected: false, error: `Некорректный Client-Id: "${clientId}"` });
+      }
+
       const BASE = "https://api-seller.ozon.ru";
       const headers = {
-        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
-        "Api-Key": ozonSetting.apiKey.trim(),
+        "Client-Id": String(parsedClientId),
+        "Api-Key": apiKey,
         "Content-Type": "application/json",
       };
 
@@ -2416,14 +2428,26 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Настройки Ozon не найдены. Добавьте API-ключ в настройках." });
       }
 
+      const clientId = ozonSetting.clientId?.trim();
+      const apiKey = ozonSetting.apiKey?.trim();
+
+      if (!clientId || !apiKey) {
+        return res.status(400).json({ message: "Client-Id или Api-Key не заполнены. Проверьте настройки магазина Ozon." });
+      }
+
+      const parsedClientId = parseInt(clientId, 10);
+      if (isNaN(parsedClientId)) {
+        return res.status(400).json({ message: `Некорректный Client-Id: "${clientId}". Должно быть числовое значение.` });
+      }
+
       const BASE = "https://api-seller.ozon.ru";
       const headers = {
-        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
-        "Api-Key": ozonSetting.apiKey.trim(),
+        "Client-Id": String(parsedClientId),
+        "Api-Key": apiKey,
         "Content-Type": "application/json",
       };
 
-      console.log(`[ozon-fbo-stock] Fetching FBO stock levels via /v3/product/info/stocks`);
+      console.log(`[ozon-fbo-stock] Fetching FBO stock levels via /v3/product/info/stocks (Client-Id: ${parsedClientId})`);
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30000);
@@ -2431,7 +2455,7 @@ export async function registerRoutes(
       const response = await fetch(`${BASE}/v3/product/info/stocks`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ filter: { visibility: "ALL" }, limit: 1000, offset: 0 }),
+        body: JSON.stringify({ filter: { visibility: "ALL" }, limit: 1000 }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
