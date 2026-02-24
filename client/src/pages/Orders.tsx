@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders, useOzonPrintLabel, useOzonBulkLabels, useResyncOzonOrders } from "@/hooks/use-orders";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders, useOzonPrintLabel, useOzonBulkLabels, useResyncOzonOrders, useSilentSyncOzonOrders } from "@/hooks/use-orders";
 import { format, isToday, isYesterday } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +55,7 @@ const OZON_STATUS_LABELS: Record<string, string> = {
 
 type FulfillmentFilter = "all" | "FBS" | "FBO" | "direct";
 type FbsSubFilter = "all" | "awaiting_shipment" | "delivering" | "dispute" | "delivered" | "cancelled";
+type FboSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "delivered" | "cancelled";
 
 function getMarketplaceStatusLabel(ozonStatus: string | null | undefined): string {
   if (!ozonStatus) return "Новый";
@@ -85,6 +86,15 @@ const FBS_SUB_FILTERS: { key: FbsSubFilter; label: string; icon: any }[] = [
   { key: "cancelled", label: "Отменены", icon: XCircle },
 ];
 
+const FBO_SUB_FILTERS: { key: FboSubFilter; label: string; icon: any }[] = [
+  { key: "all", label: "Все", icon: Package },
+  { key: "awaiting_packaging", label: "Ожидают сборки", icon: Clock },
+  { key: "awaiting_deliver", label: "Ожидают отгрузки", icon: Package },
+  { key: "delivering", label: "Доставляются", icon: Truck },
+  { key: "delivered", label: "Доставлены", icon: CheckCircle },
+  { key: "cancelled", label: "Отменены", icon: XCircle },
+];
+
 function getDateGroupLabel(date: Date): string {
   if (isToday(date)) return "Сегодня";
   if (isYesterday(date)) return "Вчера";
@@ -111,9 +121,10 @@ export default function Orders() {
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("all");
   const [fbsSubFilter, setFbsSubFilter] = useState<FbsSubFilter>("all");
-  const [fboSubFilter, setFboSubFilter] = useState<FbsSubFilter>("all");
+  const [fboSubFilter, setFboSubFilter] = useState<FboSubFilter>("all");
   const syncOzonOrders = useSyncOzonOrders();
   const resyncOzonOrders = useResyncOzonOrders();
+  const silentSync = useSilentSyncOzonOrders();
   const bulkLabels = useOzonBulkLabels();
 
   const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number }[]>({
@@ -140,9 +151,8 @@ export default function Orders() {
       result = result.filter((o: any) => o.fulfillmentType === "FBO");
     }
 
-    const activeSubFilter = fulfillmentFilter === "FBS" ? fbsSubFilter : fulfillmentFilter === "FBO" ? fboSubFilter : "all";
-    if ((fulfillmentFilter === "FBS" || fulfillmentFilter === "FBO") && activeSubFilter !== "all") {
-      switch (activeSubFilter) {
+    if (fulfillmentFilter === "FBS" && fbsSubFilter !== "all") {
+      switch (fbsSubFilter) {
         case "awaiting_shipment":
           result = result.filter((o: any) => o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver");
           break;
@@ -151,6 +161,26 @@ export default function Orders() {
           break;
         case "dispute":
           result = result.filter((o: any) => o.ozonStatus === "arbitration");
+          break;
+        case "delivered":
+          result = result.filter((o: any) => o.ozonStatus === "delivered");
+          break;
+        case "cancelled":
+          result = result.filter((o: any) => o.ozonStatus === "cancelled");
+          break;
+      }
+    }
+
+    if (fulfillmentFilter === "FBO" && fboSubFilter !== "all") {
+      switch (fboSubFilter) {
+        case "awaiting_packaging":
+          result = result.filter((o: any) => o.ozonStatus === "awaiting_packaging");
+          break;
+        case "awaiting_deliver":
+          result = result.filter((o: any) => o.ozonStatus === "awaiting_deliver");
+          break;
+        case "delivering":
+          result = result.filter((o: any) => o.ozonStatus === "delivering");
           break;
         case "delivered":
           result = result.filter((o: any) => o.ozonStatus === "delivered");
@@ -173,6 +203,19 @@ export default function Orders() {
       (o.fulfillmentType === "FBS" || !o.fulfillmentType) &&
       (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver")
     ).length;
+  }, [orders]);
+
+  const fboStatusCounts = useMemo(() => {
+    if (!orders) return {} as Record<string, number>;
+    const fboOrders = orders.filter((o: any) => o.fulfillmentType === "FBO");
+    return {
+      all: fboOrders.length,
+      awaiting_packaging: fboOrders.filter((o: any) => o.ozonStatus === "awaiting_packaging").length,
+      awaiting_deliver: fboOrders.filter((o: any) => o.ozonStatus === "awaiting_deliver").length,
+      delivering: fboOrders.filter((o: any) => o.ozonStatus === "delivering").length,
+      delivered: fboOrders.filter((o: any) => o.ozonStatus === "delivered").length,
+      cancelled: fboOrders.filter((o: any) => o.ozonStatus === "cancelled").length,
+    };
   }, [orders]);
 
   const getStatusColor = (status: string) => {
@@ -337,22 +380,34 @@ export default function Orders() {
 
         {fulfillmentFilter === "FBO" && (
           <div className="flex flex-wrap items-center gap-2" data-testid="fbo-sub-filter-tabs">
-            {FBS_SUB_FILTERS.map((sub) => {
+            {FBO_SUB_FILTERS.map((sub) => {
               const Icon = sub.icon;
+              const count = fboStatusCounts[sub.key] || 0;
               return (
                 <Button
                   key={sub.key}
                   variant={fboSubFilter === sub.key ? "default" : "ghost"}
                   size="sm"
                   className={fboSubFilter === sub.key ? "" : "text-muted-foreground"}
-                  onClick={() => setFboSubFilter(sub.key)}
+                  onClick={() => {
+                    setFboSubFilter(sub.key);
+                    if (!silentSync.isPending) {
+                      silentSync.mutate();
+                    }
+                  }}
                   data-testid={`button-fbo-sub-${sub.key}`}
                 >
                   <Icon className="w-3.5 h-3.5 mr-1.5" />
                   {sub.label}
+                  {count > 0 && (
+                    <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid={`badge-fbo-count-${sub.key}`}>
+                      {count}
+                    </Badge>
+                  )}
                 </Button>
               );
             })}
+            {silentSync.isPending && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" data-testid="fbo-sync-spinner" />}
           </div>
         )}
 

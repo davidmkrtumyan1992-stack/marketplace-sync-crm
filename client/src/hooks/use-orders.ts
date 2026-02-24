@@ -189,6 +189,25 @@ export function useSyncOzonOrders() {
   });
 }
 
+export function useSilentSyncOzonOrders() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/marketplace/ozon/sync-orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
+    },
+  });
+}
+
 export function useResyncOzonOrders() {
   const queryClient = useQueryClient();
   const { toast } = useToast();

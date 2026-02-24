@@ -2507,8 +2507,8 @@ export async function registerRoutes(
     }
   });
 
-  // Background auto-sync: Poll Ozon order statuses every 30 minutes
-  const OZON_SYNC_INTERVAL = 30 * 60 * 1000; // 30 minutes
+  // Background auto-sync: Poll Ozon order statuses every 10 minutes
+  const OZON_SYNC_INTERVAL = 10 * 60 * 1000; // 10 minutes
 
   const autoSyncOzonStatuses = async () => {
     try {
@@ -2542,7 +2542,7 @@ export async function registerRoutes(
         console.log(`[ozon-auto-sync] Checking ${pendingOrders.length} active orders for org ${orgId}`);
 
         const since = new Date();
-        since.setDate(since.getDate() - 14);
+        since.setDate(since.getDate() - 30);
         const body = {
           dir: "ASC",
           filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" },
