@@ -2411,6 +2411,66 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/marketplace/ozon/fbo-inventory", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const products = await storage.getProducts(orgId);
+      const fboItems = products
+        .filter((p: any) => p.ozonFboStock > 0)
+        .map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          sku: p.sku,
+          imageUrl: p.imageUrl,
+          ozonFboStock: p.ozonFboStock,
+          price: Number(p.sellingPrice || p.price || 0),
+          totalValue: Number(p.sellingPrice || p.price || 0) * (p.ozonFboStock || 0),
+        }));
+      const totalQuantity = fboItems.reduce((sum: number, i: any) => sum + i.ozonFboStock, 0);
+      const totalValue = fboItems.reduce((sum: number, i: any) => sum + i.totalValue, 0);
+      res.json({ items: fboItems, totalQuantity, totalValue });
+    } catch (error: any) {
+      console.error("[fbo-inventory] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/marketplace/ozon/fbo-inventory/upload-excel", isAuthenticated, requireRole("owner", "administrator"), uploadFile.single("file"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      if (!req.file) {
+        return res.status(400).json({ message: "Файл не загружен" });
+      }
+
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows: any[] = XLSX.utils.sheet_to_json(sheet);
+
+      let updated = 0;
+      for (const row of rows) {
+        const sku = String(row["Артикул"] || row["offer_id"] || row["SKU"] || row["артикул"] || "").trim();
+        const stock = parseInt(String(row["Остаток"] || row["Количество"] || row["stock"] || row["quantity"] || row["FBO"] || 0), 10);
+
+        if (!sku || isNaN(stock)) continue;
+
+        const [dbProduct] = await db.select().from(productsTable)
+          .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+
+        if (dbProduct) {
+          await db.update(productsTable)
+            .set({ ozonFboStock: stock })
+            .where(eq(productsTable.id, dbProduct.id));
+          updated++;
+        }
+      }
+
+      res.json({ success: true, updated, total: rows.length });
+    } catch (error: any) {
+      console.error("[fbo-inventory-upload] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.post("/api/marketplace/ozon/resync-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);

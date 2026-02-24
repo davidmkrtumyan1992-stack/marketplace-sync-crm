@@ -24,12 +24,12 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, RefreshCw, Truck, XCircle, Loader2, Printer, Warehouse, Download, AlertTriangle, CheckCircle, Clock } from "lucide-react";
+import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, RefreshCw, Truck, XCircle, Loader2, Printer, Warehouse, Download, AlertTriangle, CheckCircle, Clock, BarChart3, Upload } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import type { Product } from "@shared/schema";
 import { useLocation } from "wouter";
 
@@ -55,7 +55,7 @@ const OZON_STATUS_LABELS: Record<string, string> = {
 
 type FulfillmentFilter = "all" | "FBS" | "FBO" | "direct";
 type FbsSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "dispute" | "delivered" | "cancelled";
-type FboSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "delivered" | "cancelled";
+type FboSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "delivered" | "cancelled" | "inventory";
 
 function getMarketplaceStatusLabel(ozonStatus: string | null | undefined): string {
   if (!ozonStatus) return "Новый";
@@ -94,7 +94,202 @@ const FBO_SUB_FILTERS: { key: FboSubFilter; label: string; icon: any }[] = [
   { key: "delivering", label: "Доставляются", icon: Truck },
   { key: "delivered", label: "Доставлены", icon: CheckCircle },
   { key: "cancelled", label: "Отменены", icon: XCircle },
+  { key: "inventory", label: "Остатки FBO", icon: BarChart3 },
 ];
+
+function formatRub(value: number): string {
+  const NBSP = "\u00A0";
+  return Math.round(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, NBSP) + NBSP + "руб.";
+}
+
+function formatPcs(value: number): string {
+  const NBSP = "\u00A0";
+  return Math.round(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, NBSP) + NBSP + "шт.";
+}
+
+interface FboInventoryItem {
+  id: number;
+  name: string;
+  sku: string;
+  imageUrl: string | null;
+  ozonFboStock: number;
+  price: number;
+  totalValue: number;
+}
+
+function FboInventoryDashboard() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: inventory, isLoading } = useQuery<{
+    items: FboInventoryItem[];
+    totalQuantity: number;
+    totalValue: number;
+  }>({
+    queryKey: ["/api/marketplace/ozon/fbo-inventory"],
+  });
+
+  const syncFboStock = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/marketplace/ozon/sync-fbo-stock", { method: "POST", credentials: "include" });
+      if (!res.ok) throw new Error("Ошибка синхронизации");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/ozon/fbo-inventory"] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Ошибка", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const uploadExcel = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/marketplace/ozon/fbo-inventory/upload-excel", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Ошибка загрузки файла");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/ozon/fbo-inventory"] });
+      toast({ title: "Загружено", description: `Обновлено ${data.updated} из ${data.total} товаров` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Ошибка", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      uploadExcel.mutate(file);
+      e.target.value = "";
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {[1, 2].map((i) => (
+            <Card key={i} className="kpi-card animate-pulse">
+              <CardContent className="py-8"><div className="h-12 bg-muted rounded-xl" /></CardContent>
+            </Card>
+          ))}
+        </div>
+        <Card className="kpi-card animate-pulse">
+          <CardContent className="py-8"><div className="h-64 bg-muted rounded-xl" /></CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const items = inventory?.items || [];
+  const totalQuantity = inventory?.totalQuantity || 0;
+  const totalValue = inventory?.totalValue || 0;
+
+  return (
+    <div className="space-y-4" data-testid="fbo-inventory-dashboard">
+      <div className="flex items-center gap-2 mb-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => syncFboStock.mutate()}
+          disabled={syncFboStock.isPending}
+          data-testid="button-refresh-fbo-inventory"
+        >
+          {syncFboStock.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1.5" />}
+          Обновить остатки
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploadExcel.isPending}
+          data-testid="button-upload-fbo-excel"
+        >
+          {uploadExcel.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Upload className="w-4 h-4 mr-1.5" />}
+          Загрузить Excel остатков
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.xls"
+          className="hidden"
+          onChange={handleFileChange}
+          data-testid="input-fbo-excel-file"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <Card className="kpi-card" data-testid="card-fbo-total-qty">
+          <CardContent className="py-6">
+            <p className="text-sm text-muted-foreground mb-1">Товаров на складе</p>
+            <p className="text-3xl font-bold" data-testid="text-fbo-total-qty">{formatPcs(totalQuantity)}</p>
+          </CardContent>
+        </Card>
+        <Card className="kpi-card" data-testid="card-fbo-total-value">
+          <CardContent className="py-6">
+            <p className="text-sm text-muted-foreground mb-1">Общая стоимость</p>
+            <p className="text-3xl font-bold" data-testid="text-fbo-total-value">{formatRub(totalValue)}</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {items.length === 0 ? (
+        <Card className="kpi-card">
+          <CardContent className="py-16 text-center">
+            <Warehouse className="w-16 h-16 mx-auto text-muted-foreground/30 mb-4" />
+            <p className="text-xl font-medium text-muted-foreground">Остатков FBO нет</p>
+            <p className="text-sm text-muted-foreground mt-2">Нажмите «Обновить остатки» для синхронизации с Ozon</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="kpi-card">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[300px]">Товар</TableHead>
+                <TableHead>Артикул</TableHead>
+                <TableHead className="text-right">Остаток (шт.)</TableHead>
+                <TableHead className="text-right">Цена (руб.)</TableHead>
+                <TableHead className="text-right">Сумма (руб.)</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((item) => (
+                <TableRow key={item.id} data-testid={`row-fbo-inventory-${item.id}`}>
+                  <TableCell>
+                    <div className="flex items-center gap-3">
+                      {item.imageUrl ? (
+                        <img src={item.imageUrl} alt={item.name} className="w-10 h-10 rounded-lg object-cover" data-testid={`img-fbo-product-${item.id}`} />
+                      ) : (
+                        <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
+                          <Package className="w-5 h-5 text-muted-foreground" />
+                        </div>
+                      )}
+                      <span className="font-medium text-sm line-clamp-2" data-testid={`text-fbo-product-name-${item.id}`}>{item.name}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm" data-testid={`text-fbo-sku-${item.id}`}>{item.sku}</TableCell>
+                  <TableCell className="text-right font-medium" data-testid={`text-fbo-stock-${item.id}`}>{formatPcs(item.ozonFboStock)}</TableCell>
+                  <TableCell className="text-right" data-testid={`text-fbo-price-${item.id}`}>{formatRub(item.price)}</TableCell>
+                  <TableCell className="text-right font-medium" data-testid={`text-fbo-value-${item.id}`}>{formatRub(item.totalValue)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
+    </div>
+  );
+}
 
 function getDateGroupLabel(date: Date): string {
   if (isToday(date)) return "Сегодня";
@@ -408,7 +603,7 @@ export default function Orders() {
                   className={fboSubFilter === sub.key ? "" : "text-muted-foreground"}
                   onClick={() => {
                     setFboSubFilter(sub.key);
-                    if (!silentSync.isPending) {
+                    if (sub.key !== "inventory" && !silentSync.isPending) {
                       silentSync.mutate();
                     }
                   }}
@@ -428,7 +623,9 @@ export default function Orders() {
           </div>
         )}
 
-        {isLoading ? (
+        {fboSubFilter === "inventory" && fulfillmentFilter === "FBO" ? (
+          <FboInventoryDashboard />
+        ) : isLoading ? (
           <div className="grid gap-4">
             {[1, 2, 3].map((i) => (
               <Card key={i} className="kpi-card animate-pulse">
