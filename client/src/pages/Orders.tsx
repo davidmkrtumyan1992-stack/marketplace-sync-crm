@@ -130,17 +130,26 @@ function FboInventoryDashboard() {
     queryKey: ["/api/marketplace/ozon/fbo-inventory"],
   });
 
+  const { data: connectionStatus } = useQuery<{ connected: boolean; error?: string }>({
+    queryKey: ["/api/marketplace/ozon/check-connection"],
+    staleTime: 60000,
+    refetchInterval: 120000,
+  });
+
   const syncFboStock = useMutation({
     mutationFn: async () => {
       const res = await fetch("/api/marketplace/ozon/sync-fbo-stock", { method: "POST", credentials: "include" });
-      if (!res.ok) throw new Error("Ошибка синхронизации");
-      return res.json();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Ошибка синхронизации");
+      return data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/marketplace/ozon/fbo-inventory"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/ozon/check-connection"] });
+      toast({ title: "Остатки обновлены", description: `Обновлено ${data.updated} из ${data.total} товаров` });
     },
     onError: (err: any) => {
-      toast({ title: "Ошибка", description: err.message, variant: "destructive" });
+      toast({ title: "Ошибка синхронизации", description: err.message, variant: "destructive" });
     },
   });
 
@@ -153,8 +162,9 @@ function FboInventoryDashboard() {
         body: formData,
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Ошибка загрузки файла");
-      return res.json();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Ошибка загрузки файла");
+      return data;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/marketplace/ozon/fbo-inventory"] });
@@ -225,6 +235,14 @@ function FboInventoryDashboard() {
           onChange={handleFileChange}
           data-testid="input-fbo-excel-file"
         />
+        {connectionStatus && (
+          <div className="ml-auto flex items-center gap-1.5 text-xs" data-testid="ozon-connection-status">
+            <span className={`w-2 h-2 rounded-full inline-block ${connectionStatus.connected ? "bg-green-500" : "bg-red-500"}`} />
+            <span className={connectionStatus.connected ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}>
+              {connectionStatus.connected ? "API: Подключено" : `API: Ошибка — ${connectionStatus.error || "Нет соединения"}`}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

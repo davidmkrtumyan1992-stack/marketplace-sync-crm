@@ -2348,15 +2348,28 @@ export async function registerRoutes(
     }
   });
 
-  // Ozon FBO: Sync stock levels
-  app.post("/api/marketplace/ozon/sync-fbo-stock", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+  function parseOzonErrorMessage(status: number, body: string): string {
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed?.message) return parsed.message;
+      if (parsed?.error?.message) return parsed.error.message;
+      if (parsed?.error) return String(parsed.error);
+    } catch {}
+    if (status === 401 || status === 403) return "Неверный API-ключ или Client-Id (Access Denied)";
+    if (status === 429) return "Превышен лимит запросов к Ozon API (Rate Limit)";
+    if (status >= 500) return `Сервер Ozon недоступен (HTTP ${status})`;
+    return `Ошибка Ozon API (HTTP ${status})`;
+  }
+
+  // Ozon FBO: Check API connection
+  app.get("/api/marketplace/ozon/check-connection", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const allSettings = await storage.getMarketplaceSettings(orgId);
       const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
 
       if (!ozonSetting) {
-        return res.status(400).json({ message: "Настройки Ozon не найдены" });
+        return res.json({ connected: false, error: "Настройки Ozon не найдены. Добавьте API-ключ в настройках." });
       }
 
       const BASE = "https://api-seller.ozon.ru";
@@ -2366,18 +2379,68 @@ export async function registerRoutes(
         "Content-Type": "application/json",
       };
 
-      console.log(`[ozon-fbo-stock] Fetching FBO stock levels`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
 
-      const response = await fetch(`${BASE}/v3/product/info/stocks`, {
+      const response = await fetch(`${BASE}/v1/warehouse/list`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ filter: { visibility: "ALL" }, limit: 1000, offset: 0 }),
+        body: JSON.stringify({}),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
 
       if (!response.ok) {
         const errText = await response.text().catch(() => "");
+        const errorMsg = parseOzonErrorMessage(response.status, errText);
+        return res.json({ connected: false, error: errorMsg });
+      }
+
+      res.json({ connected: true });
+    } catch (error: any) {
+      if (error.name === "AbortError") {
+        return res.json({ connected: false, error: "Таймаут соединения с Ozon API" });
+      }
+      res.json({ connected: false, error: error.message || "Ошибка сети" });
+    }
+  });
+
+  // Ozon FBO: Sync stock levels
+  app.post("/api/marketplace/ozon/sync-fbo-stock", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+
+      if (!ozonSetting) {
+        return res.status(400).json({ message: "Настройки Ozon не найдены. Добавьте API-ключ в настройках." });
+      }
+
+      const BASE = "https://api-seller.ozon.ru";
+      const headers = {
+        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+        "Api-Key": ozonSetting.apiKey.trim(),
+        "Content-Type": "application/json",
+      };
+
+      console.log(`[ozon-fbo-stock] Fetching FBO stock levels via /v3/stocks/info`);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+
+      const response = await fetch(`${BASE}/v3/stocks/info`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ filter: { visibility: "ALL" }, limit: 1000, offset: 0 }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        const errorMsg = parseOzonErrorMessage(response.status, errText);
         console.error(`[ozon-fbo-stock] API error ${response.status}:`, errText.slice(0, 500));
-        return res.status(502).json({ message: `Ozon API error: ${response.status}` });
+        return res.status(502).json({ message: errorMsg });
       }
 
       const data = await response.json();
@@ -2406,8 +2469,12 @@ export async function registerRoutes(
       console.log(`[ozon-fbo-stock] Updated ${updatedCount} products with FBO stock`);
       res.json({ success: true, total: items.length, updated: updatedCount });
     } catch (error: any) {
+      if (error.name === "AbortError") {
+        console.error("[ozon-fbo-stock] Request timed out");
+        return res.status(504).json({ message: "Таймаут запроса к Ozon API (30 сек). Попробуйте позже." });
+      }
       console.error("[ozon-fbo-stock] Error:", error);
-      res.status(500).json({ message: error.message });
+      res.status(500).json({ message: error.message || "Внутренняя ошибка сервера" });
     }
   });
 
