@@ -54,7 +54,7 @@ const OZON_STATUS_LABELS: Record<string, string> = {
 };
 
 type FulfillmentFilter = "all" | "FBS" | "FBO" | "direct";
-type FbsSubFilter = "all" | "awaiting_shipment" | "delivering" | "dispute" | "delivered" | "cancelled";
+type FbsSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "dispute" | "delivered" | "cancelled";
 type FboSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "delivered" | "cancelled";
 
 function getMarketplaceStatusLabel(ozonStatus: string | null | undefined): string {
@@ -79,7 +79,8 @@ function getMarketplaceStatusLabel(ozonStatus: string | null | undefined): strin
 
 const FBS_SUB_FILTERS: { key: FbsSubFilter; label: string; icon: any }[] = [
   { key: "all", label: "Все", icon: Package },
-  { key: "awaiting_shipment", label: "Ожидают отгрузки", icon: Clock },
+  { key: "awaiting_packaging", label: "Ожидают сборки", icon: Clock },
+  { key: "awaiting_deliver", label: "Ожидают отгрузки", icon: Package },
   { key: "delivering", label: "Доставляются", icon: Truck },
   { key: "dispute", label: "Спорные", icon: AlertTriangle },
   { key: "delivered", label: "Доставлены", icon: CheckCircle },
@@ -153,8 +154,11 @@ export default function Orders() {
 
     if (fulfillmentFilter === "FBS" && fbsSubFilter !== "all") {
       switch (fbsSubFilter) {
-        case "awaiting_shipment":
-          result = result.filter((o: any) => o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver");
+        case "awaiting_packaging":
+          result = result.filter((o: any) => o.ozonStatus === "awaiting_packaging");
+          break;
+        case "awaiting_deliver":
+          result = result.filter((o: any) => o.ozonStatus === "awaiting_deliver");
           break;
         case "delivering":
           result = result.filter((o: any) => o.ozonStatus === "delivering");
@@ -196,14 +200,21 @@ export default function Orders() {
 
   const dateGroups = useMemo(() => groupOrdersByDate(filteredOrders), [filteredOrders]);
 
-  const awaitingShipmentCount = useMemo(() => {
-    if (!orders) return 0;
-    return orders.filter((o: any) =>
-      o.source === "ozon" &&
-      (o.fulfillmentType === "FBS" || !o.fulfillmentType) &&
-      (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver")
-    ).length;
+  const fbsStatusCounts = useMemo(() => {
+    if (!orders) return {} as Record<string, number>;
+    const fbsOrders = orders.filter((o: any) => o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon"));
+    return {
+      all: fbsOrders.length,
+      awaiting_packaging: fbsOrders.filter((o: any) => o.ozonStatus === "awaiting_packaging").length,
+      awaiting_deliver: fbsOrders.filter((o: any) => o.ozonStatus === "awaiting_deliver").length,
+      delivering: fbsOrders.filter((o: any) => o.ozonStatus === "delivering").length,
+      dispute: fbsOrders.filter((o: any) => o.ozonStatus === "arbitration").length,
+      delivered: fbsOrders.filter((o: any) => o.ozonStatus === "delivered").length,
+      cancelled: fbsOrders.filter((o: any) => o.ozonStatus === "cancelled").length,
+    };
   }, [orders]);
+
+  const awaitingShipmentCount = (fbsStatusCounts.awaiting_packaging || 0) + (fbsStatusCounts.awaiting_deliver || 0);
 
   const fboStatusCounts = useMemo(() => {
     if (!orders) return {} as Record<string, number>;
@@ -341,28 +352,34 @@ export default function Orders() {
           <div className="flex flex-wrap items-center gap-2" data-testid="fbs-sub-filter-tabs">
             {FBS_SUB_FILTERS.map((sub) => {
               const Icon = sub.icon;
-              const count = sub.key === "awaiting_shipment" ? awaitingShipmentCount : undefined;
+              const count = fbsStatusCounts[sub.key] || 0;
               return (
                 <Button
                   key={sub.key}
                   variant={fbsSubFilter === sub.key ? "default" : "ghost"}
                   size="sm"
                   className={fbsSubFilter === sub.key ? "" : "text-muted-foreground"}
-                  onClick={() => setFbsSubFilter(sub.key)}
+                  onClick={() => {
+                    setFbsSubFilter(sub.key);
+                    if (!silentSync.isPending) {
+                      silentSync.mutate();
+                    }
+                  }}
                   data-testid={`button-fbs-sub-${sub.key}`}
                 >
                   <Icon className="w-3.5 h-3.5 mr-1.5" />
                   {sub.label}
-                  {count !== undefined && count > 0 && (
-                    <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid="badge-awaiting-count">
+                  {count > 0 && (
+                    <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid={`badge-fbs-count-${sub.key}`}>
                       {count}
                     </Badge>
                   )}
                 </Button>
               );
             })}
+            {silentSync.isPending && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" data-testid="fbs-sync-spinner" />}
 
-            {(fbsSubFilter === "awaiting_shipment" || fbsSubFilter === "all") && awaitingShipmentCount > 0 && (
+            {(fbsSubFilter === "awaiting_packaging" || fbsSubFilter === "awaiting_deliver" || fbsSubFilter === "all") && awaitingShipmentCount > 0 && (
               <Button
                 variant="outline"
                 size="sm"
