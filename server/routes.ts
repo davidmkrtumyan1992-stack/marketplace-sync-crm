@@ -2423,12 +2423,12 @@ export async function registerRoutes(
         "Content-Type": "application/json",
       };
 
-      console.log(`[ozon-fbo-stock] Fetching FBO stock levels via /v3/stocks/info`);
+      console.log(`[ozon-fbo-stock] Fetching FBO stock levels via /v3/product/info/stocks`);
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30000);
 
-      const response = await fetch(`${BASE}/v3/stocks/info`, {
+      const response = await fetch(`${BASE}/v3/product/info/stocks`, {
         method: "POST",
         headers,
         body: JSON.stringify({ filter: { visibility: "ALL" }, limit: 1000, offset: 0 }),
