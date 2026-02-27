@@ -122,6 +122,8 @@ function FboInventoryDashboard() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dataSource, setDataSource] = useState<{ type: "file" | "api"; date: Date } | null>(null);
+  const [apiUnavailable, setApiUnavailable] = useState(false);
 
   const { data: inventory, isLoading } = useQuery<{
     items: FboInventoryItem[];
@@ -129,6 +131,7 @@ function FboInventoryDashboard() {
     totalValue: number;
   }>({
     queryKey: ["/api/marketplace/ozon/fbo-inventory"],
+    placeholderData: (prev) => prev,
   });
 
   const { data: connectionStatus } = useQuery<{ connected: boolean; error?: string }>({
@@ -136,6 +139,8 @@ function FboInventoryDashboard() {
     staleTime: 60000,
     refetchInterval: 120000,
   });
+
+  const apiDisabled = apiUnavailable || (connectionStatus !== undefined && !connectionStatus.connected);
 
   const syncFboStock = useMutation({
     mutationFn: async () => {
@@ -147,10 +152,17 @@ function FboInventoryDashboard() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/marketplace/ozon/fbo-inventory"] });
       queryClient.invalidateQueries({ queryKey: ["/api/marketplace/ozon/check-connection"] });
+      setDataSource({ type: "api", date: new Date() });
+      setApiUnavailable(false);
       toast({ title: "Остатки обновлены", description: `Обновлено ${data.updated} из ${data.total} товаров` });
     },
-    onError: (err: any) => {
-      toast({ title: "Ошибка синхронизации", description: err.message, variant: "destructive" });
+    onError: () => {
+      setApiUnavailable(true);
+      toast({
+        title: "Ошибка синхронизации по API",
+        description: "Используются данные из загруженных файлов",
+        variant: "destructive",
+      });
     },
   });
 
@@ -171,6 +183,7 @@ function FboInventoryDashboard() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/marketplace/ozon/fbo-inventory"] });
+      setDataSource({ type: "file", date: new Date() });
       const NBSP = "\u00A0";
       const fmtQty = Math.round(data.totalQuantity || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
       const fmtVal = Math.round(data.totalStockValue || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
@@ -226,10 +239,10 @@ function FboInventoryDashboard() {
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8"
+          className={`h-8 w-8 ${apiDisabled ? "opacity-40" : ""}`}
           onClick={() => syncFboStock.mutate()}
-          disabled={syncFboStock.isPending}
-          title="Синхронизировать остатки через API"
+          disabled={syncFboStock.isPending || apiDisabled}
+          title={apiDisabled ? "Синхронизация по API временно недоступна, используйте загрузку файлов" : "Синхронизировать остатки через API"}
           data-testid="button-refresh-fbo-inventory"
         >
           {syncFboStock.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
@@ -252,6 +265,14 @@ function FboInventoryDashboard() {
           </div>
         )}
       </div>
+
+      {dataSource && (
+        <p className="text-xs text-muted-foreground" data-testid="text-fbo-data-source">
+          {dataSource.type === "file"
+            ? `Данные обновлены из файла: ${format(dataSource.date, "d MMM yyyy, HH:mm", { locale: ru })}`
+            : `Данные обновлены по API: ${format(dataSource.date, "d MMM yyyy, HH:mm", { locale: ru })}`}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Card className="kpi-card" data-testid="card-fbo-total-qty">
