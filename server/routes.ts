@@ -2366,13 +2366,13 @@ export async function registerRoutes(
       const orgId = getOrgId(req);
       const products = await storage.getProducts(orgId);
       const fboItems = products
-        .filter((p: any) => p.ozonFboStock > 0)
+        .filter((p: any) => p.ozonFboTracked === true)
         .map((p: any) => ({
           id: p.id,
           name: p.name,
           sku: p.sku,
           imageUrl: p.imageUrl,
-          ozonFboStock: p.ozonFboStock,
+          ozonFboStock: p.ozonFboStock || 0,
           price: Number(p.sellingPrice || p.price || 0),
           totalValue: Number(p.sellingPrice || p.price || 0) * (p.ozonFboStock || 0),
           isDiscounted: p.ozonFboDiscounted || false,
@@ -2381,9 +2381,9 @@ export async function registerRoutes(
       const totalValue = fboItems.reduce((sum: number, i: any) => sum + i.totalValue, 0);
       let lastUpdated: string | null = null;
       if (fboItems.length > 0) {
-        const fboProducts = products.filter((p: any) => p.ozonFboStock > 0);
-        const maxDate = fboProducts.reduce((max: Date | null, p: any) => {
-          const d = p.updatedAt ? new Date(p.updatedAt) : null;
+        const maxDate = fboItems.reduce((max: Date | null, _item: any, idx: number) => {
+          const p = products.find((pr: any) => pr.id === fboItems[idx].id);
+          const d = p?.updatedAt ? new Date(p.updatedAt) : null;
           if (!d) return max;
           return !max || d > max ? d : max;
         }, null as Date | null);
@@ -2410,100 +2410,136 @@ export async function registerRoutes(
       let totalQuantity = 0;
       const errors: string[] = [];
 
+      type ReportType = "stock_management" | "discounted" | "product_statement" | "generic";
+
+      function detectHeaderInRows(allRows: any[][], fileName: string): { headerRowIdx: number; skuColIdx: number; stockColIdx: number; priceColIdx: number; reportType: ReportType } | null {
+        for (let i = 0; i < Math.min(allRows.length, 30); i++) {
+          const row = allRows[i];
+          if (!row || row.length === 0) continue;
+          const cells = row.map((c: any) => String(c || "").trim().toLowerCase());
+
+          const skuIdx = cells.findIndex((c: string) =>
+            c.includes("артикул") || c === "sku" || c === "offer_id" || c.includes("offer id")
+          );
+          if (skuIdx === -1) continue;
+
+          const hasAvailableForSale = cells.some((c: string) => c.includes("доступно к продаже") || c.includes("доступно для продажи"));
+          const hasStockOzon = cells.some((c: string) => c.includes("доступно на складе ozon"));
+          const hasStatementStock = cells.some((c: string) => c.includes("итого доступно на складах"));
+          if (!hasAvailableForSale && !hasStockOzon && !hasStatementStock) {
+            const hasFallbackStock = cells.some((c: string) =>
+              c.includes("остаток") || c.includes("количество") || c.includes("stock") || c.includes("fbo")
+            );
+            if (!hasFallbackStock) continue;
+          }
+
+          let stockColIdx = -1;
+          let reportType: ReportType = "generic";
+
+          if (hasAvailableForSale) {
+            stockColIdx = cells.findIndex((c: string) => c.includes("доступно к продаже") || c.includes("доступно для продажи"));
+            const isDisc = cells.some((c: string) =>
+              c.includes("уценка") || c.includes("уценен") || c.includes("discounted")
+            ) || (fileName || "").toLowerCase().includes("уценен");
+            reportType = isDisc ? "discounted" : "stock_management";
+          } else if (hasStatementStock) {
+            reportType = "product_statement";
+            stockColIdx = cells.findIndex((c: string) => c.includes("итого доступно на складах"));
+          } else if (hasStockOzon) {
+            stockColIdx = cells.findIndex((c: string) => c.includes("доступно на складе ozon"));
+            const isDisc = cells.some((c: string) =>
+              c.includes("уценка") || c.includes("уценен") || c.includes("discounted")
+            ) || (fileName || "").toLowerCase().includes("уценен");
+            reportType = isDisc ? "discounted" : "stock_management";
+          } else {
+            stockColIdx = cells.findIndex((c: string) =>
+              c.includes("остаток") || c.includes("количество") || c.includes("stock") || c.includes("fbo")
+            );
+          }
+
+          if (stockColIdx === -1) continue;
+
+          let priceColIdx = -1;
+          const hasDiscountedPrice = cells.some((c: string) => c.includes("текущая цена с учетом скидок"));
+          if (hasDiscountedPrice) {
+            priceColIdx = cells.findIndex((c: string) => c.includes("текущая цена с учетом скидок"));
+          } else {
+            const fallbackPriceIdx = cells.findIndex((c: string) =>
+              c === "цена" || c.includes("цена, руб") || c.includes("price")
+            );
+            if (fallbackPriceIdx !== -1) priceColIdx = fallbackPriceIdx;
+          }
+
+          return { headerRowIdx: i, skuColIdx, stockColIdx, priceColIdx, reportType };
+        }
+        return null;
+      }
+
       for (const file of files) {
         try {
           const workbook = XLSX.read(file.buffer, { type: "buffer" });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          const allRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+          const skuAggregation = new Map<string, { stock: number; price: number }>();
+          let fileReportType: ReportType = "generic";
+          let sheetsWithData = 0;
 
-          let headerRowIdx = -1;
-          let skuColIdx = -1;
-          let stockColIdx = -1;
-          let priceColIdx = -1;
-          type ReportType = "stock_management" | "discounted" | "product_statement" | "generic";
-          let reportType: ReportType = "generic";
+          for (const sheetName of workbook.SheetNames) {
+            const sheet = workbook.Sheets[sheetName];
+            const allRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
-          for (let i = 0; i < Math.min(allRows.length, 30); i++) {
-            const row = allRows[i];
-            if (!row || row.length === 0) continue;
-            const cells = row.map((c: any) => String(c || "").trim().toLowerCase());
-
-            const skuIdx = cells.findIndex((c: string) =>
-              c.includes("артикул") || c === "sku" || c === "offer_id" || c.includes("offer id")
-            );
-            if (skuIdx === -1) continue;
-
-            const hasStockOzon = cells.some((c: string) => c.includes("доступно на складе ozon"));
-            const hasStatementStock = cells.some((c: string) => c.includes("итого доступно на складах"));
-            if (!hasStockOzon && !hasStatementStock) {
-              const hasFallbackStock = cells.some((c: string) =>
-                c.includes("остаток") || c.includes("количество") || c.includes("stock") || c.includes("fbo")
-              );
-              if (!hasFallbackStock) continue;
+            const detected = detectHeaderInRows(allRows, file.originalname);
+            if (!detected) {
+              console.log(`[fbo-inventory-upload] File: ${file.originalname}, sheet: "${sheetName}" — no valid header found, skipping`);
+              continue;
             }
 
-            headerRowIdx = i;
-            skuColIdx = skuIdx;
+            sheetsWithData++;
+            const { headerRowIdx, skuColIdx, stockColIdx, priceColIdx, reportType } = detected;
+            if (fileReportType === "generic") fileReportType = reportType;
 
-            if (hasStatementStock) {
-              reportType = "product_statement";
-              stockColIdx = cells.findIndex((c: string) => c.includes("итого доступно на складах"));
-            } else if (hasStockOzon) {
-              stockColIdx = cells.findIndex((c: string) => c.includes("доступно на складе ozon"));
-              const isDisc = cells.some((c: string) =>
-                c.includes("уценка") || c.includes("уценен") || c.includes("discounted")
-              ) || (file.originalname || "").toLowerCase().includes("уценен");
-              reportType = isDisc ? "discounted" : "stock_management";
-            } else {
-              stockColIdx = cells.findIndex((c: string) =>
-                c.includes("остаток") || c.includes("количество") || c.includes("stock") || c.includes("fbo")
-              );
+            console.log(`[fbo-inventory-upload] File: ${file.originalname}, sheet: "${sheetName}", type: ${reportType}, header: ${headerRowIdx}, sku: ${skuColIdx}, stock: ${stockColIdx}, price: ${priceColIdx}`);
+
+            const dataRows = allRows.slice(headerRowIdx + 1);
+            for (const row of dataRows) {
+              if (!row || row.length === 0) continue;
+              const sku = String(row[skuColIdx] || "").trim();
+              if (!sku) continue;
+
+              const stockRaw = String(row[stockColIdx] || "0").replace(/\s/g, "").replace(",", ".");
+              const stock = parseInt(stockRaw, 10);
+              if (isNaN(stock)) continue;
+
+              let price = 0;
+              if (priceColIdx !== -1) {
+                const priceRaw = String(row[priceColIdx] || "0").replace(/\s/g, "").replace(",", ".");
+                price = parseFloat(priceRaw);
+                if (isNaN(price)) price = 0;
+              }
+
+              const existing = skuAggregation.get(sku);
+              if (existing) {
+                existing.stock += stock;
+                if (price > 0) existing.price = price;
+              } else {
+                skuAggregation.set(sku, { stock, price });
+              }
             }
-
-            const hasDiscountedPrice = cells.some((c: string) => c.includes("текущая цена с учетом скидок"));
-            if (hasDiscountedPrice) {
-              priceColIdx = cells.findIndex((c: string) => c.includes("текущая цена с учетом скидок"));
-            } else {
-              const fallbackPriceIdx = cells.findIndex((c: string) =>
-                c === "цена" || c.includes("цена, руб") || c.includes("price")
-              );
-              if (fallbackPriceIdx !== -1) priceColIdx = fallbackPriceIdx;
-            }
-
-            break;
           }
 
-          if (headerRowIdx === -1 || skuColIdx === -1 || stockColIdx === -1) {
-            errors.push(`${file.originalname}: не найден заголовок с «Артикул» и колонкой остатков`);
+          if (sheetsWithData === 0) {
+            errors.push(`${file.originalname}: В файле не найдены колонки «Артикул» и «Доступно к продаже» / «Доступно на складе Ozon» / «Итого доступно на складах». Проверьте формат отчёта`);
             continue;
           }
 
-          console.log(`[fbo-inventory-upload] File: ${file.originalname}, type: ${reportType}, header: ${headerRowIdx}, sku: ${skuColIdx}, stock: ${stockColIdx}, price: ${priceColIdx}`);
+          console.log(`[fbo-inventory-upload] File: ${file.originalname}, sheets with data: ${sheetsWithData}, unique SKUs: ${skuAggregation.size}`);
 
-          const dataRows = allRows.slice(headerRowIdx + 1);
-          const isDiscountedReport = reportType === "discounted";
+          const isDiscountedReport = fileReportType === "discounted";
 
-          for (const row of dataRows) {
-            if (!row || row.length === 0) continue;
-            const sku = String(row[skuColIdx] || "").trim();
-            if (!sku) continue;
-
-            const stockRaw = String(row[stockColIdx] || "0").replace(/\s/g, "").replace(",", ".");
-            const stock = parseInt(stockRaw, 10);
-            if (isNaN(stock)) continue;
-
-            let price = 0;
-            if (priceColIdx !== -1) {
-              const priceRaw = String(row[priceColIdx] || "0").replace(/\s/g, "").replace(",", ".");
-              price = parseFloat(priceRaw);
-              if (isNaN(price)) price = 0;
-            }
-
+          for (const [sku, { stock, price }] of skuAggregation) {
             const [dbProduct] = await db.select().from(productsTable)
               .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
 
             if (dbProduct) {
-              const updateData: any = { ozonFboStock: stock, ozonFboDiscounted: isDiscountedReport, updatedAt: new Date() };
+              const updateData: any = { ozonFboStock: stock, ozonFboDiscounted: isDiscountedReport, ozonFboTracked: true, updatedAt: new Date() };
               if (price > 0) updateData.sellingPrice = price.toFixed(2);
               await db.update(productsTable).set(updateData).where(eq(productsTable.id, dbProduct.id));
               totalStockValue += stock * (price > 0 ? price : Number(dbProduct.sellingPrice || dbProduct.price || 0));
