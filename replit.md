@@ -16,6 +16,7 @@ Key capabilities include:
 - Ozon dual-mode FBS/FBO order management: webhook-based and polling-based order sync for both FBS and FBO, ship/cancel actions via Ozon API, FBS label printing, posting number tracking, Ozon status display, fulfillment type badges and filtering.
 - Ozon FBO inventory tracking: sync FBO stock levels from Ozon warehouse, display in products table.
 - Multi-format Ozon report parser for FBO inventory: smart header detection, supports «Управление остатками», «Уцененные товары», and «Ведомость по товарам» report formats with automatic column mapping and "Уценка" badge for discounted items.
+- Bulk multi-file upload for Ozon reports with sequential processing, per-file report type detection, and consolidated result summary.
 - Excel export functionality for products and P&L reports.
 The UI is fully localized in Russian.
 

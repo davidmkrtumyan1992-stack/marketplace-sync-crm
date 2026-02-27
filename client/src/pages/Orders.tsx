@@ -155,9 +155,11 @@ function FboInventoryDashboard() {
   });
 
   const uploadExcel = useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async (files: File[]) => {
       const formData = new FormData();
-      formData.append("file", file);
+      for (const file of files) {
+        formData.append("files", file);
+      }
       const res = await fetch("/api/marketplace/ozon/fbo-inventory/upload-excel", {
         method: "POST",
         body: formData,
@@ -170,8 +172,9 @@ function FboInventoryDashboard() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/marketplace/ozon/fbo-inventory"] });
       const NBSP = "\u00A0";
-      const totalVal = Math.round(data.totalStockValue || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
-      toast({ title: "Загружено", description: `Загружено ${data.total} товаров. Общая стоимость остатков на складах Ozon: ${totalVal}${NBSP}руб.` });
+      const fmtQty = Math.round(data.totalQuantity || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
+      const fmtVal = Math.round(data.totalStockValue || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
+      toast({ title: "Загружено", description: `Обработано ${data.filesProcessed} файлов. Всего на складах: ${fmtQty}${NBSP}шт. на сумму ${fmtVal}${NBSP}руб.` });
     },
     onError: (err: any) => {
       toast({ title: "Ошибка", description: err.message, variant: "destructive" });
@@ -179,9 +182,9 @@ function FboInventoryDashboard() {
   });
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      uploadExcel.mutate(file);
+    const fileList = e.target.files;
+    if (fileList && fileList.length > 0) {
+      uploadExcel.mutate(Array.from(fileList));
       e.target.value = "";
     }
   };
@@ -213,27 +216,29 @@ function FboInventoryDashboard() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => syncFboStock.mutate()}
-          disabled={syncFboStock.isPending}
-          data-testid="button-refresh-fbo-inventory"
-        >
-          {syncFboStock.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1.5" />}
-          Обновить остатки
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
           onClick={() => fileInputRef.current?.click()}
           disabled={uploadExcel.isPending}
           data-testid="button-upload-fbo-excel"
         >
           {uploadExcel.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Upload className="w-4 h-4 mr-1.5" />}
-          Загрузить Excel остатков
+          Загрузить отчёты Ozon
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => syncFboStock.mutate()}
+          disabled={syncFboStock.isPending}
+          title="Синхронизировать остатки через API"
+          data-testid="button-refresh-fbo-inventory"
+        >
+          {syncFboStock.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
         </Button>
         <input
           ref={fileInputRef}
           type="file"
           accept=".xlsx,.xls,.csv"
+          multiple
           className="hidden"
           onChange={handleFileChange}
           data-testid="input-fbo-excel-file"
