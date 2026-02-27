@@ -116,6 +116,7 @@ interface FboInventoryItem {
   price: number;
   totalValue: number;
   isDiscounted: boolean;
+  isUnmatched?: boolean;
 }
 
 function FboInventoryDashboard() {
@@ -269,6 +270,9 @@ function FboInventoryDashboard() {
                         <span className="font-medium text-sm line-clamp-2" data-testid={`text-fbo-product-name-${item.id}`}>{item.name}</span>
                         {item.isDiscounted && (
                           <Badge variant="outline" className="w-fit text-[10px] px-1.5 py-0 border-orange-400 text-orange-600 dark:text-orange-400" data-testid={`badge-discounted-${item.id}`}>Уценка</Badge>
+                        )}
+                        {item.isUnmatched && (
+                          <Badge variant="outline" className="w-fit text-[10px] px-1.5 py-0 border-blue-400 text-blue-600 dark:text-blue-400" data-testid={`badge-unmatched-${item.id}`}>Не в базе</Badge>
                         )}
                       </div>
                     </div>

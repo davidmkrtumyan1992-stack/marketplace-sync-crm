@@ -2361,11 +2361,25 @@ export async function registerRoutes(
     return `Ошибка Ozon API (HTTP ${status})`;
   }
 
+  const unmatchedFboItems = new Map<number, Array<{ sku: string; name: string; stock: number; price: number; isDiscounted: boolean }>>();
+
+  function normalizeSku(raw: any): string {
+    let s = String(raw || "").trim();
+    if (/^[\d.]+[eE]\+?\d+$/.test(s)) {
+      try {
+        const n = Number(s);
+        if (Number.isFinite(n) && n > 0) s = n.toFixed(0);
+      } catch {}
+    }
+    s = s.replace(/[\s\u00A0\t]/g, "");
+    return s;
+  }
+
   app.get("/api/marketplace/ozon/fbo-inventory", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const products = await storage.getProducts(orgId);
-      const fboItems = products
+      const fboItems: any[] = products
         .filter((p: any) => p.ozonFboTracked === true)
         .map((p: any) => ({
           id: p.id,
@@ -2376,18 +2390,42 @@ export async function registerRoutes(
           price: Number(p.sellingPrice || p.price || 0),
           totalValue: Number(p.sellingPrice || p.price || 0) * (p.ozonFboStock || 0),
           isDiscounted: p.ozonFboDiscounted || false,
+          isUnmatched: false,
         }));
+
+      const orgUnmatched = unmatchedFboItems.get(orgId) || [];
+      const dbSkusNormalized = new Set(fboItems.map((i: any) => normalizeSku(i.sku)));
+      let syntheticId = -1;
+      for (const u of orgUnmatched) {
+        if (!dbSkusNormalized.has(normalizeSku(u.sku))) {
+          fboItems.push({
+            id: syntheticId--,
+            name: u.name || u.sku,
+            sku: u.sku,
+            imageUrl: null,
+            ozonFboStock: u.stock,
+            price: u.price,
+            totalValue: u.price * u.stock,
+            isDiscounted: u.isDiscounted,
+            isUnmatched: true,
+          });
+        }
+      }
+
       const totalQuantity = fboItems.reduce((sum: number, i: any) => sum + i.ozonFboStock, 0);
       const totalValue = fboItems.reduce((sum: number, i: any) => sum + i.totalValue, 0);
       let lastUpdated: string | null = null;
-      if (fboItems.length > 0) {
-        const maxDate = fboItems.reduce((max: Date | null, _item: any, idx: number) => {
-          const p = products.find((pr: any) => pr.id === fboItems[idx].id);
-          const d = p?.updatedAt ? new Date(p.updatedAt) : null;
+      const trackedProducts = products.filter((p: any) => p.ozonFboTracked === true);
+      if (trackedProducts.length > 0) {
+        const maxDate = trackedProducts.reduce((max: Date | null, p: any) => {
+          const d = p.updatedAt ? new Date(p.updatedAt) : null;
           if (!d) return max;
           return !max || d > max ? d : max;
         }, null as Date | null);
         if (maxDate) lastUpdated = maxDate.toISOString();
+      }
+      if (!lastUpdated && orgUnmatched.length > 0) {
+        lastUpdated = new Date().toISOString();
       }
       res.json({ items: fboItems, totalQuantity, totalValue, lastUpdated });
     } catch (error: any) {
@@ -2412,8 +2450,8 @@ export async function registerRoutes(
 
       type ReportType = "stock_management" | "discounted" | "product_statement" | "generic";
 
-      function detectHeaderInRows(allRows: any[][], fileName: string): { headerRowIdx: number; skuColIdx: number; stockColIdx: number; priceColIdx: number; reportType: ReportType } | null {
-        for (let i = 0; i < Math.min(allRows.length, 30); i++) {
+      function detectHeaderInRows(allRows: any[][], fileName: string): { headerRowIdx: number; skuColIdx: number; stockColIdx: number; priceColIdx: number; nameColIdx: number; reportType: ReportType } | null {
+        for (let i = 0; i < Math.min(allRows.length, 50); i++) {
           const row = allRows[i];
           if (!row || row.length === 0) continue;
           const cells = row.map((c: any) => String(c || "").trim().toLowerCase());
@@ -2470,7 +2508,11 @@ export async function registerRoutes(
             if (fallbackPriceIdx !== -1) priceColIdx = fallbackPriceIdx;
           }
 
-          return { headerRowIdx: i, skuColIdx, stockColIdx, priceColIdx, reportType };
+          let nameColIdx = cells.findIndex((c: string) =>
+            c.includes("наименование") || c.includes("название") || c.includes("name")
+          );
+
+          return { headerRowIdx: i, skuColIdx, stockColIdx, priceColIdx, nameColIdx, reportType };
         }
         return null;
       }
@@ -2478,7 +2520,7 @@ export async function registerRoutes(
       for (const file of files) {
         try {
           const workbook = XLSX.read(file.buffer, { type: "buffer" });
-          const skuAggregation = new Map<string, { stock: number; price: number }>();
+          const skuAggregation = new Map<string, { stock: number; price: number; name: string }>();
           let fileReportType: ReportType = "generic";
           let sheetsWithData = 0;
 
@@ -2493,15 +2535,15 @@ export async function registerRoutes(
             }
 
             sheetsWithData++;
-            const { headerRowIdx, skuColIdx, stockColIdx, priceColIdx, reportType } = detected;
+            const { headerRowIdx, skuColIdx, stockColIdx, priceColIdx, nameColIdx, reportType } = detected;
             if (fileReportType === "generic") fileReportType = reportType;
 
-            console.log(`[fbo-inventory-upload] File: ${file.originalname}, sheet: "${sheetName}", type: ${reportType}, header: ${headerRowIdx}, sku: ${skuColIdx}, stock: ${stockColIdx}, price: ${priceColIdx}`);
+            console.log(`[fbo-inventory-upload] File: ${file.originalname}, sheet: "${sheetName}", type: ${reportType}, header: ${headerRowIdx}, sku: ${skuColIdx}, stock: ${stockColIdx}, price: ${priceColIdx}, name: ${nameColIdx}`);
 
             const dataRows = allRows.slice(headerRowIdx + 1);
             for (const row of dataRows) {
               if (!row || row.length === 0) continue;
-              const sku = String(row[skuColIdx] || "").trim();
+              const sku = normalizeSku(row[skuColIdx]);
               if (!sku) continue;
 
               const stockRaw = String(row[stockColIdx] || "0").replace(/\s/g, "").replace(",", ".");
@@ -2515,12 +2557,18 @@ export async function registerRoutes(
                 if (isNaN(price)) price = 0;
               }
 
+              let name = "";
+              if (nameColIdx !== -1) {
+                name = String(row[nameColIdx] || "").trim();
+              }
+
               const existing = skuAggregation.get(sku);
               if (existing) {
                 existing.stock += stock;
                 if (price > 0) existing.price = price;
+                if (name && !existing.name) existing.name = name;
               } else {
-                skuAggregation.set(sku, { stock, price });
+                skuAggregation.set(sku, { stock, price, name });
               }
             }
           }
@@ -2533,10 +2581,17 @@ export async function registerRoutes(
           console.log(`[fbo-inventory-upload] File: ${file.originalname}, sheets with data: ${sheetsWithData}, unique SKUs: ${skuAggregation.size}`);
 
           const isDiscountedReport = fileReportType === "discounted";
+          const fileUnmatched: Array<{ sku: string; name: string; stock: number; price: number; isDiscounted: boolean }> = [];
 
-          for (const [sku, { stock, price }] of skuAggregation) {
-            const [dbProduct] = await db.select().from(productsTable)
-              .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+          const allOrgProducts = await db.select().from(productsTable)
+            .where(eq(productsTable.organizationId, orgId));
+          const productsByNormalizedSku = new Map<string, typeof allOrgProducts[0]>();
+          for (const p of allOrgProducts) {
+            productsByNormalizedSku.set(normalizeSku(p.sku), p);
+          }
+
+          for (const [sku, { stock, price, name }] of skuAggregation) {
+            const dbProduct = productsByNormalizedSku.get(sku);
 
             if (dbProduct) {
               const updateData: any = { ozonFboStock: stock, ozonFboDiscounted: isDiscountedReport, ozonFboTracked: true, updatedAt: new Date() };
@@ -2546,11 +2601,17 @@ export async function registerRoutes(
               totalQuantity += stock;
               totalUpdated++;
             } else {
+              fileUnmatched.push({ sku, name: name || sku, stock, price, isDiscounted: isDiscountedReport });
               totalCreated++;
               totalStockValue += stock * price;
               totalQuantity += stock;
             }
           }
+
+          const existing = unmatchedFboItems.get(orgId) || [];
+          const currentSkus = new Set(skuAggregation.keys());
+          const kept = existing.filter(e => !currentSkus.has(e.sku));
+          unmatchedFboItems.set(orgId, [...kept, ...fileUnmatched]);
         } catch (fileErr: any) {
           errors.push(`${file.originalname}: ${fileErr.message}`);
         }
