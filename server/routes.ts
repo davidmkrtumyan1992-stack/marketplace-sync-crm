@@ -2361,147 +2361,6 @@ export async function registerRoutes(
     return `Ошибка Ozon API (HTTP ${status})`;
   }
 
-  // Ozon FBO: Check API connection
-  app.get("/api/marketplace/ozon/check-connection", isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const allSettings = await storage.getMarketplaceSettings(orgId);
-      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
-
-      if (!ozonSetting) {
-        return res.json({ connected: false, error: "Настройки Ozon не найдены. Добавьте API-ключ в настройках." });
-      }
-
-      const clientId = ozonSetting.clientId?.trim();
-      const apiKey = ozonSetting.apiKey?.trim();
-
-      if (!clientId || !apiKey) {
-        return res.json({ connected: false, error: "Client-Id или Api-Key не заполнены" });
-      }
-
-      const parsedClientId = parseInt(clientId, 10);
-      if (isNaN(parsedClientId)) {
-        return res.json({ connected: false, error: `Некорректный Client-Id: "${clientId}"` });
-      }
-
-      const BASE = "https://api-seller.ozon.ru";
-      const headers = {
-        "Client-Id": String(parsedClientId),
-        "Api-Key": apiKey,
-        "Content-Type": "application/json",
-      };
-
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-
-      const response = await fetch(`${BASE}/v1/warehouse/list`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({}),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => "");
-        const errorMsg = parseOzonErrorMessage(response.status, errText);
-        return res.json({ connected: false, error: errorMsg });
-      }
-
-      res.json({ connected: true });
-    } catch (error: any) {
-      if (error.name === "AbortError") {
-        return res.json({ connected: false, error: "Таймаут соединения с Ozon API" });
-      }
-      res.json({ connected: false, error: error.message || "Ошибка сети" });
-    }
-  });
-
-  // Ozon FBO: Sync stock levels
-  app.post("/api/marketplace/ozon/sync-fbo-stock", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const allSettings = await storage.getMarketplaceSettings(orgId);
-      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
-
-      if (!ozonSetting) {
-        return res.status(400).json({ message: "Настройки Ozon не найдены. Добавьте API-ключ в настройках." });
-      }
-
-      const clientId = ozonSetting.clientId?.trim();
-      const apiKey = ozonSetting.apiKey?.trim();
-
-      if (!clientId || !apiKey) {
-        return res.status(400).json({ message: "Client-Id или Api-Key не заполнены. Проверьте настройки магазина Ozon." });
-      }
-
-      const parsedClientId = parseInt(clientId, 10);
-      if (isNaN(parsedClientId)) {
-        return res.status(400).json({ message: `Некорректный Client-Id: "${clientId}". Должно быть числовое значение.` });
-      }
-
-      const BASE = "https://api-seller.ozon.ru";
-      const headers = {
-        "Client-Id": String(parsedClientId),
-        "Api-Key": apiKey,
-        "Content-Type": "application/json",
-      };
-
-      console.log(`[ozon-fbo-stock] Fetching FBO stock levels via /v3/product/info/stocks (Client-Id: ${parsedClientId})`);
-
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
-
-      const response = await fetch(`${BASE}/v3/product/info/stocks`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ filter: { visibility: "ALL" }, limit: 1000 }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => "");
-        const errorMsg = parseOzonErrorMessage(response.status, errText);
-        console.error(`[ozon-fbo-stock] API error ${response.status}:`, errText.slice(0, 500));
-        return res.status(502).json({ message: errorMsg });
-      }
-
-      const data = await response.json();
-      const items = data?.result?.items || [];
-      console.log(`[ozon-fbo-stock] Received ${items.length} product stock entries`);
-
-      let updatedCount = 0;
-      for (const item of items) {
-        const offerId = item.offer_id || "";
-        if (!offerId) continue;
-
-        const fboStocks = item.stocks?.filter((s: any) => s.type === "fbo") || [];
-        const totalFbo = fboStocks.reduce((sum: number, s: any) => sum + (s.present || 0), 0);
-
-        const [dbProduct] = await db.select().from(productsTable)
-          .where(and(eq(productsTable.sku, offerId), eq(productsTable.organizationId, orgId)));
-
-        if (dbProduct && dbProduct.ozonFboStock !== totalFbo) {
-          await db.update(productsTable)
-            .set({ ozonFboStock: totalFbo })
-            .where(eq(productsTable.id, dbProduct.id));
-          updatedCount++;
-        }
-      }
-
-      console.log(`[ozon-fbo-stock] Updated ${updatedCount} products with FBO stock`);
-      res.json({ success: true, total: items.length, updated: updatedCount });
-    } catch (error: any) {
-      if (error.name === "AbortError") {
-        console.error("[ozon-fbo-stock] Request timed out");
-        return res.status(504).json({ message: "Таймаут запроса к Ozon API (30 сек). Попробуйте позже." });
-      }
-      console.error("[ozon-fbo-stock] Error:", error);
-      res.status(500).json({ message: error.message || "Внутренняя ошибка сервера" });
-    }
-  });
-
   app.get("/api/marketplace/ozon/fbo-inventory", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
@@ -2520,7 +2379,17 @@ export async function registerRoutes(
         }));
       const totalQuantity = fboItems.reduce((sum: number, i: any) => sum + i.ozonFboStock, 0);
       const totalValue = fboItems.reduce((sum: number, i: any) => sum + i.totalValue, 0);
-      res.json({ items: fboItems, totalQuantity, totalValue });
+      let lastUpdated: string | null = null;
+      if (fboItems.length > 0) {
+        const fboProducts = products.filter((p: any) => p.ozonFboStock > 0);
+        const maxDate = fboProducts.reduce((max: Date | null, p: any) => {
+          const d = p.updatedAt ? new Date(p.updatedAt) : null;
+          if (!d) return max;
+          return !max || d > max ? d : max;
+        }, null as Date | null);
+        if (maxDate) lastUpdated = maxDate.toISOString();
+      }
+      res.json({ items: fboItems, totalQuantity, totalValue, lastUpdated });
     } catch (error: any) {
       console.error("[fbo-inventory] Error:", error);
       res.status(500).json({ message: error.message });
@@ -2634,7 +2503,7 @@ export async function registerRoutes(
               .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
 
             if (dbProduct) {
-              const updateData: any = { ozonFboStock: stock, ozonFboDiscounted: isDiscountedReport };
+              const updateData: any = { ozonFboStock: stock, ozonFboDiscounted: isDiscountedReport, updatedAt: new Date() };
               if (price > 0) updateData.sellingPrice = price.toFixed(2);
               await db.update(productsTable).set(updateData).where(eq(productsTable.id, dbProduct.id));
               totalStockValue += stock * (price > 0 ? price : Number(dbProduct.sellingPrice || dbProduct.price || 0));

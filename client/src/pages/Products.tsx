@@ -1,7 +1,6 @@
 import { Layout } from "@/components/Layout";
 import { useProducts, useCreateProduct, useDeleteProduct, useSyncProduct } from "@/hooks/use-products";
 import { useCreateStockInflow } from "@/hooks/use-stock-inflow";
-import { useSyncFboStock } from "@/hooks/use-orders";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -94,7 +93,7 @@ export default function Products() {
 
   const [importingMarketplace, setImportingMarketplace] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const syncFboStock = useSyncFboStock();
+
 
   const syncMutation = useMutation({
     mutationFn: async (marketplace: string) => {
@@ -192,14 +191,6 @@ export default function Products() {
                 >
                   <Package className="w-4 h-4 mr-2" />
                   Обновить Yandex Market
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => syncFboStock.mutate()}
-                  disabled={syncFboStock.isPending}
-                  data-testid="button-sync-fbo-stock"
-                >
-                  <Package className="w-4 h-4 mr-2" />
-                  Обновить FBO остатки (Ozon)
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
