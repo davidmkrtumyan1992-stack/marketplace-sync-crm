@@ -1822,7 +1822,7 @@ export async function registerRoutes(
       };
 
       const since = new Date();
-      since.setDate(since.getDate() - 7);
+      since.setDate(since.getDate() - 30);
       const body = {
         dir: "ASC",
         filter: {
@@ -1830,7 +1830,7 @@ export async function registerRoutes(
           to: new Date().toISOString(),
           status: "",
         },
-        limit: 50,
+        limit: 1000,
         offset: 0,
       };
 
@@ -2677,47 +2677,109 @@ export async function registerRoutes(
           "Content-Type": "application/json",
         };
 
-        const activeOrders = await db.select().from(ordersTable)
+        const allOrgOrders = await db.select().from(ordersTable)
           .where(and(
             eq(ordersTable.organizationId, orgId),
             eq(ordersTable.source, "ozon"),
           ));
 
-        const pendingOrders = activeOrders.filter(o =>
+        const existingPostingNumbers = new Set(allOrgOrders.filter(o => o.postingNumber).map(o => o.postingNumber!));
+
+        const pendingOrders = allOrgOrders.filter(o =>
           o.postingNumber && o.ozonStatus &&
           !["delivered", "cancelled"].includes(o.ozonStatus)
         );
 
-        if (pendingOrders.length === 0) continue;
+        console.log(`[ozon-auto-sync] Checking ${pendingOrders.length} active orders for org ${orgId} (${allOrgOrders.length} total)`);
 
-        console.log(`[ozon-auto-sync] Checking ${pendingOrders.length} active orders for org ${orgId}`);
+        let resolvedStoreId: number | undefined;
+        let resolvedCompanyId: number | undefined;
+        if (setting.companyId) {
+          resolvedCompanyId = setting.companyId;
+          const companyStores = await storage.getStores(setting.companyId);
+          const ozonStore = companyStores.find(s => s.marketplace === "ozon");
+          if (ozonStore) resolvedStoreId = ozonStore.id;
+        } else {
+          const orgCompanies = await storage.getCompanies(orgId);
+          for (const company of orgCompanies) {
+            const companyStores = await storage.getStores(company.id);
+            const ozonStore = companyStores.find(s => s.marketplace === "ozon");
+            if (ozonStore) {
+              resolvedStoreId = ozonStore.id;
+              resolvedCompanyId = company.id;
+              break;
+            }
+          }
+        }
 
         const since = new Date();
         since.setDate(since.getDate() - 30);
         const body = {
           dir: "ASC",
           filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" },
-          limit: 100,
+          limit: 1000,
           offset: 0,
         };
 
         let updated = 0;
+        let created = 0;
 
-        const syncAutoPostings = async (postings: any[]) => {
+        const syncAutoPostings = async (postings: any[], fulfillmentType: string) => {
           for (const posting of postings) {
-            const pn = posting.posting_number;
-            const newStatus = posting.status;
-            const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : undefined;
-            const existing = pendingOrders.find(o => o.postingNumber === pn);
-            if (existing) {
-              const needsStatusUpdate = existing.ozonStatus !== newStatus;
-              const needsDateUpdate = ozonCreatedAt && existing.createdAt &&
-                Math.abs(new Date(existing.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
-              if (needsStatusUpdate || needsDateUpdate) {
-                const internalStatus = ozonStatusToInternal(newStatus);
-                await storage.updateOrderOzonStatus(existing.id, newStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
-                updated++;
+            try {
+              const pn = posting.posting_number;
+              const newStatus = posting.status;
+              const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : undefined;
+
+              if (existingPostingNumbers.has(pn)) {
+                const existing = allOrgOrders.find(o => o.postingNumber === pn);
+                if (existing && existing.ozonStatus !== newStatus) {
+                  const internalStatus = ozonStatusToInternal(newStatus);
+                  const needsDateUpdate = ozonCreatedAt && existing.createdAt &&
+                    Math.abs(new Date(existing.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
+                  await storage.updateOrderOzonStatus(existing.id, newStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
+                  updated++;
+                }
+              } else {
+                const items: { productId: number; quantity: number; price: number }[] = [];
+                let totalAmount = 0;
+                for (const prod of posting.products || []) {
+                  const sku = prod.offer_id || "";
+                  const qty = prod.quantity || 1;
+                  const price = parseFloat(prod.price || "0");
+                  if (sku) {
+                    const [dbProduct] = await db.select().from(productsTable)
+                      .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+                    if (dbProduct) {
+                      items.push({ productId: dbProduct.id, quantity: qty, price });
+                      totalAmount += price * qty;
+                    }
+                  }
+                }
+                if (items.length > 0) {
+                  const internalStatus = ozonStatusToInternal(newStatus);
+                  await storage.createOrder({
+                    orderNumber: pn,
+                    status: internalStatus,
+                    totalAmount: totalAmount.toFixed(2),
+                    source: "ozon",
+                    externalId: posting.order_id?.toString() || pn,
+                    postingNumber: pn,
+                    ozonStatus: newStatus,
+                    fulfillmentType,
+                    storeId: resolvedStoreId,
+                    companyId: resolvedCompanyId,
+                    organizationId: orgId,
+                    createdAt: ozonCreatedAt || undefined,
+                  }, items);
+                  existingPostingNumbers.add(pn);
+                  created++;
+                } else {
+                  console.log(`[ozon-auto-sync] Skipped posting ${pn}: no matching SKUs in DB`);
+                }
               }
+            } catch (err: any) {
+              console.error(`[ozon-auto-sync] Error processing posting ${posting.posting_number}:`, err.message);
             }
           }
         };
@@ -2728,21 +2790,21 @@ export async function registerRoutes(
         if (fbsResponse.ok) {
           const fbsData = await fbsResponse.json();
           const fbsPostings = fbsData?.result?.postings || [];
-          await syncAutoPostings(fbsPostings);
+          await syncAutoPostings(fbsPostings, "FBS");
         }
 
         const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
           method: "POST", headers,
-          body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 100, offset: 0, with: { analytics_data: false, financial_data: false } }),
+          body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 1000, offset: 0, with: { analytics_data: false, financial_data: false } }),
         });
         if (fboResponse.ok) {
           const fboData = await fboResponse.json();
           const fboPostings = fboData?.result || [];
-          await syncAutoPostings(fboPostings);
+          await syncAutoPostings(fboPostings, "FBO");
         }
 
-        if (updated > 0) {
-          console.log(`[ozon-auto-sync] Updated ${updated} order statuses for org ${orgId}`);
+        if (updated > 0 || created > 0) {
+          console.log(`[ozon-auto-sync] Org ${orgId}: updated ${updated}, created ${created} orders`);
         }
       }
     } catch (error) {
