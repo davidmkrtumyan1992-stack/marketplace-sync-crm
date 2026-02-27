@@ -178,9 +178,18 @@ export function useSyncOzonOrders() {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
       queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
+      const storeDetails = data.storeResults?.map((s: any) => {
+        if (s.error) return s.error;
+        let detail = `${s.storeName}: +${s.created} новых, ${s.updated} обновлено`;
+        if (s.skippedNoSku > 0) detail += ` (${s.skippedNoSku} пропущено — нет товаров)`;
+        return detail;
+      }).join("\n") || "";
+      const hasErrors = data.storeResults?.some((s: any) => s.error);
+      const hasSkipped = data.storeResults?.some((s: any) => s.skippedNoSku > 0);
       toast({ 
-        title: "Синхронизация завершена", 
-        description: `Создано: ${data.created}, обновлено: ${data.updated}` 
+        title: hasErrors ? "Синхронизация завершена с ошибками" : hasSkipped ? "Синхронизация завершена (есть пропуски)" : "Синхронизация завершена",
+        description: storeDetails || `Создано: ${data.created}, обновлено: ${data.updated}`,
+        variant: hasErrors ? "destructive" : "default",
       });
     },
     onError: (error: Error) => {

@@ -1823,9 +1823,15 @@ export async function registerRoutes(
       let created = 0;
       let updated = 0;
       let skipped = 0;
+      const storeResults: { storeName: string; storeId: number | null; created: number; updated: number; skippedNoSku: number; error?: string }[] = [];
 
       for (const ozonSetting of ozonSettings) {
         const { storeId: resolvedStoreId, companyId: resolvedCompanyId, storeName: resolvedStoreName } = await resolveStoreForSetting(ozonSetting);
+        const displayName = resolvedStoreName || ozonSetting.storeName || `Client ${ozonSetting.clientId}`;
+        let storeCreated = 0;
+        let storeUpdated = 0;
+        let storeSkippedNoSku = 0;
+        let storeError: string | undefined;
         const headers = {
           "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
           "Api-Key": ozonSetting.apiKey!.trim(),
@@ -1839,7 +1845,7 @@ export async function registerRoutes(
           offset: 0,
         };
 
-        console.log(`[ozon-sync-orders] Fetching FBS+FBO for store «${resolvedStoreName}» clientId=${ozonSetting.clientId}, storeId=${resolvedStoreId}`);
+        console.log(`[ozon-sync-orders] Fetching FBS+FBO for store «${displayName}» clientId=${ozonSetting.clientId}, storeId=${resolvedStoreId}`);
 
         const syncPostings = async (postings: any[], fulfillmentType: string) => {
           for (const posting of postings) {
@@ -1856,6 +1862,7 @@ export async function registerRoutes(
               if (needsStatusUpdate || needsDateUpdate) {
                 await storage.updateOrderOzonStatus(existingOrder.id, ozonStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
                 updated++;
+                storeUpdated++;
               } else {
                 skipped++;
               }
@@ -1899,6 +1906,9 @@ export async function registerRoutes(
                 createdAt: ozonCreatedAt || undefined,
               }, items);
               created++;
+              storeCreated++;
+            } else {
+              storeSkippedNoSku++;
             }
           }
         };
@@ -1909,10 +1919,15 @@ export async function registerRoutes(
         if (fbsResponse.ok) {
           const fbsData = await fbsResponse.json();
           const fbsPostings = fbsData?.result?.postings || [];
-          console.log(`[ozon-sync-orders] Store ${ozonSetting.clientId} FBS: ${fbsPostings.length} postings`);
+          console.log(`[ozon-sync-orders] Store «${displayName}» FBS: ${fbsPostings.length} postings`);
           await syncPostings(fbsPostings, "FBS");
         } else {
-          console.error(`[ozon-sync-orders] Store ${ozonSetting.clientId} FBS API error ${fbsResponse.status}`);
+          const errText = await fbsResponse.text().catch(() => "");
+          const errMsg = fbsResponse.status === 401 || fbsResponse.status === 403
+            ? `Ошибка авторизации для магазина «${displayName}» (код ${fbsResponse.status})`
+            : `Ошибка API для магазина «${displayName}» (код ${fbsResponse.status})`;
+          console.error(`[ozon-sync-orders] Store «${displayName}» FBS API error ${fbsResponse.status}: ${errText}`);
+          storeError = errMsg;
         }
 
         const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
@@ -1921,15 +1936,23 @@ export async function registerRoutes(
         if (fboResponse.ok) {
           const fboData = await fboResponse.json();
           const fboPostings = fboData?.result || [];
-          console.log(`[ozon-sync-orders] Store ${ozonSetting.clientId} FBO: ${fboPostings.length} postings`);
+          console.log(`[ozon-sync-orders] Store «${displayName}» FBO: ${fboPostings.length} postings`);
           await syncPostings(fboPostings, "FBO");
         } else {
-          console.error(`[ozon-sync-orders] Store ${ozonSetting.clientId} FBO API error ${fboResponse.status}`);
+          const errText = await fboResponse.text().catch(() => "");
+          if (!storeError) {
+            storeError = fboResponse.status === 401 || fboResponse.status === 403
+              ? `Ошибка авторизации для магазина «${displayName}» (код ${fboResponse.status})`
+              : `Ошибка API для магазина «${displayName}» (код ${fboResponse.status})`;
+          }
+          console.error(`[ozon-sync-orders] Store «${displayName}» FBO API error ${fboResponse.status}: ${errText}`);
         }
+
+        storeResults.push({ storeName: displayName, storeId: resolvedStoreId, created: storeCreated, updated: storeUpdated, skippedNoSku: storeSkippedNoSku, error: storeError });
       }
 
       console.log(`[ozon-sync-orders] Sync complete: created=${created}, updated=${updated}, skipped=${skipped}`);
-      res.json({ success: true, created, updated, skipped });
+      res.json({ success: true, created, updated, skipped, storeResults });
     } catch (error: any) {
       console.error("[ozon-sync-orders] Error:", error);
       res.status(500).json({ message: error.message });

@@ -304,7 +304,9 @@ export default function Orders() {
               data-testid="button-sync-ozon-orders"
             >
               {syncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-              Загрузить заказы Ozon
+              {syncOzonOrders.isPending && ozonStores.length > 0
+                ? `Синхронизация ${ozonStores.length > 1 ? ozonStores.map(s => s.name).join(", ") + "..." : "магазина " + ozonStores[0].name + "..."}`
+                : "Загрузить заказы Ozon"}
             </Button>
             <Button
               variant="outline"
