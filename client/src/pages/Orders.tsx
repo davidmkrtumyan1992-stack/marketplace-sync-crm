@@ -115,6 +115,7 @@ interface FboInventoryItem {
   ozonFboStock: number;
   price: number;
   totalValue: number;
+  isDiscounted: boolean;
 }
 
 function FboInventoryDashboard() {
@@ -168,7 +169,9 @@ function FboInventoryDashboard() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/marketplace/ozon/fbo-inventory"] });
-      toast({ title: "Загружено", description: `Обновлено ${data.updated} из ${data.total} товаров` });
+      const NBSP = "\u00A0";
+      const totalVal = Math.round(data.totalStockValue || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
+      toast({ title: "Загружено", description: `Загружено ${data.total} товаров. Общая стоимость остатков на складах Ozon: ${totalVal}${NBSP}руб.` });
     },
     onError: (err: any) => {
       toast({ title: "Ошибка", description: err.message, variant: "destructive" });
@@ -230,7 +233,7 @@ function FboInventoryDashboard() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".xlsx,.xls"
+          accept=".xlsx,.xls,.csv"
           className="hidden"
           onChange={handleFileChange}
           data-testid="input-fbo-excel-file"
@@ -292,7 +295,12 @@ function FboInventoryDashboard() {
                           <Package className="w-5 h-5 text-muted-foreground" />
                         </div>
                       )}
-                      <span className="font-medium text-sm line-clamp-2" data-testid={`text-fbo-product-name-${item.id}`}>{item.name}</span>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-medium text-sm line-clamp-2" data-testid={`text-fbo-product-name-${item.id}`}>{item.name}</span>
+                        {item.isDiscounted && (
+                          <Badge variant="outline" className="w-fit text-[10px] px-1.5 py-0 border-orange-400 text-orange-600 dark:text-orange-400" data-testid={`badge-discounted-${item.id}`}>Уценка</Badge>
+                        )}
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm" data-testid={`text-fbo-sku-${item.id}`}>{item.sku}</TableCell>

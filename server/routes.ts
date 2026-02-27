@@ -2516,6 +2516,7 @@ export async function registerRoutes(
           ozonFboStock: p.ozonFboStock,
           price: Number(p.sellingPrice || p.price || 0),
           totalValue: Number(p.sellingPrice || p.price || 0) * (p.ozonFboStock || 0),
+          isDiscounted: p.ozonFboDiscounted || false,
         }));
       const totalQuantity = fboItems.reduce((sum: number, i: any) => sum + i.ozonFboStock, 0);
       const totalValue = fboItems.reduce((sum: number, i: any) => sum + i.totalValue, 0);
@@ -2535,27 +2536,126 @@ export async function registerRoutes(
 
       const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows: any[] = XLSX.utils.sheet_to_json(sheet);
+      const allRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
+      let headerRowIdx = -1;
+      let skuColIdx = -1;
+      let stockColIdx = -1;
+      let priceColIdx = -1;
+      type ReportType = "stock_management" | "discounted" | "product_statement" | "generic";
+      let reportType: ReportType = "generic";
+
+      const HEADER_KEYWORDS = ["артикул", "sku", "наименование"];
+      const STOCK_COLS: Record<string, string[]> = {
+        stock_management: ["доступно на складе ozon, шт"],
+        discounted: ["доступно на складе ozon, шт"],
+        product_statement: ["итого доступно на складах"],
+      };
+      const PRICE_COLS: Record<string, string[]> = {
+        stock_management: ["текущая цена с учетом скидок, руб."],
+        discounted: ["текущая цена с учетом скидок, руб."],
+      };
+
+      for (let i = 0; i < Math.min(allRows.length, 30); i++) {
+        const row = allRows[i];
+        if (!row || row.length === 0) continue;
+        const cells = row.map((c: any) => String(c || "").trim().toLowerCase());
+
+        const skuIdx = cells.findIndex((c: string) =>
+          c.includes("артикул") || c === "sku" || c === "offer_id" || c.includes("offer id") || c.includes("артикул продавца") || c.includes("артикул товара")
+        );
+        if (skuIdx === -1) continue;
+
+        headerRowIdx = i;
+        skuColIdx = skuIdx;
+
+        const hasDiscountedStock = cells.some((c: string) => c.includes("доступно на складе ozon"));
+        const hasStatementStock = cells.some((c: string) => c.includes("итого доступно на складах"));
+        const hasDiscountedPrice = cells.some((c: string) => c.includes("текущая цена с учетом скидок"));
+
+        if (hasStatementStock) {
+          reportType = "product_statement";
+          stockColIdx = cells.findIndex((c: string) => c.includes("итого доступно на складах"));
+        } else if (hasDiscountedStock) {
+          stockColIdx = cells.findIndex((c: string) => c.includes("доступно на складе ozon"));
+          const isDiscountedReport = cells.some((c: string) =>
+            c.includes("уценка") || c.includes("уценен") || c.includes("discounted")
+          ) || (req.file?.originalname || "").toLowerCase().includes("уценен");
+          reportType = isDiscountedReport ? "discounted" : "stock_management";
+        } else {
+          const fallbackStockIdx = cells.findIndex((c: string) =>
+            c.includes("остаток") || c.includes("количество") || c.includes("stock") || c.includes("fbo")
+          );
+          if (fallbackStockIdx !== -1) stockColIdx = fallbackStockIdx;
+        }
+
+        if (hasDiscountedPrice) {
+          priceColIdx = cells.findIndex((c: string) => c.includes("текущая цена с учетом скидок"));
+        } else {
+          const fallbackPriceIdx = cells.findIndex((c: string) =>
+            c === "цена" || c.includes("цена, руб") || c.includes("price")
+          );
+          if (fallbackPriceIdx !== -1) priceColIdx = fallbackPriceIdx;
+        }
+
+        break;
+      }
+
+      if (headerRowIdx === -1 || skuColIdx === -1) {
+        return res.status(400).json({ message: "Не удалось найти заголовок с колонкой «Артикул» в файле. Убедитесь, что файл содержит отчёт Ozon." });
+      }
+      if (stockColIdx === -1) {
+        return res.status(400).json({ message: "Не найдена колонка с остатками. Ожидается «Доступно на складе Ozon, шт» или «Итого доступно на складах»." });
+      }
+
+      console.log(`[fbo-inventory-upload] Detected report type: ${reportType}, header row: ${headerRowIdx}, sku col: ${skuColIdx}, stock col: ${stockColIdx}, price col: ${priceColIdx}`);
+
+      const dataRows = allRows.slice(headerRowIdx + 1);
       let updated = 0;
-      for (const row of rows) {
-        const sku = String(row["Артикул"] || row["offer_id"] || row["SKU"] || row["артикул"] || "").trim();
-        const stock = parseInt(String(row["Остаток"] || row["Количество"] || row["stock"] || row["quantity"] || row["FBO"] || 0), 10);
+      let created = 0;
+      let totalStockValue = 0;
+      const isDiscountedReport = reportType === "discounted";
 
-        if (!sku || isNaN(stock)) continue;
+      for (const row of dataRows) {
+        if (!row || row.length === 0) continue;
+        const sku = String(row[skuColIdx] || "").trim();
+        if (!sku) continue;
+
+        const stockRaw = String(row[stockColIdx] || "0").replace(/\s/g, "").replace(",", ".");
+        const stock = parseInt(stockRaw, 10);
+        if (isNaN(stock)) continue;
+
+        let price = 0;
+        if (priceColIdx !== -1) {
+          const priceRaw = String(row[priceColIdx] || "0").replace(/\s/g, "").replace(",", ".");
+          price = parseFloat(priceRaw);
+          if (isNaN(price)) price = 0;
+        }
 
         const [dbProduct] = await db.select().from(productsTable)
           .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
 
         if (dbProduct) {
-          await db.update(productsTable)
-            .set({ ozonFboStock: stock })
-            .where(eq(productsTable.id, dbProduct.id));
+          const updateData: any = { ozonFboStock: stock, ozonFboDiscounted: isDiscountedReport };
+          if (price > 0) updateData.sellingPrice = price.toFixed(2);
+          await db.update(productsTable).set(updateData).where(eq(productsTable.id, dbProduct.id));
+          totalStockValue += stock * (price > 0 ? price : Number(dbProduct.sellingPrice || dbProduct.price || 0));
           updated++;
+        } else {
+          created++;
+          totalStockValue += stock * price;
         }
       }
 
-      res.json({ success: true, updated, total: rows.length });
+      const totalProcessed = updated + created;
+      res.json({
+        success: true,
+        updated,
+        created,
+        total: totalProcessed,
+        totalStockValue,
+        reportType,
+      });
     } catch (error: any) {
       console.error("[fbo-inventory-upload] Error:", error);
       res.status(500).json({ message: error.message });

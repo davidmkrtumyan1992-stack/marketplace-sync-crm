@@ -74,6 +74,7 @@ export const products = pgTable("products", {
   logisticsCost: decimal("logistics_cost", { precision: 10, scale: 2 }).default("0"),
   marketplaceCommission: decimal("marketplace_commission", { precision: 5, scale: 2 }).default("0"),
   ozonFboStock: integer("ozon_fbo_stock").notNull().default(0),
+  ozonFboDiscounted: boolean("ozon_fbo_discounted").notNull().default(false),
   ozonId: text("ozon_id"),
   wbId: text("wb_id"),
   yandexId: text("yandex_id"),
