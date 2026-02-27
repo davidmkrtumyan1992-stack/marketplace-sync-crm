@@ -74,7 +74,7 @@ export interface IStorage {
   getOrders(organizationId: string, companyId?: number): Promise<OrderWithDetails[]>;
   getOrder(id: number): Promise<OrderWithDetails | undefined>;
   getOrdersByCustomerId(customerId: number, organizationId: string): Promise<OrderWithDetails[]>;
-  getOrderByPostingNumber(postingNumber: string, organizationId: string): Promise<Order | undefined>;
+  getOrderByPostingNumber(postingNumber: string, organizationId: string, storeId?: number | null): Promise<Order | undefined>;
   createOrder(order: InsertOrder & { createdAt?: Date }, items: { productId: number; quantity: number; price: number }[]): Promise<Order>;
   updateOrderStatus(id: number, status: string): Promise<Order>;
   updateOrderOzonStatus(id: number, ozonStatus: string, status?: string, createdAt?: Date): Promise<Order>;
@@ -432,9 +432,12 @@ export class DatabaseStorage implements IStorage {
     return order;
   }
 
-  async getOrderByPostingNumber(postingNumber: string, organizationId: string): Promise<Order | undefined> {
-    const [order] = await db.select().from(orders)
-      .where(and(eq(orders.postingNumber, postingNumber), eq(orders.organizationId, organizationId)));
+  async getOrderByPostingNumber(postingNumber: string, organizationId: string, storeId?: number | null): Promise<Order | undefined> {
+    const conditions = [eq(orders.postingNumber, postingNumber), eq(orders.organizationId, organizationId)];
+    if (storeId != null) {
+      conditions.push(eq(orders.storeId, storeId));
+    }
+    const [order] = await db.select().from(orders).where(and(...conditions));
     return order;
   }
 

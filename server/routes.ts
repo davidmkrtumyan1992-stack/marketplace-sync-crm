@@ -1657,6 +1657,45 @@ export async function registerRoutes(
     return map[status] || status;
   };
 
+  const resolveStoreForSetting = async (setting: { companyId: number | null; clientId: string | null }): Promise<{ storeId: number | null; companyId: number | null }> => {
+    if (setting.companyId) {
+      const companyStores = await storage.getStores(setting.companyId);
+      const ozonStore = companyStores.find(s => s.marketplace === "ozon" && s.clientId === setting.clientId);
+      if (ozonStore) return { storeId: ozonStore.id, companyId: setting.companyId };
+      const anyOzonStore = companyStores.find(s => s.marketplace === "ozon");
+      if (anyOzonStore) return { storeId: anyOzonStore.id, companyId: setting.companyId };
+      return { storeId: null, companyId: setting.companyId };
+    }
+    return { storeId: null, companyId: null };
+  };
+
+  const getOzonHeadersForOrder = async (order: { storeId: number | null }, orgId: string): Promise<{ "Client-Id": string; "Api-Key": string; "Content-Type": string } | null> => {
+    const allSettings = await storage.getMarketplaceSettings(orgId);
+    const ozonSettings = allSettings.filter(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+    if (ozonSettings.length === 0) return null;
+
+    if (order.storeId) {
+      const store = await storage.getStore(order.storeId);
+      if (store && store.clientId) {
+        const matchedSetting = ozonSettings.find(s => s.clientId === store.clientId);
+        if (matchedSetting) {
+          return {
+            "Client-Id": String(parseInt(matchedSetting.clientId!.trim(), 10)),
+            "Api-Key": matchedSetting.apiKey!.trim(),
+            "Content-Type": "application/json",
+          };
+        }
+      }
+    }
+
+    const fallback = ozonSettings[0];
+    return {
+      "Client-Id": String(parseInt(fallback.clientId!.trim(), 10)),
+      "Api-Key": fallback.apiKey!.trim(),
+      "Content-Type": "application/json",
+    };
+  };
+
   // Webhook: receive Ozon push notifications for FBS orders
   app.post("/api/webhooks/ozon/orders", async (req, res) => {
     const clientId = req.headers["client-id"] as string || "";
@@ -1788,141 +1827,121 @@ export async function registerRoutes(
     try {
       const orgId = getOrgId(req);
       const allSettings = await storage.getMarketplaceSettings(orgId);
-      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+      const ozonSettings = allSettings.filter(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
 
-      if (!ozonSetting) {
+      if (ozonSettings.length === 0) {
         return res.status(400).json({ message: "Настройки Ozon не найдены" });
       }
 
-      let resolvedStoreId: number | null = null;
-      let resolvedCompanyId: number | null = null;
-      if (ozonSetting.companyId) {
-        resolvedCompanyId = ozonSetting.companyId;
-        const companyStores = await storage.getStores(ozonSetting.companyId);
-        const ozonStore = companyStores.find(s => s.marketplace === "ozon");
-        if (ozonStore) resolvedStoreId = ozonStore.id;
-      } else {
-        const orgCompanies = await storage.getCompanies(orgId);
-        for (const company of orgCompanies) {
-          const companyStores = await storage.getStores(company.id);
-          const ozonStore = companyStores.find(s => s.marketplace === "ozon");
-          if (ozonStore) {
-            resolvedStoreId = ozonStore.id;
-            resolvedCompanyId = company.id;
-            break;
-          }
-        }
-      }
-
       const BASE = "https://api-seller.ozon.ru";
-      const headers = {
-        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
-        "Api-Key": ozonSetting.apiKey.trim(),
-        "Content-Type": "application/json",
-      };
-
       const since = new Date();
       since.setDate(since.getDate() - 30);
-      const body = {
-        dir: "ASC",
-        filter: {
-          since: since.toISOString(),
-          to: new Date().toISOString(),
-          status: "",
-        },
-        limit: 1000,
-        offset: 0,
-      };
-
-      console.log(`[ozon-sync-orders] Fetching FBS+FBO orders since ${since.toISOString()}, storeId: ${resolvedStoreId}, companyId: ${resolvedCompanyId}`);
 
       let created = 0;
       let updated = 0;
       let skipped = 0;
 
-      const syncPostings = async (postings: any[], fulfillmentType: string) => {
-        for (const posting of postings) {
-          const postingNumber = posting.posting_number;
-          const ozonStatus = posting.status;
-          const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : undefined;
-          const existingOrder = await storage.getOrderByPostingNumber(postingNumber, orgId);
+      for (const ozonSetting of ozonSettings) {
+        const { storeId: resolvedStoreId, companyId: resolvedCompanyId } = await resolveStoreForSetting(ozonSetting);
+        const headers = {
+          "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+          "Api-Key": ozonSetting.apiKey!.trim(),
+          "Content-Type": "application/json",
+        };
 
-          if (existingOrder) {
-            const internalStatus = ozonStatusToInternal(ozonStatus);
-            const needsStatusUpdate = existingOrder.ozonStatus !== ozonStatus;
-            const needsDateUpdate = ozonCreatedAt && existingOrder.createdAt &&
-              Math.abs(new Date(existingOrder.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
-            if (needsStatusUpdate || needsDateUpdate) {
-              await storage.updateOrderOzonStatus(existingOrder.id, ozonStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
-              updated++;
-            } else {
-              skipped++;
+        const body = {
+          dir: "ASC",
+          filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" },
+          limit: 1000,
+          offset: 0,
+        };
+
+        console.log(`[ozon-sync-orders] Fetching FBS+FBO for store clientId=${ozonSetting.clientId}, storeId=${resolvedStoreId}, companyId=${resolvedCompanyId}`);
+
+        const syncPostings = async (postings: any[], fulfillmentType: string) => {
+          for (const posting of postings) {
+            const postingNumber = posting.posting_number;
+            const ozonStatus = posting.status;
+            const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : undefined;
+            const existingOrder = await storage.getOrderByPostingNumber(postingNumber, orgId, resolvedStoreId);
+
+            if (existingOrder) {
+              const internalStatus = ozonStatusToInternal(ozonStatus);
+              const needsStatusUpdate = existingOrder.ozonStatus !== ozonStatus;
+              const needsDateUpdate = ozonCreatedAt && existingOrder.createdAt &&
+                Math.abs(new Date(existingOrder.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
+              if (needsStatusUpdate || needsDateUpdate) {
+                await storage.updateOrderOzonStatus(existingOrder.id, ozonStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
+                updated++;
+              } else {
+                skipped++;
+              }
+              continue;
             }
-            continue;
-          }
 
-          const items: { productId: number; quantity: number; price: number }[] = [];
-          let totalAmount = 0;
+            const items: { productId: number; quantity: number; price: number }[] = [];
+            let totalAmount = 0;
 
-          for (const prod of posting.products || []) {
-            const sku = prod.offer_id || "";
-            const qty = prod.quantity || 1;
-            const price = parseFloat(prod.price || "0");
+            for (const prod of posting.products || []) {
+              const sku = prod.offer_id || "";
+              const qty = prod.quantity || 1;
+              const price = parseFloat(prod.price || "0");
 
-            if (sku) {
-              const [dbProduct] = await db.select().from(productsTable)
-                .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+              if (sku) {
+                const [dbProduct] = await db.select().from(productsTable)
+                  .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
 
-              if (dbProduct) {
-                items.push({ productId: dbProduct.id, quantity: qty, price });
-                totalAmount += price * qty;
+                if (dbProduct) {
+                  items.push({ productId: dbProduct.id, quantity: qty, price });
+                  totalAmount += price * qty;
+                }
               }
             }
-          }
 
-          if (items.length > 0) {
-            const internalStatus = ozonStatusToInternal(ozonStatus);
-            await storage.createOrder({
-              orderNumber: postingNumber,
-              status: internalStatus,
-              totalAmount: totalAmount.toFixed(2),
-              source: "ozon",
-              externalId: posting.order_id?.toString() || postingNumber,
-              postingNumber,
-              ozonStatus,
-              fulfillmentType,
-              storeId: resolvedStoreId,
-              companyId: resolvedCompanyId,
-              organizationId: orgId,
-              createdAt: ozonCreatedAt || undefined,
-            }, items);
-            created++;
+            if (items.length > 0) {
+              const internalStatus = ozonStatusToInternal(ozonStatus);
+              await storage.createOrder({
+                orderNumber: postingNumber,
+                status: internalStatus,
+                totalAmount: totalAmount.toFixed(2),
+                source: "ozon",
+                externalId: posting.order_id?.toString() || postingNumber,
+                postingNumber,
+                ozonStatus,
+                fulfillmentType,
+                storeId: resolvedStoreId,
+                companyId: resolvedCompanyId,
+                organizationId: orgId,
+                createdAt: ozonCreatedAt || undefined,
+              }, items);
+              created++;
+            }
           }
+        };
+
+        const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
+          method: "POST", headers, body: JSON.stringify(body),
+        });
+        if (fbsResponse.ok) {
+          const fbsData = await fbsResponse.json();
+          const fbsPostings = fbsData?.result?.postings || [];
+          console.log(`[ozon-sync-orders] Store ${ozonSetting.clientId} FBS: ${fbsPostings.length} postings`);
+          await syncPostings(fbsPostings, "FBS");
+        } else {
+          console.error(`[ozon-sync-orders] Store ${ozonSetting.clientId} FBS API error ${fbsResponse.status}`);
         }
-      };
 
-      const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
-        method: "POST", headers, body: JSON.stringify(body),
-      });
-      if (fbsResponse.ok) {
-        const fbsData = await fbsResponse.json();
-        const fbsPostings = fbsData?.result?.postings || [];
-        console.log(`[ozon-sync-orders] FBS: ${fbsPostings.length} postings`);
-        await syncPostings(fbsPostings, "FBS");
-      } else {
-        console.error(`[ozon-sync-orders] FBS API error ${fbsResponse.status}`);
-      }
-
-      const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
-        method: "POST", headers, body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 50, offset: 0, with: { analytics_data: false, financial_data: false } }),
-      });
-      if (fboResponse.ok) {
-        const fboData = await fboResponse.json();
-        const fboPostings = fboData?.result || [];
-        console.log(`[ozon-sync-orders] FBO: ${fboPostings.length} postings`);
-        await syncPostings(fboPostings, "FBO");
-      } else {
-        console.error(`[ozon-sync-orders] FBO API error ${fboResponse.status}`);
+        const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
+          method: "POST", headers, body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 50, offset: 0, with: { analytics_data: false, financial_data: false } }),
+        });
+        if (fboResponse.ok) {
+          const fboData = await fboResponse.json();
+          const fboPostings = fboData?.result || [];
+          console.log(`[ozon-sync-orders] Store ${ozonSetting.clientId} FBO: ${fboPostings.length} postings`);
+          await syncPostings(fboPostings, "FBO");
+        } else {
+          console.error(`[ozon-sync-orders] Store ${ozonSetting.clientId} FBO API error ${fboResponse.status}`);
+        }
       }
 
       console.log(`[ozon-sync-orders] Sync complete: created=${created}, updated=${updated}, skipped=${skipped}`);
@@ -1953,18 +1972,12 @@ export async function registerRoutes(
         return res.status(400).json({ message: `Невозможно собрать заказ в статусе «${order.ozonStatus}»` });
       }
 
-      const allSettings = await storage.getMarketplaceSettings(orgId);
-      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
-      if (!ozonSetting) {
+      const headers = await getOzonHeadersForOrder(order, orgId);
+      if (!headers) {
         return res.status(400).json({ message: "Настройки Ozon не найдены" });
       }
 
       const BASE = "https://api-seller.ozon.ru";
-      const headers = {
-        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
-        "Api-Key": ozonSetting.apiKey.trim(),
-        "Content-Type": "application/json",
-      };
 
       console.log(`[ozon-ship] Fetching posting details for ${order.postingNumber}`);
       const getPostingRes = await fetch(`${BASE}/v3/posting/fbs/get`, {
@@ -2051,18 +2064,12 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Это не заказ Ozon" });
       }
 
-      const allSettings = await storage.getMarketplaceSettings(orgId);
-      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
-      if (!ozonSetting) {
+      const headers = await getOzonHeadersForOrder(order, orgId);
+      if (!headers) {
         return res.status(400).json({ message: "Настройки Ozon не найдены" });
       }
 
       const BASE = "https://api-seller.ozon.ru";
-      const headers = {
-        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
-        "Api-Key": ozonSetting.apiKey.trim(),
-        "Content-Type": "application/json",
-      };
 
       const cancelReason = req.body.reason || "seller_other";
       const cancelBody = {
@@ -2134,18 +2141,12 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Этикетки для FBO заказов недоступны — этикетки формирует Ozon" });
       }
 
-      const allSettings = await storage.getMarketplaceSettings(orgId);
-      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
-      if (!ozonSetting) {
+      const headers = await getOzonHeadersForOrder(order, orgId);
+      if (!headers) {
         return res.status(400).json({ message: "Настройки Ozon не найдены" });
       }
 
       const BASE = "https://api-seller.ozon.ru";
-      const headers = {
-        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
-        "Api-Key": ozonSetting.apiKey.trim(),
-        "Content-Type": "application/json",
-      };
 
       console.log(`[ozon-label] Creating 58x40 label for posting ${order.postingNumber}`);
 
@@ -2238,12 +2239,6 @@ export async function registerRoutes(
   app.post("/api/marketplace/ozon/bulk-labels", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const allSettings = await storage.getMarketplaceSettings(orgId);
-      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
-      if (!ozonSetting) {
-        return res.status(400).json({ message: "Настройки Ozon не найдены" });
-      }
-
       const allOrders = await storage.getOrders(orgId);
       const awaitingOrders = allOrders.filter(o =>
         o.source === "ozon" &&
@@ -2256,15 +2251,25 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Нет заказов для печати этикеток" });
       }
 
-      const postingNumbers = awaitingOrders.map(o => o.postingNumber!).slice(0, 20);
-      console.log(`[ozon-bulk-labels] Creating labels for ${postingNumbers.length} postings`);
+      const requestedStoreId = req.body.storeId ? Number(req.body.storeId) : null;
+      const filteredOrders = requestedStoreId != null
+        ? awaitingOrders.filter(o => o.storeId === requestedStoreId)
+        : awaitingOrders;
+
+      if (filteredOrders.length === 0) {
+        return res.status(400).json({ message: "Нет заказов для печати этикеток в этом магазине" });
+      }
+
+      const firstOrder = filteredOrders[0];
+      const headers = await getOzonHeadersForOrder(firstOrder, orgId);
+      if (!headers) {
+        return res.status(400).json({ message: "Настройки Ozon не найдены" });
+      }
+
+      const postingNumbers = filteredOrders.map(o => o.postingNumber!).slice(0, 20);
+      console.log(`[ozon-bulk-labels] Creating labels for ${postingNumbers.length} postings (storeId=${firstOrder.storeId})`);
 
       const BASE = "https://api-seller.ozon.ru";
-      const headers = {
-        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
-        "Api-Key": ozonSetting.apiKey.trim(),
-        "Content-Type": "application/json",
-      };
 
       const createRes = await fetch(`${BASE}/v2/posting/fbs/package-label/create`, {
         method: "POST",
@@ -2365,18 +2370,11 @@ export async function registerRoutes(
     try {
       const orgId = getOrgId(req);
       const allSettings = await storage.getMarketplaceSettings(orgId);
-      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+      const ozonSettings = allSettings.filter(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
 
-      if (!ozonSetting) {
+      if (ozonSettings.length === 0) {
         return res.status(400).json({ message: "Настройки Ozon не найдены" });
       }
-
-      const BASE = "https://api-seller.ozon.ru";
-      const headers = {
-        "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
-        "Api-Key": ozonSetting.apiKey.trim(),
-        "Content-Type": "application/json",
-      };
 
       const allOrders = await db.select().from(ordersTable)
         .where(and(
@@ -2389,8 +2387,9 @@ export async function registerRoutes(
         return res.json({ success: true, updated: 0, message: "No Ozon orders to resync" });
       }
 
-      console.log(`[ozon-resync] Starting resync for ${ozonOrders.length} Ozon orders in org ${orgId}`);
+      console.log(`[ozon-resync] Starting resync for ${ozonOrders.length} Ozon orders across ${ozonSettings.length} stores in org ${orgId}`);
 
+      const BASE = "https://api-seller.ozon.ru";
       const since = new Date();
       since.setDate(since.getDate() - 60);
       const body = {
@@ -2400,57 +2399,75 @@ export async function registerRoutes(
         offset: 0,
       };
 
-      const allPostings = new Map<string, any>();
-
-      const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
-        method: "POST", headers, body: JSON.stringify(body),
-      });
-      if (fbsResponse.ok) {
-        const fbsData = await fbsResponse.json();
-        for (const p of (fbsData?.result?.postings || [])) {
-          allPostings.set(p.posting_number, p);
-        }
-      }
-
-      const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
-        method: "POST", headers,
-        body: JSON.stringify({ ...body, with: { analytics_data: false, financial_data: false } }),
-      });
-      if (fboResponse.ok) {
-        const fboData = await fboResponse.json();
-        for (const p of (fboData?.result || [])) {
-          allPostings.set(p.posting_number, p);
-        }
-      }
-
-      console.log(`[ozon-resync] Found ${allPostings.size} postings from Ozon API`);
-
       let updated = 0;
-      for (const order of ozonOrders) {
-        const posting = allPostings.get(order.postingNumber!);
-        if (!posting) continue;
+      let totalApiPostings = 0;
 
-        const newOzonStatus = posting.status;
-        const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : null;
-        const internalStatus = ozonStatusToInternal(newOzonStatus);
+      for (const ozonSetting of ozonSettings) {
+        const { storeId: resolvedStoreId } = await resolveStoreForSetting(ozonSetting);
+        if (resolvedStoreId == null) {
+          console.warn(`[ozon-resync] Skipping setting clientId=${ozonSetting.clientId}: no matching store found`);
+          continue;
+        }
+        const headers = {
+          "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+          "Api-Key": ozonSetting.apiKey!.trim(),
+          "Content-Type": "application/json",
+        };
 
-        const needsStatusUpdate = order.ozonStatus !== newOzonStatus;
-        const needsDateUpdate = ozonCreatedAt && order.createdAt &&
-          Math.abs(new Date(order.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
+        const storeOrders = ozonOrders.filter(o => o.storeId === resolvedStoreId);
 
-        if (needsStatusUpdate || needsDateUpdate) {
-          await storage.updateOrderOzonStatus(
-            order.id,
-            newOzonStatus,
-            internalStatus,
-            needsDateUpdate ? ozonCreatedAt : undefined
-          );
-          updated++;
+        const allPostings = new Map<string, any>();
+
+        const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
+          method: "POST", headers, body: JSON.stringify(body),
+        });
+        if (fbsResponse.ok) {
+          const fbsData = await fbsResponse.json();
+          for (const p of (fbsData?.result?.postings || [])) {
+            allPostings.set(p.posting_number, p);
+          }
+        }
+
+        const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
+          method: "POST", headers,
+          body: JSON.stringify({ ...body, with: { analytics_data: false, financial_data: false } }),
+        });
+        if (fboResponse.ok) {
+          const fboData = await fboResponse.json();
+          for (const p of (fboData?.result || [])) {
+            allPostings.set(p.posting_number, p);
+          }
+        }
+
+        console.log(`[ozon-resync] Store ${ozonSetting.clientId}: ${allPostings.size} postings from API, ${storeOrders.length} local orders`);
+        totalApiPostings += allPostings.size;
+
+        for (const order of storeOrders) {
+          const posting = allPostings.get(order.postingNumber!);
+          if (!posting) continue;
+
+          const newOzonStatus = posting.status;
+          const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : null;
+          const internalStatus = ozonStatusToInternal(newOzonStatus);
+
+          const needsStatusUpdate = order.ozonStatus !== newOzonStatus;
+          const needsDateUpdate = ozonCreatedAt && order.createdAt &&
+            Math.abs(new Date(order.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
+
+          if (needsStatusUpdate || needsDateUpdate) {
+            await storage.updateOrderOzonStatus(
+              order.id,
+              newOzonStatus,
+              internalStatus,
+              needsDateUpdate ? ozonCreatedAt : undefined
+            );
+            updated++;
+          }
         }
       }
 
       console.log(`[ozon-resync] Resync complete: updated ${updated} of ${ozonOrders.length} orders`);
-      res.json({ success: true, updated, total: ozonOrders.length, apiPostings: allPostings.size });
+      res.json({ success: true, updated, total: ozonOrders.length, apiPostings: totalApiPostings });
     } catch (error: any) {
       console.error("[ozon-resync] Error:", error);
       res.status(500).json({ message: error.message });
@@ -2476,40 +2493,23 @@ export async function registerRoutes(
           "Content-Type": "application/json",
         };
 
-        const allOrgOrders = await db.select().from(ordersTable)
+        const { storeId: resolvedStoreId, companyId: resolvedCompanyId } = await resolveStoreForSetting(setting);
+
+        const allStoreOrders = await db.select().from(ordersTable)
           .where(and(
             eq(ordersTable.organizationId, orgId),
             eq(ordersTable.source, "ozon"),
+            ...(resolvedStoreId != null ? [eq(ordersTable.storeId, resolvedStoreId)] : []),
           ));
 
-        const existingPostingNumbers = new Set(allOrgOrders.filter(o => o.postingNumber).map(o => o.postingNumber!));
+        const existingPostingNumbers = new Set(allStoreOrders.filter(o => o.postingNumber).map(o => o.postingNumber!));
 
-        const pendingOrders = allOrgOrders.filter(o =>
+        const pendingOrders = allStoreOrders.filter(o =>
           o.postingNumber && o.ozonStatus &&
           !["delivered", "cancelled"].includes(o.ozonStatus)
         );
 
-        console.log(`[ozon-auto-sync] Checking ${pendingOrders.length} active orders for org ${orgId} (${allOrgOrders.length} total)`);
-
-        let resolvedStoreId: number | undefined;
-        let resolvedCompanyId: number | undefined;
-        if (setting.companyId) {
-          resolvedCompanyId = setting.companyId;
-          const companyStores = await storage.getStores(setting.companyId);
-          const ozonStore = companyStores.find(s => s.marketplace === "ozon");
-          if (ozonStore) resolvedStoreId = ozonStore.id;
-        } else {
-          const orgCompanies = await storage.getCompanies(orgId);
-          for (const company of orgCompanies) {
-            const companyStores = await storage.getStores(company.id);
-            const ozonStore = companyStores.find(s => s.marketplace === "ozon");
-            if (ozonStore) {
-              resolvedStoreId = ozonStore.id;
-              resolvedCompanyId = company.id;
-              break;
-            }
-          }
-        }
+        console.log(`[ozon-auto-sync] Store clientId=${setting.clientId}, storeId=${resolvedStoreId}: ${pendingOrders.length} active orders (${allStoreOrders.length} total)`);
 
         const since = new Date();
         since.setDate(since.getDate() - 30);
@@ -2531,7 +2531,7 @@ export async function registerRoutes(
               const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : undefined;
 
               if (existingPostingNumbers.has(pn)) {
-                const existing = allOrgOrders.find(o => o.postingNumber === pn);
+                const existing = allStoreOrders.find(o => o.postingNumber === pn);
                 if (existing && existing.ozonStatus !== newStatus) {
                   const internalStatus = ozonStatusToInternal(newStatus);
                   const needsDateUpdate = ozonCreatedAt && existing.createdAt &&
@@ -2566,8 +2566,8 @@ export async function registerRoutes(
                     postingNumber: pn,
                     ozonStatus: newStatus,
                     fulfillmentType,
-                    storeId: resolvedStoreId,
-                    companyId: resolvedCompanyId,
+                    storeId: resolvedStoreId ?? undefined,
+                    companyId: resolvedCompanyId ?? undefined,
                     organizationId: orgId,
                     createdAt: ozonCreatedAt || undefined,
                   }, items);
