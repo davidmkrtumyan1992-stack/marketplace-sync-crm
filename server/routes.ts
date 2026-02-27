@@ -7,7 +7,7 @@ import { api } from "@shared/routes";
 import { marketplaceSettings as marketplaceSettingsTable, products as productsTable, orders as ordersTable } from "@shared/schema";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { db } from "./db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -1657,16 +1657,16 @@ export async function registerRoutes(
     return map[status] || status;
   };
 
-  const resolveStoreForSetting = async (setting: { companyId: number | null; clientId: string | null }): Promise<{ storeId: number | null; companyId: number | null }> => {
+  const resolveStoreForSetting = async (setting: { companyId: number | null; clientId: string | null }): Promise<{ storeId: number | null; companyId: number | null; storeName: string | null }> => {
     if (setting.companyId) {
       const companyStores = await storage.getStores(setting.companyId);
       const ozonStore = companyStores.find(s => s.marketplace === "ozon" && s.clientId === setting.clientId);
-      if (ozonStore) return { storeId: ozonStore.id, companyId: setting.companyId };
+      if (ozonStore) return { storeId: ozonStore.id, companyId: setting.companyId, storeName: ozonStore.name };
       const anyOzonStore = companyStores.find(s => s.marketplace === "ozon");
-      if (anyOzonStore) return { storeId: anyOzonStore.id, companyId: setting.companyId };
-      return { storeId: null, companyId: setting.companyId };
+      if (anyOzonStore) return { storeId: anyOzonStore.id, companyId: setting.companyId, storeName: anyOzonStore.name };
+      return { storeId: null, companyId: setting.companyId, storeName: null };
     }
-    return { storeId: null, companyId: null };
+    return { storeId: null, companyId: null, storeName: null };
   };
 
   const getOzonHeadersForOrder = async (order: { storeId: number | null }, orgId: string): Promise<{ "Client-Id": string; "Api-Key": string; "Content-Type": string } | null> => {
@@ -1732,25 +1732,7 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Invalid Api-Key" });
       }
 
-      let resolvedStoreId: number | null = null;
-      let resolvedCompanyId: number | null = null;
-      if (setting.companyId) {
-        resolvedCompanyId = setting.companyId;
-        const companyStores = await storage.getStores(setting.companyId);
-        const ozonStore = companyStores.find(s => s.marketplace === "ozon");
-        if (ozonStore) resolvedStoreId = ozonStore.id;
-      } else {
-        const orgCompanies = await storage.getCompanies(orgId);
-        for (const company of orgCompanies) {
-          const companyStores = await storage.getStores(company.id);
-          const ozonStore = companyStores.find(s => s.marketplace === "ozon");
-          if (ozonStore) {
-            resolvedStoreId = ozonStore.id;
-            resolvedCompanyId = company.id;
-            break;
-          }
-        }
-      }
+      const { storeId: resolvedStoreId, companyId: resolvedCompanyId, storeName: resolvedStoreName } = await resolveStoreForSetting(setting);
 
       const data = req.body;
       const postingNumber = data?.posting_number || data?.posting?.posting_number;
@@ -1806,6 +1788,7 @@ export async function registerRoutes(
         postingNumber: postingNumber || null,
         ozonStatus: ozonStatus || null,
         storeId: resolvedStoreId,
+        sourceStoreName: resolvedStoreName,
         companyId: resolvedCompanyId,
         fulfillmentType: "FBS",
         organizationId: orgId,
@@ -1842,7 +1825,7 @@ export async function registerRoutes(
       let skipped = 0;
 
       for (const ozonSetting of ozonSettings) {
-        const { storeId: resolvedStoreId, companyId: resolvedCompanyId } = await resolveStoreForSetting(ozonSetting);
+        const { storeId: resolvedStoreId, companyId: resolvedCompanyId, storeName: resolvedStoreName } = await resolveStoreForSetting(ozonSetting);
         const headers = {
           "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
           "Api-Key": ozonSetting.apiKey!.trim(),
@@ -1856,7 +1839,7 @@ export async function registerRoutes(
           offset: 0,
         };
 
-        console.log(`[ozon-sync-orders] Fetching FBS+FBO for store clientId=${ozonSetting.clientId}, storeId=${resolvedStoreId}, companyId=${resolvedCompanyId}`);
+        console.log(`[ozon-sync-orders] Fetching FBS+FBO for store «${resolvedStoreName}» clientId=${ozonSetting.clientId}, storeId=${resolvedStoreId}`);
 
         const syncPostings = async (postings: any[], fulfillmentType: string) => {
           for (const posting of postings) {
@@ -1910,6 +1893,7 @@ export async function registerRoutes(
                 ozonStatus,
                 fulfillmentType,
                 storeId: resolvedStoreId,
+                sourceStoreName: resolvedStoreName,
                 companyId: resolvedCompanyId,
                 organizationId: orgId,
                 createdAt: ozonCreatedAt || undefined,
@@ -2493,7 +2477,7 @@ export async function registerRoutes(
           "Content-Type": "application/json",
         };
 
-        const { storeId: resolvedStoreId, companyId: resolvedCompanyId } = await resolveStoreForSetting(setting);
+        const { storeId: resolvedStoreId, companyId: resolvedCompanyId, storeName: resolvedStoreName } = await resolveStoreForSetting(setting);
 
         const allStoreOrders = await db.select().from(ordersTable)
           .where(and(
@@ -2567,6 +2551,7 @@ export async function registerRoutes(
                     ozonStatus: newStatus,
                     fulfillmentType,
                     storeId: resolvedStoreId ?? undefined,
+                    sourceStoreName: resolvedStoreName ?? undefined,
                     companyId: resolvedCompanyId ?? undefined,
                     organizationId: orgId,
                     createdAt: ozonCreatedAt || undefined,
@@ -2610,6 +2595,22 @@ export async function registerRoutes(
       console.error("[ozon-auto-sync] Error:", error);
     }
   };
+
+  (async () => {
+    try {
+      const result = await db.execute(sql`
+        UPDATE orders SET source_store_name = stores.name
+        FROM stores
+        WHERE orders.store_id = stores.id
+        AND orders.source_store_name IS NULL
+        AND orders.store_id IS NOT NULL
+      `);
+      const count = (result as any)?.rowCount || 0;
+      if (count > 0) console.log(`[backfill] Updated sourceStoreName for ${count} existing orders`);
+    } catch (e: any) {
+      console.error("[backfill] Error:", e.message);
+    }
+  })();
 
   setInterval(autoSyncOzonStatuses, OZON_SYNC_INTERVAL);
   setTimeout(autoSyncOzonStatuses, 10000);

@@ -107,6 +107,7 @@ export const orders = pgTable("orders", {
   fulfillmentType: text("fulfillment_type"),
   companyId: integer("company_id").references(() => companies.id),
   storeId: integer("store_id").references(() => stores.id),
+  sourceStoreName: text("source_store_name"),
   organizationId: text("organization_id").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });

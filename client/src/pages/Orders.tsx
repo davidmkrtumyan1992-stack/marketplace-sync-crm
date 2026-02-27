@@ -124,6 +124,7 @@ export default function Orders() {
   const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("all");
   const [fbsSubFilter, setFbsSubFilter] = useState<FbsSubFilter>("all");
   const [fboSubFilter, setFboSubFilter] = useState<FboSubFilter>("all");
+  const [storeFilter, setStoreFilter] = useState<"all" | number>("all");
   const syncOzonOrders = useSyncOzonOrders();
   const resyncOzonOrders = useResyncOzonOrders();
   const silentSync = useSilentSyncOzonOrders();
@@ -141,9 +142,18 @@ export default function Orders() {
     return map;
   }, [storesList]);
 
+  const ozonStores = useMemo(() => {
+    if (!storesList) return [];
+    return storesList.filter(s => s.marketplace === "ozon");
+  }, [storesList]);
+
   const filteredOrders = useMemo(() => {
     if (!orders) return [];
     let result = orders;
+
+    if (storeFilter !== "all") {
+      result = result.filter((o: any) => o.storeId === storeFilter);
+    }
 
     if (fulfillmentFilter === "direct") {
       result = result.filter((o: any) => o.source === "direct" || o.source === "manual");
@@ -197,13 +207,18 @@ export default function Orders() {
     }
 
     return result;
-  }, [orders, fulfillmentFilter, fbsSubFilter, fboSubFilter]);
+  }, [orders, fulfillmentFilter, fbsSubFilter, fboSubFilter, storeFilter]);
 
   const dateGroups = useMemo(() => groupOrdersByDate(filteredOrders), [filteredOrders]);
 
+  const storeFilteredOrders = useMemo(() => {
+    if (!orders) return [];
+    if (storeFilter === "all") return orders;
+    return orders.filter((o: any) => o.storeId === storeFilter);
+  }, [orders, storeFilter]);
+
   const fbsStatusCounts = useMemo(() => {
-    if (!orders) return {} as Record<string, number>;
-    const fbsOrders = orders.filter((o: any) => o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon"));
+    const fbsOrders = storeFilteredOrders.filter((o: any) => o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon"));
     return {
       all: fbsOrders.length,
       awaiting_packaging: fbsOrders.filter((o: any) => o.ozonStatus === "awaiting_packaging").length,
@@ -213,13 +228,12 @@ export default function Orders() {
       delivered: fbsOrders.filter((o: any) => o.ozonStatus === "delivered").length,
       cancelled: fbsOrders.filter((o: any) => o.ozonStatus === "cancelled").length,
     };
-  }, [orders]);
+  }, [storeFilteredOrders]);
 
   const awaitingShipmentCount = (fbsStatusCounts.awaiting_packaging || 0) + (fbsStatusCounts.awaiting_deliver || 0);
 
   const fboStatusCounts = useMemo(() => {
-    if (!orders) return {} as Record<string, number>;
-    const fboOrders = orders.filter((o: any) => o.fulfillmentType === "FBO");
+    const fboOrders = storeFilteredOrders.filter((o: any) => o.fulfillmentType === "FBO");
     return {
       all: fboOrders.length,
       awaiting_packaging: fboOrders.filter((o: any) => o.ozonStatus === "awaiting_packaging").length,
@@ -228,7 +242,7 @@ export default function Orders() {
       delivered: fboOrders.filter((o: any) => o.ozonStatus === "delivered").length,
       cancelled: fboOrders.filter((o: any) => o.ozonStatus === "cancelled").length,
     };
-  }, [orders]);
+  }, [storeFilteredOrders]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -271,8 +285,8 @@ export default function Orders() {
     return <Badge variant="outline" className="text-xs">Вручную</Badge>;
   };
 
-  const pendingCount = orders?.filter((o: any) => o.status === "pending").length || 0;
-  const totalRevenue = orders?.reduce((sum: number, o: any) => sum + Number(o.totalAmount), 0) || 0;
+  const pendingCount = storeFilteredOrders.filter((o: any) => o.status === "pending").length;
+  const totalRevenue = storeFilteredOrders.reduce((sum: number, o: any) => sum + Number(o.totalAmount), 0);
 
   return (
     <Layout>
@@ -314,7 +328,7 @@ export default function Orders() {
         <div className="flex flex-wrap gap-3">
           <span className="teal-badge">
             <ShoppingCart className="w-4 h-4 mr-1.5 inline" />
-            Всего: {orders?.length || 0}
+            Всего: {storeFilteredOrders.length}
           </span>
           {pendingCount > 0 && (
             <span className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 px-3 py-1.5 rounded-full text-sm font-medium">
@@ -326,6 +340,42 @@ export default function Orders() {
             {formatCurrency(totalRevenue)}
           </span>
         </div>
+
+        {ozonStores.length > 1 && (
+          <div className="flex gap-2 flex-wrap items-center" data-testid="store-filter-tabs">
+            <span className="text-sm text-muted-foreground mr-1">Магазин:</span>
+            <Button
+              variant={storeFilter === "all" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setStoreFilter("all")}
+              data-testid="button-store-filter-all"
+            >
+              Все магазины
+            </Button>
+            {ozonStores.map((store, idx) => {
+              const storeColors = [
+                "bg-teal-100 text-teal-800 border-teal-300 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:border-teal-700",
+                "bg-purple-100 text-purple-800 border-purple-300 hover:bg-purple-200 dark:bg-purple-900/40 dark:text-purple-300 dark:border-purple-700",
+                "bg-orange-100 text-orange-800 border-orange-300 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300 dark:border-orange-700",
+                "bg-pink-100 text-pink-800 border-pink-300 hover:bg-pink-200 dark:bg-pink-900/40 dark:text-pink-300 dark:border-pink-700",
+              ];
+              const colorClass = storeColors[idx % storeColors.length];
+              return (
+                <Button
+                  key={store.id}
+                  variant={storeFilter === store.id ? "default" : "outline"}
+                  size="sm"
+                  className={storeFilter !== store.id ? colorClass : ""}
+                  onClick={() => setStoreFilter(store.id)}
+                  data-testid={`button-store-filter-${store.id}`}
+                >
+                  <Store className="w-3.5 h-3.5 mr-1.5" />
+                  {store.name}
+                </Button>
+              );
+            })}
+          </div>
+        )}
 
         <div className="flex gap-2 flex-wrap" data-testid="fulfillment-filter-tabs">
           {([
@@ -463,7 +513,9 @@ export default function Orders() {
                     <OrderCard
                       key={order.id}
                       order={order}
-                      storeName={order.storeId ? storesMap.get(order.storeId) : undefined}
+                      storeName={order.sourceStoreName || (order.storeId ? storesMap.get(order.storeId) : undefined)}
+                      storeId={order.storeId}
+                      ozonStores={ozonStores}
                       getStatusColor={getStatusColor}
                       getStatusLabel={getStatusLabel}
                       getSourceBadge={getSourceBadge}
@@ -494,9 +546,11 @@ export default function Orders() {
   );
 }
 
-function OrderCard({ order, storeName, getStatusColor, getStatusLabel, getSourceBadge, onClick }: { 
+function OrderCard({ order, storeName, storeId, ozonStores, getStatusColor, getStatusLabel, getSourceBadge, onClick }: { 
   order: any; 
   storeName?: string;
+  storeId?: number | null;
+  ozonStores: { id: number; name: string }[];
   getStatusColor: (s: string) => string; 
   getStatusLabel: (s: string) => string;
   getSourceBadge: (s: string) => React.ReactNode;
@@ -546,12 +600,22 @@ function OrderCard({ order, storeName, getStatusColor, getStatusLabel, getSource
               <div className="flex items-center gap-3 flex-wrap">
                 <h3 className="font-bold text-lg">{order.orderNumber}</h3>
                 {getSourceBadge(order.source)}
-                {storeName && (
-                  <Badge variant="outline" className="text-xs" data-testid={`badge-store-name-${order.id}`}>
-                    <Store className="w-3 h-3 mr-1" />
-                    {storeName}
-                  </Badge>
-                )}
+                {storeName && (() => {
+                  const storeColorStyles = [
+                    "bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-900/40 dark:text-teal-300 dark:border-teal-700",
+                    "bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-900/40 dark:text-purple-300 dark:border-purple-700",
+                    "bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-900/40 dark:text-orange-300 dark:border-orange-700",
+                    "bg-pink-100 text-pink-800 border-pink-300 dark:bg-pink-900/40 dark:text-pink-300 dark:border-pink-700",
+                  ];
+                  const storeIdx = ozonStores.findIndex(s => s.id === storeId);
+                  const colorClass = storeIdx >= 0 ? storeColorStyles[storeIdx % storeColorStyles.length] : storeColorStyles[0];
+                  return (
+                    <Badge className={`text-xs ${colorClass}`} data-testid={`badge-store-name-${order.id}`}>
+                      <Store className="w-3 h-3 mr-1" />
+                      {storeName}
+                    </Badge>
+                  );
+                })()}
               </div>
               <div className="flex flex-wrap items-center gap-4 mt-2 text-sm text-muted-foreground">
                 <span className="flex items-center gap-1.5">

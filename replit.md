@@ -14,7 +14,7 @@ Key capabilities include:
 - CRM for customer management and full audit logging for inventory changes.
 - Marketplace synchronization infrastructure with detailed history logging for Ozon, Wildberries, and Yandex Market.
 - Ozon dual-mode FBS/FBO order management: webhook-based and polling-based order sync for both FBS and FBO, ship/cancel actions via Ozon API, FBS label printing, posting number tracking, Ozon status display, fulfillment type badges and filtering.
-- Multi-account Ozon integration: supports multiple Ozon stores per organization. Background worker, manual sync, resync, and order actions (ship/cancel/label) all resolve API credentials per-store using `storeId`. Orders are deduplicated per-store (same posting number from different stores = separate orders). Store name badges displayed in Orders UI.
+- Multi-account Ozon integration: supports multiple Ozon stores per organization. Background worker, manual sync, resync, and order actions (ship/cancel/label) all resolve API credentials per-store using `storeId`. Orders are deduplicated per-store (same posting number from different stores = separate orders). Store name badges displayed in Orders UI with color-coded styling (teal/purple/orange/pink). Store toggle filter in Orders UI filters orders, status counts, and KPI totals by store. Denormalized `sourceStoreName` field on orders for fast display.
 - Excel export functionality for products and P&L reports.
 The UI is fully localized in Russian.
 
