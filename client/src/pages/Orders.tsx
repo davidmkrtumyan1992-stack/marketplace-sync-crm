@@ -53,10 +53,12 @@ const OZON_STATUS_LABELS: Record<string, string> = {
   not_accepted: "Не принят",
 };
 
-type FulfillmentFilter = "all" | "FBS" | "FBO" | "direct" | "yandex";
+type MarketplaceTab = "ozon" | "yandex" | "wildberries";
+type OzonSubFilter = "all" | "FBS" | "FBO" | "direct";
 type FbsSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "dispute" | "delivered" | "cancelled";
 type FboSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "delivered" | "cancelled";
-type YandexSubFilter = "all" | "NEW" | "PROCESSING" | "READY_TO_SHIP" | "DELIVERY" | "DELIVERED" | "CANCELLED";
+type YandexSubFilter = "all" | "NEW" | "READY_TO_SHIP" | "NOT_SHIPPED" | "WAITING_COURIER" | "DELIVERY" | "DELIVERED" | "CANCELLED";
+type WbSubFilter = "all" | "new" | "assembling" | "assembled" | "transit" | "delivered" | "cancelled";
 
 function getMarketplaceStatusLabel(ozonStatus: string | null | undefined): string {
   if (!ozonStatus) return "Новый";
@@ -82,10 +84,10 @@ function getYandexStatusLabel(yandexStatus: string | null | undefined): string {
   if (!yandexStatus) return "Новый";
   switch (yandexStatus) {
     case "NEW": return "Новый";
-    case "PROCESSING": return "Ожидает сборки";
+    case "PROCESSING": return "В обработке";
     case "READY_TO_SHIP": return "Ожидает отгрузки";
-    case "DELIVERY": return "Доставка";
-    case "PICKUP": return "Ожидает получения";
+    case "DELIVERY": return "Доставка в процессе";
+    case "PICKUP": return "Ожидает курьера";
     case "DELIVERED": return "Доставлено";
     case "CANCELLED": return "Отменено";
     case "RETURNED": return "Возвращено";
@@ -116,12 +118,29 @@ const FBO_SUB_FILTERS: { key: FboSubFilter; label: string; icon: any }[] = [
 
 const YANDEX_SUB_FILTERS: { key: YandexSubFilter; label: string; icon: any }[] = [
   { key: "all", label: "Все", icon: Package },
-  { key: "NEW", label: "Новые", icon: Clock },
-  { key: "PROCESSING", label: "Ожидают сборки", icon: Package },
-  { key: "READY_TO_SHIP", label: "Ожидают отгрузки", icon: Package },
-  { key: "DELIVERY", label: "Доставляются", icon: Truck },
-  { key: "DELIVERED", label: "Доставлены", icon: CheckCircle },
-  { key: "CANCELLED", label: "Отменены", icon: XCircle },
+  { key: "NEW", label: "Новый", icon: Clock },
+  { key: "READY_TO_SHIP", label: "Ожидает отгрузки", icon: Package },
+  { key: "NOT_SHIPPED", label: "Не отправлено", icon: AlertTriangle },
+  { key: "WAITING_COURIER", label: "Ожидает курьера", icon: Truck },
+  { key: "DELIVERY", label: "Доставка в процессе", icon: Truck },
+  { key: "DELIVERED", label: "Доставлено", icon: CheckCircle },
+  { key: "CANCELLED", label: "Отменено", icon: XCircle },
+];
+
+const WB_SUB_FILTERS: { key: WbSubFilter; label: string; icon: any }[] = [
+  { key: "all", label: "Все", icon: Package },
+  { key: "new", label: "Новое", icon: Clock },
+  { key: "assembling", label: "На сборке", icon: Package },
+  { key: "assembled", label: "Собрано", icon: CheckCircle },
+  { key: "transit", label: "Транзит", icon: Truck },
+  { key: "delivered", label: "Доставлено", icon: CheckCircle },
+  { key: "cancelled", label: "Отмена", icon: XCircle },
+];
+
+const MARKETPLACE_TABS: { key: MarketplaceTab; label: string; bg: string; color: string; activeBorder: string }[] = [
+  { key: "ozon", label: "Ozon", bg: "#005BFF", color: "#FFFFFF", activeBorder: "border-[#005BFF]" },
+  { key: "yandex", label: "Yandex Market", bg: "#FFCC00", color: "#000000", activeBorder: "border-[#FFCC00]" },
+  { key: "wildberries", label: "Wildberries", bg: "#CB11AB", color: "#FFFFFF", activeBorder: "border-[#CB11AB]" },
 ];
 
 
@@ -149,11 +168,15 @@ export default function Orders() {
   const { data: orders, isLoading } = useOrders();
   const [isDirectSaleOpen, setIsDirectSaleOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
-  const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("all");
+
+  const [marketplaceTab, setMarketplaceTab] = useState<MarketplaceTab>("ozon");
+  const [ozonSubFilter, setOzonSubFilter] = useState<OzonSubFilter>("all");
   const [fbsSubFilter, setFbsSubFilter] = useState<FbsSubFilter>("all");
   const [fboSubFilter, setFboSubFilter] = useState<FboSubFilter>("all");
   const [yandexSubFilter, setYandexSubFilter] = useState<YandexSubFilter>("all");
+  const [wbSubFilter, setWbSubFilter] = useState<WbSubFilter>("all");
   const [storeFilter, setStoreFilter] = useState<"all" | number>("all");
+
   const syncOzonOrders = useSyncOzonOrders();
   const syncYandexOrders = useSyncYandexOrders();
   const resyncOzonOrders = useResyncOzonOrders();
@@ -182,6 +205,28 @@ export default function Orders() {
     return storesList.filter(s => s.marketplace === "yandex");
   }, [storesList]);
 
+  const wbStores = useMemo(() => {
+    if (!storesList) return [];
+    return storesList.filter(s => s.marketplace === "wildberries" || s.marketplace === "wb");
+  }, [storesList]);
+
+  const activeMarketplaceStores = useMemo(() => {
+    if (marketplaceTab === "ozon") return ozonStores;
+    if (marketplaceTab === "yandex") return yandexStores;
+    if (marketplaceTab === "wildberries") return wbStores;
+    return [];
+  }, [marketplaceTab, ozonStores, yandexStores, wbStores]);
+
+  const switchMarketplaceTab = (tab: MarketplaceTab) => {
+    setMarketplaceTab(tab);
+    setOzonSubFilter("all");
+    setFbsSubFilter("all");
+    setFboSubFilter("all");
+    setYandexSubFilter("all");
+    setWbSubFilter("all");
+    setStoreFilter("all");
+  };
+
   const syncingStores = useMemo(() => {
     if (!ozonStores.length || !orders) return [];
     return ozonStores.filter(store => {
@@ -190,90 +235,78 @@ export default function Orders() {
     });
   }, [ozonStores, orders]);
 
-  const filteredOrders = useMemo(() => {
+  const marketplaceOrders = useMemo(() => {
     if (!orders) return [];
     let result = orders;
-
+    if (marketplaceTab === "ozon") {
+      result = result.filter((o: any) => o.source === "ozon" || o.source === "direct" || o.source === "manual");
+    } else if (marketplaceTab === "yandex") {
+      result = result.filter((o: any) => o.source === "yandex");
+    } else if (marketplaceTab === "wildberries") {
+      result = result.filter((o: any) => o.source === "wildberries" || o.source === "wb");
+    }
     if (storeFilter !== "all") {
       result = result.filter((o: any) => o.storeId === storeFilter);
     }
+    return result;
+  }, [orders, marketplaceTab, storeFilter]);
 
-    if (fulfillmentFilter === "direct") {
-      result = result.filter((o: any) => o.source === "direct" || o.source === "manual");
-    } else if (fulfillmentFilter === "FBS") {
-      result = result.filter((o: any) => (o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon")) && o.source !== "yandex");
-    } else if (fulfillmentFilter === "FBO") {
-      result = result.filter((o: any) => o.fulfillmentType === "FBO");
-    } else if (fulfillmentFilter === "yandex") {
-      result = result.filter((o: any) => o.source === "yandex");
+  const filteredOrders = useMemo(() => {
+    let result = marketplaceOrders;
+
+    if (marketplaceTab === "ozon") {
+      if (ozonSubFilter === "direct") {
+        result = result.filter((o: any) => o.source === "direct" || o.source === "manual");
+      } else if (ozonSubFilter === "FBS") {
+        result = result.filter((o: any) => (o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon")) && o.source !== "direct" && o.source !== "manual");
+      } else if (ozonSubFilter === "FBO") {
+        result = result.filter((o: any) => o.fulfillmentType === "FBO");
+      }
+
+      if (ozonSubFilter === "FBS" && fbsSubFilter !== "all") {
+        switch (fbsSubFilter) {
+          case "awaiting_packaging": result = result.filter((o: any) => o.ozonStatus === "awaiting_packaging"); break;
+          case "awaiting_deliver": result = result.filter((o: any) => o.ozonStatus === "awaiting_deliver"); break;
+          case "delivering": result = result.filter((o: any) => o.ozonStatus === "delivering"); break;
+          case "dispute": result = result.filter((o: any) => o.ozonStatus === "arbitration"); break;
+          case "delivered": result = result.filter((o: any) => o.ozonStatus === "delivered"); break;
+          case "cancelled": result = result.filter((o: any) => o.ozonStatus === "cancelled"); break;
+        }
+      }
+      if (ozonSubFilter === "FBO" && fboSubFilter !== "all") {
+        switch (fboSubFilter) {
+          case "awaiting_packaging": result = result.filter((o: any) => o.ozonStatus === "awaiting_packaging"); break;
+          case "awaiting_deliver": result = result.filter((o: any) => o.ozonStatus === "awaiting_deliver"); break;
+          case "delivering": result = result.filter((o: any) => o.ozonStatus === "delivering"); break;
+          case "delivered": result = result.filter((o: any) => o.ozonStatus === "delivered"); break;
+          case "cancelled": result = result.filter((o: any) => o.ozonStatus === "cancelled"); break;
+        }
+      }
     }
 
-    if (fulfillmentFilter === "yandex" && yandexSubFilter !== "all") {
+    if (marketplaceTab === "yandex" && yandexSubFilter !== "all") {
       if (yandexSubFilter === "DELIVERY") {
-        result = result.filter((o: any) => o.yandexStatus === "DELIVERY" || o.yandexStatus === "PICKUP");
+        result = result.filter((o: any) => o.yandexStatus === "DELIVERY");
       } else if (yandexSubFilter === "CANCELLED") {
         result = result.filter((o: any) => o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED");
+      } else if (yandexSubFilter === "NEW") {
+        result = result.filter((o: any) => o.yandexStatus === "NEW" || o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED");
+      } else if (yandexSubFilter === "WAITING_COURIER") {
+        result = result.filter((o: any) => o.yandexStatus === "PICKUP");
+      } else if (yandexSubFilter === "NOT_SHIPPED") {
+        result = result.filter((o: any) => o.yandexStatus === "UNPAID");
       } else {
         result = result.filter((o: any) => o.yandexStatus === yandexSubFilter);
       }
     }
 
-    if (fulfillmentFilter === "FBS" && fbsSubFilter !== "all") {
-      switch (fbsSubFilter) {
-        case "awaiting_packaging":
-          result = result.filter((o: any) => o.ozonStatus === "awaiting_packaging");
-          break;
-        case "awaiting_deliver":
-          result = result.filter((o: any) => o.ozonStatus === "awaiting_deliver");
-          break;
-        case "delivering":
-          result = result.filter((o: any) => o.ozonStatus === "delivering");
-          break;
-        case "dispute":
-          result = result.filter((o: any) => o.ozonStatus === "arbitration");
-          break;
-        case "delivered":
-          result = result.filter((o: any) => o.ozonStatus === "delivered");
-          break;
-        case "cancelled":
-          result = result.filter((o: any) => o.ozonStatus === "cancelled");
-          break;
-      }
-    }
-
-    if (fulfillmentFilter === "FBO" && fboSubFilter !== "all") {
-      switch (fboSubFilter) {
-        case "awaiting_packaging":
-          result = result.filter((o: any) => o.ozonStatus === "awaiting_packaging");
-          break;
-        case "awaiting_deliver":
-          result = result.filter((o: any) => o.ozonStatus === "awaiting_deliver");
-          break;
-        case "delivering":
-          result = result.filter((o: any) => o.ozonStatus === "delivering");
-          break;
-        case "delivered":
-          result = result.filter((o: any) => o.ozonStatus === "delivered");
-          break;
-        case "cancelled":
-          result = result.filter((o: any) => o.ozonStatus === "cancelled");
-          break;
-      }
-    }
-
     return result;
-  }, [orders, fulfillmentFilter, fbsSubFilter, fboSubFilter, yandexSubFilter, storeFilter]);
+  }, [marketplaceOrders, marketplaceTab, ozonSubFilter, fbsSubFilter, fboSubFilter, yandexSubFilter]);
 
   const dateGroups = useMemo(() => groupOrdersByDate(filteredOrders), [filteredOrders]);
 
-  const storeFilteredOrders = useMemo(() => {
-    if (!orders) return [];
-    if (storeFilter === "all") return orders;
-    return orders.filter((o: any) => o.storeId === storeFilter);
-  }, [orders, storeFilter]);
-
   const fbsStatusCounts = useMemo(() => {
-    const fbsOrders = storeFilteredOrders.filter((o: any) => o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon"));
+    const fbsOrders = marketplaceOrders.filter((o: any) => (o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon")) && o.source !== "direct" && o.source !== "manual");
     return {
       all: fbsOrders.length,
       awaiting_packaging: fbsOrders.filter((o: any) => o.ozonStatus === "awaiting_packaging").length,
@@ -283,12 +316,12 @@ export default function Orders() {
       delivered: fbsOrders.filter((o: any) => o.ozonStatus === "delivered").length,
       cancelled: fbsOrders.filter((o: any) => o.ozonStatus === "cancelled").length,
     };
-  }, [storeFilteredOrders]);
+  }, [marketplaceOrders]);
 
   const awaitingShipmentCount = (fbsStatusCounts.awaiting_packaging || 0) + (fbsStatusCounts.awaiting_deliver || 0);
 
   const fboStatusCounts = useMemo(() => {
-    const fboOrders = storeFilteredOrders.filter((o: any) => o.fulfillmentType === "FBO");
+    const fboOrders = marketplaceOrders.filter((o: any) => o.fulfillmentType === "FBO");
     return {
       all: fboOrders.length,
       awaiting_packaging: fboOrders.filter((o: any) => o.ozonStatus === "awaiting_packaging").length,
@@ -297,20 +330,21 @@ export default function Orders() {
       delivered: fboOrders.filter((o: any) => o.ozonStatus === "delivered").length,
       cancelled: fboOrders.filter((o: any) => o.ozonStatus === "cancelled").length,
     };
-  }, [storeFilteredOrders]);
+  }, [marketplaceOrders]);
 
   const yandexStatusCounts = useMemo(() => {
-    const yandexOrders = storeFilteredOrders.filter((o: any) => o.source === "yandex");
+    const yOrders = marketplaceOrders;
     return {
-      all: yandexOrders.length,
-      NEW: yandexOrders.filter((o: any) => o.yandexStatus === "NEW").length,
-      PROCESSING: yandexOrders.filter((o: any) => o.yandexStatus === "PROCESSING").length,
-      READY_TO_SHIP: yandexOrders.filter((o: any) => o.yandexStatus === "READY_TO_SHIP").length,
-      DELIVERY: yandexOrders.filter((o: any) => o.yandexStatus === "DELIVERY" || o.yandexStatus === "PICKUP").length,
-      DELIVERED: yandexOrders.filter((o: any) => o.yandexStatus === "DELIVERED").length,
-      CANCELLED: yandexOrders.filter((o: any) => o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED").length,
+      all: yOrders.length,
+      NEW: yOrders.filter((o: any) => o.yandexStatus === "NEW" || o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED").length,
+      READY_TO_SHIP: yOrders.filter((o: any) => o.yandexStatus === "READY_TO_SHIP").length,
+      NOT_SHIPPED: yOrders.filter((o: any) => o.yandexStatus === "UNPAID").length,
+      WAITING_COURIER: yOrders.filter((o: any) => o.yandexStatus === "PICKUP").length,
+      DELIVERY: yOrders.filter((o: any) => o.yandexStatus === "DELIVERY").length,
+      DELIVERED: yOrders.filter((o: any) => o.yandexStatus === "DELIVERED").length,
+      CANCELLED: yOrders.filter((o: any) => o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED").length,
     };
-  }, [storeFilteredOrders]);
+  }, [marketplaceOrders]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -353,49 +387,25 @@ export default function Orders() {
     return <Badge variant="outline" className="text-xs">Вручную</Badge>;
   };
 
-  const pendingCount = storeFilteredOrders.filter((o: any) => o.status === "pending").length;
-  const totalRevenue = storeFilteredOrders.reduce((sum: number, o: any) => sum + Number(o.totalAmount), 0);
+  const pendingCount = marketplaceOrders.filter((o: any) => o.status === "pending").length;
+  const totalRevenue = marketplaceOrders.reduce((sum: number, o: any) => sum + Number(o.totalAmount), 0);
+
+  const storeColors = [
+    "bg-teal-100 text-teal-800 border-teal-300 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:border-teal-700",
+    "bg-purple-100 text-purple-800 border-purple-300 hover:bg-purple-200 dark:bg-purple-900/40 dark:text-purple-300 dark:border-purple-700",
+    "bg-orange-100 text-orange-800 border-orange-300 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300 dark:border-orange-700",
+    "bg-pink-100 text-pink-800 border-pink-300 hover:bg-pink-200 dark:bg-pink-900/40 dark:text-pink-300 dark:border-pink-700",
+  ];
 
   return (
     <Layout>
-      <div className="space-y-8">
+      <div className="space-y-6">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-4xl font-bold tracking-tight" data-testid="text-orders-title">Заказы</h1>
             <p className="text-muted-foreground mt-2 text-lg">Отслеживание и выполнение заказов</p>
           </div>
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => syncOzonOrders.mutate()}
-              disabled={syncOzonOrders.isPending}
-              data-testid="button-sync-ozon-orders"
-            >
-              {syncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-              {syncOzonOrders.isPending && ozonStores.length > 0
-                ? `Синхронизация ${ozonStores.length > 1 ? ozonStores.map(s => s.name).join(", ") + "..." : "магазина " + ozonStores[0].name + "..."}`
-                : "Загрузить заказы Ozon"}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => syncYandexOrders.mutate()}
-              disabled={syncYandexOrders.isPending}
-              data-testid="button-sync-yandex-orders"
-            >
-              {syncYandexOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-              {syncYandexOrders.isPending
-                ? `Синхронизация Yandex${yandexStores.length > 0 ? " (" + yandexStores.map(s => s.name).join(", ") + ")..." : "..."}`
-                : "Загрузить заказы Yandex"}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => resyncOzonOrders.mutate()}
-              disabled={resyncOzonOrders.isPending}
-              data-testid="button-resync-ozon-orders"
-            >
-              {resyncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-              Пересинхронизация
-            </Button>
             <Button
               data-testid="button-direct-sale"
               onClick={() => setIsDirectSaleOpen(true)}
@@ -406,19 +416,326 @@ export default function Orders() {
           </div>
         </div>
 
-        {syncingStores.length > 0 && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 text-sm" data-testid="sync-status-banner">
-            <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
-            <span>
-              Синхронизация товаров для {syncingStores.map(s => `«${s.name}»`).join(", ")}… Заказы появятся после завершения импорта и синхронизации.
-            </span>
-          </div>
+        <div className="flex gap-1 p-1 bg-muted/50 rounded-xl border" data-testid="marketplace-tabs">
+          {MARKETPLACE_TABS.map((tab) => {
+            const isActive = marketplaceTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                onClick={() => switchMarketplaceTab(tab.key)}
+                className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  isActive ? "shadow-sm" : "hover:bg-muted"
+                }`}
+                style={isActive ? { backgroundColor: tab.bg, color: tab.color } : {}}
+                data-testid={`tab-marketplace-${tab.key}`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {marketplaceTab === "ozon" && (
+          <>
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => syncOzonOrders.mutate()}
+                disabled={syncOzonOrders.isPending}
+                data-testid="button-sync-ozon-orders"
+              >
+                {syncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                {syncOzonOrders.isPending && ozonStores.length > 0
+                  ? `Синхронизация ${ozonStores.length > 1 ? ozonStores.map(s => s.name).join(", ") + "..." : "магазина " + ozonStores[0].name + "..."}`
+                  : "Загрузить заказы Ozon"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => resyncOzonOrders.mutate()}
+                disabled={resyncOzonOrders.isPending}
+                data-testid="button-resync-ozon-orders"
+              >
+                {resyncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                Пересинхронизация
+              </Button>
+            </div>
+
+            {syncingStores.length > 0 && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 text-sm" data-testid="sync-status-banner">
+                <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                <span>
+                  Синхронизация товаров для {syncingStores.map(s => `«${s.name}»`).join(", ")}… Заказы появятся после завершения импорта и синхронизации.
+                </span>
+              </div>
+            )}
+
+            {ozonStores.length > 1 && (
+              <div className="flex gap-2 flex-wrap items-center" data-testid="store-filter-tabs">
+                <span className="text-sm text-muted-foreground mr-1">Магазин:</span>
+                <Button
+                  variant={storeFilter === "all" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setStoreFilter("all")}
+                  data-testid="button-store-filter-all"
+                >
+                  Все магазины
+                </Button>
+                {ozonStores.map((store, idx) => (
+                  <Button
+                    key={store.id}
+                    variant={storeFilter === store.id ? "default" : "outline"}
+                    size="sm"
+                    className={storeFilter !== store.id ? storeColors[idx % storeColors.length] : ""}
+                    onClick={() => setStoreFilter(store.id)}
+                    data-testid={`button-store-filter-${store.id}`}
+                  >
+                    <Store className="w-3.5 h-3.5 mr-1.5" />
+                    {store.name}
+                  </Button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-2 flex-wrap" data-testid="ozon-fulfillment-tabs">
+              {([
+                { key: "all" as OzonSubFilter, label: "Все заказы" },
+                { key: "FBS" as OzonSubFilter, label: "FBS (со склада продавца)" },
+                { key: "FBO" as OzonSubFilter, label: "FBO (со склада Ozon)" },
+                { key: "direct" as OzonSubFilter, label: "Прямые продажи" },
+              ]).map((tab) => (
+                <Button
+                  key={tab.key}
+                  variant={ozonSubFilter === tab.key ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setOzonSubFilter(tab.key); setFbsSubFilter("all"); setFboSubFilter("all"); }}
+                  data-testid={`button-ozon-filter-${tab.key}`}
+                >
+                  {tab.key === "FBO" && <Warehouse className="w-3.5 h-3.5 mr-1.5" />}
+                  {tab.key === "FBS" && <Truck className="w-3.5 h-3.5 mr-1.5" />}
+                  {tab.key === "direct" && <Store className="w-3.5 h-3.5 mr-1.5" />}
+                  {tab.label}
+                </Button>
+              ))}
+            </div>
+
+            {ozonSubFilter === "FBS" && (
+              <div className="flex flex-wrap items-center gap-2" data-testid="fbs-sub-filter-tabs">
+                {FBS_SUB_FILTERS.map((sub) => {
+                  const Icon = sub.icon;
+                  const count = fbsStatusCounts[sub.key] || 0;
+                  return (
+                    <Button
+                      key={sub.key}
+                      variant={fbsSubFilter === sub.key ? "default" : "ghost"}
+                      size="sm"
+                      className={fbsSubFilter === sub.key ? "" : "text-muted-foreground"}
+                      onClick={() => {
+                        setFbsSubFilter(sub.key);
+                        if (!silentSync.isPending) silentSync.mutate();
+                      }}
+                      data-testid={`button-fbs-sub-${sub.key}`}
+                    >
+                      <Icon className="w-3.5 h-3.5 mr-1.5" />
+                      {sub.label}
+                      {count > 0 && (
+                        <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid={`badge-fbs-count-${sub.key}`}>
+                          {count}
+                        </Badge>
+                      )}
+                    </Button>
+                  );
+                })}
+                {silentSync.isPending && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" data-testid="fbs-sync-spinner" />}
+
+                {(fbsSubFilter === "awaiting_packaging" || fbsSubFilter === "awaiting_deliver" || fbsSubFilter === "all") && awaitingShipmentCount > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                    onClick={() => bulkLabels.mutate()}
+                    disabled={bulkLabels.isPending}
+                    data-testid="button-bulk-labels"
+                  >
+                    {bulkLabels.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Download className="w-4 h-4 mr-1.5" />}
+                    Скачать все этикетки ({awaitingShipmentCount})
+                  </Button>
+                )}
+              </div>
+            )}
+
+            {ozonSubFilter === "FBO" && (
+              <div className="flex flex-wrap items-center gap-2" data-testid="fbo-sub-filter-tabs">
+                {FBO_SUB_FILTERS.map((sub) => {
+                  const Icon = sub.icon;
+                  const count = fboStatusCounts[sub.key] || 0;
+                  return (
+                    <Button
+                      key={sub.key}
+                      variant={fboSubFilter === sub.key ? "default" : "ghost"}
+                      size="sm"
+                      className={fboSubFilter === sub.key ? "" : "text-muted-foreground"}
+                      onClick={() => {
+                        setFboSubFilter(sub.key);
+                        if (!silentSync.isPending) silentSync.mutate();
+                      }}
+                      data-testid={`button-fbo-sub-${sub.key}`}
+                    >
+                      <Icon className="w-3.5 h-3.5 mr-1.5" />
+                      {sub.label}
+                      {count > 0 && (
+                        <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid={`badge-fbo-count-${sub.key}`}>
+                          {count}
+                        </Badge>
+                      )}
+                    </Button>
+                  );
+                })}
+                {silentSync.isPending && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" data-testid="fbo-sync-spinner" />}
+              </div>
+            )}
+          </>
+        )}
+
+        {marketplaceTab === "yandex" && (
+          <>
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => syncYandexOrders.mutate()}
+                disabled={syncYandexOrders.isPending}
+                data-testid="button-sync-yandex-orders"
+              >
+                {syncYandexOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                {syncYandexOrders.isPending
+                  ? `Синхронизация Yandex${yandexStores.length > 0 ? " (" + yandexStores.map(s => s.name).join(", ") + ")..." : "..."}`
+                  : "Загрузить заказы Yandex"}
+              </Button>
+            </div>
+
+            {yandexStores.length > 1 && (
+              <div className="flex gap-2 flex-wrap items-center" data-testid="yandex-store-filter-tabs">
+                <span className="text-sm text-muted-foreground mr-1">Магазин:</span>
+                <Button
+                  variant={storeFilter === "all" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setStoreFilter("all")}
+                  data-testid="button-yandex-store-filter-all"
+                >
+                  Все магазины
+                </Button>
+                {yandexStores.map((store, idx) => (
+                  <Button
+                    key={store.id}
+                    variant={storeFilter === store.id ? "default" : "outline"}
+                    size="sm"
+                    className={storeFilter !== store.id ? storeColors[idx % storeColors.length] : ""}
+                    onClick={() => setStoreFilter(store.id)}
+                    data-testid={`button-yandex-store-filter-${store.id}`}
+                  >
+                    <Store className="w-3.5 h-3.5 mr-1.5" />
+                    {store.name}
+                  </Button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2" data-testid="yandex-sub-filter-tabs">
+              {YANDEX_SUB_FILTERS.map((sub) => {
+                const Icon = sub.icon;
+                const count = yandexStatusCounts[sub.key] || 0;
+                return (
+                  <Button
+                    key={sub.key}
+                    variant={yandexSubFilter === sub.key ? "default" : "ghost"}
+                    size="sm"
+                    className={yandexSubFilter === sub.key ? "" : "text-muted-foreground"}
+                    onClick={() => setYandexSubFilter(sub.key)}
+                    data-testid={`button-yandex-sub-${sub.key}`}
+                  >
+                    <Icon className="w-3.5 h-3.5 mr-1.5" />
+                    {sub.label}
+                    {count > 0 && (
+                      <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid={`badge-yandex-count-${sub.key}`}>
+                        {count}
+                      </Badge>
+                    )}
+                  </Button>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {marketplaceTab === "wildberries" && (
+          <>
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled
+                data-testid="button-sync-wb-orders"
+                title="Интеграция Wildberries в разработке"
+              >
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Загрузить заказы Wildberries
+              </Button>
+            </div>
+
+            {wbStores.length > 1 && (
+              <div className="flex gap-2 flex-wrap items-center" data-testid="wb-store-filter-tabs">
+                <span className="text-sm text-muted-foreground mr-1">Магазин:</span>
+                <Button
+                  variant={storeFilter === "all" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setStoreFilter("all")}
+                  data-testid="button-wb-store-filter-all"
+                >
+                  Все магазины
+                </Button>
+                {wbStores.map((store, idx) => (
+                  <Button
+                    key={store.id}
+                    variant={storeFilter === store.id ? "default" : "outline"}
+                    size="sm"
+                    className={storeFilter !== store.id ? storeColors[idx % storeColors.length] : ""}
+                    onClick={() => setStoreFilter(store.id)}
+                    data-testid={`button-wb-store-filter-${store.id}`}
+                  >
+                    <Store className="w-3.5 h-3.5 mr-1.5" />
+                    {store.name}
+                  </Button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2" data-testid="wb-sub-filter-tabs">
+              {WB_SUB_FILTERS.map((sub) => {
+                const Icon = sub.icon;
+                return (
+                  <Button
+                    key={sub.key}
+                    variant={wbSubFilter === sub.key ? "default" : "ghost"}
+                    size="sm"
+                    className={wbSubFilter === sub.key ? "" : "text-muted-foreground"}
+                    onClick={() => setWbSubFilter(sub.key)}
+                    data-testid={`button-wb-sub-${sub.key}`}
+                  >
+                    <Icon className="w-3.5 h-3.5 mr-1.5" />
+                    {sub.label}
+                  </Button>
+                );
+              })}
+            </div>
+          </>
         )}
 
         <div className="flex flex-wrap gap-3">
           <span className="teal-badge">
             <ShoppingCart className="w-4 h-4 mr-1.5 inline" />
-            Всего: {storeFilteredOrders.length}
+            Всего: {marketplaceOrders.length}
           </span>
           {pendingCount > 0 && (
             <span className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 px-3 py-1.5 rounded-full text-sm font-medium">
@@ -430,176 +747,6 @@ export default function Orders() {
             {formatCurrency(totalRevenue, true)}
           </span>
         </div>
-
-        {ozonStores.length > 1 && (
-          <div className="flex gap-2 flex-wrap items-center" data-testid="store-filter-tabs">
-            <span className="text-sm text-muted-foreground mr-1">Магазин:</span>
-            <Button
-              variant={storeFilter === "all" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setStoreFilter("all")}
-              data-testid="button-store-filter-all"
-            >
-              Все магазины
-            </Button>
-            {ozonStores.map((store, idx) => {
-              const storeColors = [
-                "bg-teal-100 text-teal-800 border-teal-300 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:border-teal-700",
-                "bg-purple-100 text-purple-800 border-purple-300 hover:bg-purple-200 dark:bg-purple-900/40 dark:text-purple-300 dark:border-purple-700",
-                "bg-orange-100 text-orange-800 border-orange-300 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300 dark:border-orange-700",
-                "bg-pink-100 text-pink-800 border-pink-300 hover:bg-pink-200 dark:bg-pink-900/40 dark:text-pink-300 dark:border-pink-700",
-              ];
-              const colorClass = storeColors[idx % storeColors.length];
-              return (
-                <Button
-                  key={store.id}
-                  variant={storeFilter === store.id ? "default" : "outline"}
-                  size="sm"
-                  className={storeFilter !== store.id ? colorClass : ""}
-                  onClick={() => setStoreFilter(store.id)}
-                  data-testid={`button-store-filter-${store.id}`}
-                >
-                  <Store className="w-3.5 h-3.5 mr-1.5" />
-                  {store.name}
-                </Button>
-              );
-            })}
-          </div>
-        )}
-
-        <div className="flex gap-2 flex-wrap" data-testid="fulfillment-filter-tabs">
-          {([
-            { key: "all" as FulfillmentFilter, label: "Все заказы" },
-            { key: "FBS" as FulfillmentFilter, label: "FBS (со склада продавца)" },
-            { key: "FBO" as FulfillmentFilter, label: "FBO (со склада Ozon)" },
-            { key: "yandex" as FulfillmentFilter, label: "Yandex Market" },
-            { key: "direct" as FulfillmentFilter, label: "Прямые продажи" },
-          ]).map((tab) => (
-            <Button
-              key={tab.key}
-              variant={fulfillmentFilter === tab.key ? "default" : "outline"}
-              size="sm"
-              onClick={() => { setFulfillmentFilter(tab.key); setFbsSubFilter("all"); setFboSubFilter("all"); setYandexSubFilter("all"); }}
-              data-testid={`button-filter-${tab.key}`}
-            >
-              {tab.key === "FBO" && <Warehouse className="w-3.5 h-3.5 mr-1.5" />}
-              {tab.key === "FBS" && <Truck className="w-3.5 h-3.5 mr-1.5" />}
-              {tab.key === "yandex" && <ShoppingCart className="w-3.5 h-3.5 mr-1.5" />}
-              {tab.key === "direct" && <Store className="w-3.5 h-3.5 mr-1.5" />}
-              {tab.label}
-              {tab.key === "yandex" && yandexStatusCounts.all > 0 && (
-                <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{yandexStatusCounts.all}</Badge>
-              )}
-            </Button>
-          ))}
-        </div>
-
-        {fulfillmentFilter === "FBS" && (
-          <div className="flex flex-wrap items-center gap-2" data-testid="fbs-sub-filter-tabs">
-            {FBS_SUB_FILTERS.map((sub) => {
-              const Icon = sub.icon;
-              const count = fbsStatusCounts[sub.key] || 0;
-              return (
-                <Button
-                  key={sub.key}
-                  variant={fbsSubFilter === sub.key ? "default" : "ghost"}
-                  size="sm"
-                  className={fbsSubFilter === sub.key ? "" : "text-muted-foreground"}
-                  onClick={() => {
-                    setFbsSubFilter(sub.key);
-                    if (!silentSync.isPending) {
-                      silentSync.mutate();
-                    }
-                  }}
-                  data-testid={`button-fbs-sub-${sub.key}`}
-                >
-                  <Icon className="w-3.5 h-3.5 mr-1.5" />
-                  {sub.label}
-                  {count > 0 && (
-                    <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid={`badge-fbs-count-${sub.key}`}>
-                      {count}
-                    </Badge>
-                  )}
-                </Button>
-              );
-            })}
-            {silentSync.isPending && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" data-testid="fbs-sync-spinner" />}
-
-            {(fbsSubFilter === "awaiting_packaging" || fbsSubFilter === "awaiting_deliver" || fbsSubFilter === "all") && awaitingShipmentCount > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="ml-auto border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
-                onClick={() => bulkLabels.mutate()}
-                disabled={bulkLabels.isPending}
-                data-testid="button-bulk-labels"
-              >
-                {bulkLabels.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Download className="w-4 h-4 mr-1.5" />}
-                Скачать все этикетки ({awaitingShipmentCount})
-              </Button>
-            )}
-          </div>
-        )}
-
-        {fulfillmentFilter === "FBO" && (
-          <div className="flex flex-wrap items-center gap-2" data-testid="fbo-sub-filter-tabs">
-            {FBO_SUB_FILTERS.map((sub) => {
-              const Icon = sub.icon;
-              const count = fboStatusCounts[sub.key] || 0;
-              return (
-                <Button
-                  key={sub.key}
-                  variant={fboSubFilter === sub.key ? "default" : "ghost"}
-                  size="sm"
-                  className={fboSubFilter === sub.key ? "" : "text-muted-foreground"}
-                  onClick={() => {
-                    setFboSubFilter(sub.key);
-                    if (!silentSync.isPending) {
-                      silentSync.mutate();
-                    }
-                  }}
-                  data-testid={`button-fbo-sub-${sub.key}`}
-                >
-                  <Icon className="w-3.5 h-3.5 mr-1.5" />
-                  {sub.label}
-                  {count > 0 && (
-                    <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid={`badge-fbo-count-${sub.key}`}>
-                      {count}
-                    </Badge>
-                  )}
-                </Button>
-              );
-            })}
-            {silentSync.isPending && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" data-testid="fbo-sync-spinner" />}
-          </div>
-        )}
-
-        {fulfillmentFilter === "yandex" && (
-          <div className="flex flex-wrap items-center gap-2" data-testid="yandex-sub-filter-tabs">
-            {YANDEX_SUB_FILTERS.map((sub) => {
-              const Icon = sub.icon;
-              const count = yandexStatusCounts[sub.key] || 0;
-              return (
-                <Button
-                  key={sub.key}
-                  variant={yandexSubFilter === sub.key ? "default" : "ghost"}
-                  size="sm"
-                  className={yandexSubFilter === sub.key ? "" : "text-muted-foreground"}
-                  onClick={() => setYandexSubFilter(sub.key)}
-                  data-testid={`button-yandex-sub-${sub.key}`}
-                >
-                  <Icon className="w-3.5 h-3.5 mr-1.5" />
-                  {sub.label}
-                  {count > 0 && (
-                    <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid={`badge-yandex-count-${sub.key}`}>
-                      {count}
-                    </Badge>
-                  )}
-                </Button>
-              );
-            })}
-          </div>
-        )}
 
         {isLoading ? (
           <div className="grid gap-4">
@@ -615,8 +762,17 @@ export default function Orders() {
           <Card className="kpi-card">
             <CardContent className="py-16 text-center">
               <ShoppingCart className="w-16 h-16 mx-auto text-muted-foreground/30 mb-4" />
-              <p className="text-xl font-medium text-muted-foreground">Заказов пока нет</p>
-              <p className="text-sm text-muted-foreground mt-2">Заказы появятся здесь после оформления</p>
+              {marketplaceTab === "wildberries" ? (
+                <>
+                  <p className="text-xl font-medium text-muted-foreground">Интеграция Wildberries в разработке</p>
+                  <p className="text-sm text-muted-foreground mt-2">Заказы появятся после подключения магазина Wildberries</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-xl font-medium text-muted-foreground">Заказов пока нет</p>
+                  <p className="text-sm text-muted-foreground mt-2">Заказы появятся здесь после оформления</p>
+                </>
+              )}
             </CardContent>
           </Card>
         ) : (
@@ -637,7 +793,7 @@ export default function Orders() {
                       order={order}
                       storeName={order.sourceStoreName || (order.storeId ? storesMap.get(order.storeId) : undefined)}
                       storeId={order.storeId}
-                      ozonStores={ozonStores}
+                      marketplaceStores={activeMarketplaceStores}
                       getStatusColor={getStatusColor}
                       getStatusLabel={getStatusLabel}
                       getSourceBadge={getSourceBadge}
@@ -668,11 +824,11 @@ export default function Orders() {
   );
 }
 
-function OrderCard({ order, storeName, storeId, ozonStores, getStatusColor, getStatusLabel, getSourceBadge, onClick }: { 
+function OrderCard({ order, storeName, storeId, marketplaceStores, getStatusColor, getStatusLabel, getSourceBadge, onClick }: { 
   order: any; 
   storeName?: string;
   storeId?: number | null;
-  ozonStores: { id: number; name: string }[];
+  marketplaceStores: { id: number; name: string }[];
   getStatusColor: (s: string) => string; 
   getStatusLabel: (s: string) => string;
   getSourceBadge: (s: string) => React.ReactNode;
@@ -729,7 +885,7 @@ function OrderCard({ order, storeName, storeId, ozonStores, getStatusColor, getS
                     "bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-900/40 dark:text-orange-300 dark:border-orange-700",
                     "bg-pink-100 text-pink-800 border-pink-300 dark:bg-pink-900/40 dark:text-pink-300 dark:border-pink-700",
                   ];
-                  const storeIdx = ozonStores.findIndex(s => s.id === storeId);
+                  const storeIdx = marketplaceStores.findIndex(s => s.id === storeId);
                   const colorClass = storeIdx >= 0 ? storeColorStyles[storeIdx % storeColorStyles.length] : storeColorStyles[0];
                   return (
                     <Badge className={`text-xs ${colorClass}`} data-testid={`badge-store-name-${order.id}`}>
@@ -755,7 +911,7 @@ function OrderCard({ order, storeName, storeId, ozonStores, getStatusColor, getS
                   </span>
                 )}
               </div>
-              {(order.ozonStatus || order.source === "ozon") && (
+              {(order.ozonStatus || order.source === "ozon" || (order.source === "yandex" && order.yandexStatus)) && (
                 <div className="mt-1.5 flex gap-1.5 flex-wrap">
                   {order.source === "ozon" && (
                     <Badge variant="outline" className={`text-xs ${order.fulfillmentType === "FBO" ? "border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-400" : "border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400"}`} data-testid={`badge-fulfillment-${order.id}`}>

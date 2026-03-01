@@ -152,6 +152,11 @@ export async function registerRoutes(
     res.json(store);
   });
 
+  app.get("/api/stores", isAuthenticated, async (req, res) => {
+    const allStores = await storage.getStoresByOrg(getOrgId(req));
+    res.json(allStores);
+  });
+
   app.delete("/api/stores/:id", isAuthenticated, async (req, res) => {
     try {
       const id = Number(req.params.id);

@@ -297,18 +297,30 @@ export function useSyncYandexOrders() {
       queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
       queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
-      const storeDetails = data.storeResults?.map((s: any) => {
-        if (s.error) return s.error;
-        let detail = `${s.storeName}: +${s.created} новых, ${s.updated} обновлено`;
-        if (s.skippedNoSku > 0) detail += ` (${s.skippedNoSku} пропущено — нет товаров)`;
-        return detail;
-      }).join("\n") || "";
-      const hasErrors = data.storeResults?.some((s: any) => s.error);
-      const hasSkipped = data.storeResults?.some((s: any) => s.skippedNoSku > 0);
+      const storeResults = data.storeResults || [];
+      const successStores = storeResults.filter((s: any) => !s.error);
+      const failedStores = storeResults.filter((s: any) => s.error);
+      const lines: string[] = [];
+      for (const s of successStores) {
+        let line = `«${s.storeName}»: +${s.created} новых, ${s.updated} обновлено`;
+        if (s.skippedNoSku > 0) line += ` (${s.skippedNoSku} пропущено)`;
+        lines.push(line);
+      }
+      for (const s of failedStores) {
+        const is403 = s.error && (s.error.includes("403") || s.error.includes("Forbidden") || s.error.includes("доступ"));
+        lines.push(`«${s.storeName}»: ${is403 ? "ошибка доступа (403)" : s.error}`);
+      }
+      const allFailed = successStores.length === 0 && failedStores.length > 0;
+      const hasErrors = failedStores.length > 0;
+      const title = allFailed
+        ? "Yandex: ошибка синхронизации"
+        : hasErrors
+        ? "Yandex: синхронизация с ошибками"
+        : "Yandex: синхронизация завершена";
       toast({
-        title: hasErrors ? "Yandex: синхронизация с ошибками" : hasSkipped ? "Yandex: синхронизация (есть пропуски)" : "Yandex: синхронизация завершена",
-        description: storeDetails || `Создано: ${data.created}, обновлено: ${data.updated}`,
-        variant: hasErrors ? "destructive" : "default",
+        title,
+        description: lines.join("\n") || `Создано: ${data.created}, обновлено: ${data.updated}`,
+        variant: allFailed ? "destructive" : "default",
       });
     },
     onError: (error: Error) => {
