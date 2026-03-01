@@ -281,11 +281,12 @@ export function useSyncYandexOrders() {
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async () => {
+    mutationFn: async (storeId?: number) => {
       const res = await fetch("/api/marketplace/yandex/sync-orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
+        body: JSON.stringify(storeId ? { storeId } : {}),
       });
       if (!res.ok) {
         const error = await res.json();

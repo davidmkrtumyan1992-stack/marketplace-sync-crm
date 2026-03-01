@@ -604,34 +604,36 @@ export default function Orders() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => syncYandexOrders.mutate()}
+                onClick={() => syncYandexOrders.mutate(storeFilter !== "all" ? storeFilter : undefined)}
                 disabled={syncYandexOrders.isPending}
                 data-testid="button-sync-yandex-orders"
               >
                 {syncYandexOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                 {syncYandexOrders.isPending
-                  ? `Синхронизация Yandex${yandexStores.length > 0 ? " (" + yandexStores.map(s => s.name).join(", ") + ")..." : "..."}`
-                  : "Загрузить заказы Yandex"}
+                  ? `Синхронизация Yandex${storeFilter !== "all" ? " (" + (yandexStores.find(s => s.id === storeFilter)?.name || "") + ")..." : yandexStores.length > 0 ? " (" + yandexStores.map(s => s.name).join(", ") + ")..." : "..."}`
+                  : storeFilter !== "all" ? `Загрузить заказы ${yandexStores.find(s => s.id === storeFilter)?.name || "Yandex"}` : "Загрузить заказы Yandex"}
               </Button>
             </div>
 
-            {yandexStores.length > 1 && (
+            {yandexStores.length > 0 && (
               <div className="flex gap-2 flex-wrap items-center" data-testid="yandex-store-filter-tabs">
                 <span className="text-sm text-muted-foreground mr-1">Магазин:</span>
-                <Button
-                  variant={storeFilter === "all" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setStoreFilter("all")}
-                  data-testid="button-yandex-store-filter-all"
-                >
-                  Все магазины
-                </Button>
-                {yandexStores.map((store, idx) => (
+                {yandexStores.length > 1 && (
+                  <Button
+                    variant={storeFilter === "all" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setStoreFilter("all")}
+                    data-testid="button-yandex-store-filter-all"
+                  >
+                    Все магазины
+                  </Button>
+                )}
+                {yandexStores.map((store) => (
                   <Button
                     key={store.id}
                     variant={storeFilter === store.id ? "default" : "outline"}
                     size="sm"
-                    className={storeFilter !== store.id ? storeColors[idx % storeColors.length] : ""}
+                    className={storeFilter !== store.id ? "bg-yellow-100 text-yellow-800 border-yellow-300 hover:bg-yellow-200 dark:bg-yellow-900/40 dark:text-yellow-300 dark:border-yellow-700" : ""}
                     onClick={() => setStoreFilter(store.id)}
                     data-testid={`button-yandex-store-filter-${store.id}`}
                   >

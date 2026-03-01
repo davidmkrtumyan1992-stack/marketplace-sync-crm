@@ -2684,8 +2684,12 @@ export async function registerRoutes(
   app.post("/api/marketplace/yandex/sync-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
+      const requestedStoreId = req.body?.storeId ? Number(req.body.storeId) : null;
       const allSettings = await storage.getMarketplaceSettings(orgId);
-      const yandexSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey && s.warehouseId);
+      let yandexSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey && s.warehouseId);
+      if (requestedStoreId) {
+        yandexSettings = yandexSettings.filter(s => s.storeId === requestedStoreId);
+      }
 
       if (yandexSettings.length === 0) {
         return res.status(400).json({ message: "Настройки Yandex Market не найдены" });
