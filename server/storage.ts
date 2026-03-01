@@ -78,6 +78,8 @@ export interface IStorage {
   createOrder(order: InsertOrder & { createdAt?: Date }, items: { productId: number; quantity: number; price: number }[]): Promise<Order>;
   updateOrderStatus(id: number, status: string): Promise<Order>;
   updateOrderOzonStatus(id: number, ozonStatus: string, status?: string, createdAt?: Date): Promise<Order>;
+  updateOrderYandexStatus(id: number, yandexStatus: string, status?: string, createdAt?: Date): Promise<Order>;
+  getOrderByExternalId(externalId: string, organizationId: string, storeId?: number | null): Promise<Order | undefined>;
 
   // Webhook Logs
   createWebhookLog(log: InsertWebhookLog): Promise<WebhookLog>;
@@ -449,6 +451,23 @@ export class DatabaseStorage implements IStorage {
     return order;
   }
 
+  async updateOrderYandexStatus(id: number, yandexStatus: string, status?: string, createdAt?: Date): Promise<Order> {
+    const updates: Record<string, any> = { yandexStatus };
+    if (status) updates.status = status;
+    if (createdAt) updates.createdAt = createdAt;
+    const [order] = await db.update(orders).set(updates).where(eq(orders.id, id)).returning();
+    return order;
+  }
+
+  async getOrderByExternalId(externalId: string, organizationId: string, storeId?: number | null): Promise<Order | undefined> {
+    const conditions = [eq(orders.externalId, externalId), eq(orders.organizationId, organizationId)];
+    if (storeId != null) {
+      conditions.push(eq(orders.storeId, storeId));
+    }
+    const [order] = await db.select().from(orders).where(and(...conditions));
+    return order;
+  }
+
   async createWebhookLog(log: InsertWebhookLog): Promise<WebhookLog> {
     const [entry] = await db.insert(webhookLogs).values(log).returning();
     return entry;
@@ -595,8 +614,11 @@ export class DatabaseStorage implements IStorage {
     const allOrders = await db.select().from(orders).where(eq(orders.organizationId, organizationId));
 
     const activeOrders = allOrders.filter(o => {
-      return o.source === "ozon" && o.fulfillmentType === "FBS" &&
-        (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver");
+      if (o.source === "ozon" && o.fulfillmentType === "FBS" &&
+        (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver")) return true;
+      if (o.source === "yandex" &&
+        (o.yandexStatus === "NEW" || o.yandexStatus === "PROCESSING" || o.yandexStatus === "READY_TO_SHIP")) return true;
+      return false;
     });
     const activeOrderIds = activeOrders.map(o => o.id);
     let activeItemsCount = 0;
@@ -620,9 +642,9 @@ export class DatabaseStorage implements IStorage {
       capitalization += qty * Number(p.purchasePrice || 0);
       expectedRevenue += qty * Number(p.sellingPrice || p.price || 0);
       stockLocal += p.centralStock || 0;
-      stockOzon += 0;
-      stockWb += 0;
-      stockYandex += 0;
+      stockOzon += p.stockOzon || 0;
+      stockWb += p.stockWb || 0;
+      stockYandex += p.stockYandex || 0;
     }
 
     const taxRate = Number(taxSetting?.taxRate || 7) / 100;
@@ -653,8 +675,10 @@ export class DatabaseStorage implements IStorage {
           (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver")
         ).length;
         const storeActiveOrders = storeOrders.filter(o =>
-          o.source === "ozon" && o.fulfillmentType === "FBS" &&
-          (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver")
+          (o.source === "ozon" && o.fulfillmentType === "FBS" &&
+            (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver")) ||
+          (o.source === "yandex" &&
+            (o.yandexStatus === "NEW" || o.yandexStatus === "PROCESSING" || o.yandexStatus === "READY_TO_SHIP"))
         );
         const activeOrdersCount = storeActiveOrders.length;
         const activeOrdersRevenue = storeActiveOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);

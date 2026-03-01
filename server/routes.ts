@@ -549,6 +549,58 @@ export async function registerRoutes(
           });
         }
       })();
+    } else if (body.marketplace === "yandex" && body.apiKey && body.warehouseId) {
+      autoSyncStarted = true;
+      const displayName = body.storeName || `Yandex ${body.warehouseId}`;
+      (async () => {
+        try {
+          console.log(`[Auto Import] Starting Yandex product import for «${displayName}»...`);
+          const yToken = body.apiKey.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+          const yBusinessId = body.warehouseId.replace(/[^\x00-\x7F]/g, "").replace(/\s/g, "").trim();
+          const products = await fetchYandexProducts(yToken, yBusinessId);
+          console.log(`[Auto Import] «${displayName}»: ${products.length} Yandex products fetched`);
+          let created = 0, updated = 0;
+          for (const mp of products) {
+            try {
+              if (!mp.sku) continue;
+              const existing = await storage.getProductBySkuAndOrg(mp.sku, orgId);
+              if (existing) {
+                const updates: any = {};
+                if (mp.price !== undefined && mp.price !== null) { updates.sellingPrice = String(mp.price); updates.price = String(mp.price); }
+                if (mp.stock !== undefined && mp.stock !== null) updates.centralStock = mp.stock;
+                if (mp.name && mp.name !== existing.name) updates.name = mp.name;
+                if (mp.barcode) updates.barcode = mp.barcode;
+                if (mp.imageUrl) updates.imageUrl = mp.imageUrl;
+                if (mp.category) updates.category = mp.category;
+                if (mp.marketplaceId) updates.yandexId = mp.marketplaceId;
+                if (Object.keys(updates).length > 0) await storage.updateProduct(existing.id, updates);
+                updated++;
+              } else {
+                await storage.createProduct({
+                  name: mp.name, sku: mp.sku, barcode: mp.barcode || null, category: mp.category || null,
+                  purchasePrice: "0", sellingPrice: String(mp.price ?? 0), price: String(mp.price ?? 0),
+                  centralStock: mp.stock ?? 0, stockQuantity: mp.stock ?? 0, imageUrl: mp.imageUrl || null,
+                  ozonId: null, wbId: null, yandexId: mp.marketplaceId || null, organizationId: orgId,
+                });
+                created++;
+              }
+            } catch (err: any) { /* skip individual product errors */ }
+          }
+          await storage.createSyncHistory({
+            organizationId: orgId, action: "product_import", status: "success",
+            details: `Автоимпорт Yandex для «${displayName}»: создано ${created}, обновлено ${updated}`,
+            itemsCount: created + updated,
+          });
+          console.log(`[Auto Import] «${displayName}» complete: created ${created}, updated ${updated}`);
+        } catch (err: any) {
+          console.error(`[Auto Import] Yandex error for «${displayName}»:`, err.message);
+          await storage.createSyncHistory({
+            organizationId: orgId, action: "product_import", status: "fail",
+            details: `Ошибка автоимпорта Yandex для «${displayName}»: ${err.message}`,
+            itemsCount: 0,
+          });
+        }
+      })();
     }
 
     res.status(201).json({ ...setting, autoSyncStarted });
@@ -2579,6 +2631,206 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== Yandex Market Order Sync ====================
+  const yandexStatusToInternal = (yandexStatus: string): string => {
+    switch (yandexStatus?.toUpperCase()) {
+      case "NEW":
+      case "PROCESSING":
+      case "READY_TO_SHIP":
+      case "RESERVED":
+        return "pending";
+      case "DELIVERY":
+      case "PICKUP":
+        return "shipped";
+      case "DELIVERED":
+        return "completed";
+      case "CANCELLED":
+      case "RETURNED":
+      case "UNPAID":
+        return "cancelled";
+      default:
+        return "pending";
+    }
+  };
+
+  const YANDEX_STATUS_LABELS: Record<string, string> = {
+    NEW: "Новый",
+    PROCESSING: "Ожидает сборки",
+    READY_TO_SHIP: "Ожидает отгрузки",
+    DELIVERY: "Доставка в процессе",
+    PICKUP: "Ожидает получения",
+    DELIVERED: "Доставлено",
+    CANCELLED: "Отменено",
+    RETURNED: "Возвращено",
+    UNPAID: "Не оплачено",
+    RESERVED: "Зарезервировано",
+  };
+
+  const resolveStoreForYandex = async (setting: { companyId: number | null; warehouseId: string | null }): Promise<{ storeId: number | null; companyId: number | null; storeName: string | null }> => {
+    if (setting.companyId) {
+      const companyStores = await storage.getStores(setting.companyId);
+      const yandexStore = companyStores.find(s => s.marketplace === "yandex");
+      if (yandexStore) return { storeId: yandexStore.id, companyId: setting.companyId, storeName: yandexStore.name };
+      return { storeId: null, companyId: setting.companyId, storeName: null };
+    }
+    return { storeId: null, companyId: null, storeName: null };
+  };
+
+  app.post("/api/marketplace/yandex/sync-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const yandexSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey && s.warehouseId);
+
+      if (yandexSettings.length === 0) {
+        return res.status(400).json({ message: "Настройки Yandex Market не найдены" });
+      }
+
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+      const since = new Date();
+      since.setDate(since.getDate() - 30);
+
+      let created = 0, updated = 0, skipped = 0;
+      const storeResults: { storeName: string; storeId: number | null; created: number; updated: number; skippedNoSku: number; error?: string }[] = [];
+
+      for (const ySetting of yandexSettings) {
+        const { storeId: resolvedStoreId, companyId: resolvedCompanyId, storeName: resolvedStoreName } = await resolveStoreForYandex(ySetting);
+        const displayName = resolvedStoreName || ySetting.storeName || `Yandex ${ySetting.warehouseId}`;
+        let storeCreated = 0, storeUpdated = 0, storeSkippedNoSku = 0;
+        let storeError: string | undefined;
+
+        try {
+          const cleanToken = ySetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+          const cleanBusinessId = ySetting.warehouseId!.replace(/[^\x00-\x7F]/g, "").replace(/\s/g, "").trim();
+          const isAcmaKey = cleanToken.startsWith("ACMA:");
+          const authHeaders: Record<string, string> = {
+            ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `Bearer ${cleanToken}` }),
+            "Content-Type": "application/json",
+          };
+
+          console.log(`[yandex-sync-orders] Fetching campaigns for «${displayName}»...`);
+          const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { method: "GET", headers: authHeaders });
+          if (!campRes.ok) {
+            throw new Error(`Campaigns API returned ${campRes.status}`);
+          }
+          const campData = await campRes.json();
+          const campaigns = campData?.campaigns || [];
+          console.log(`[yandex-sync-orders] Found ${campaigns.length} campaign(s) for «${displayName}»`);
+
+          for (const campaign of campaigns) {
+            const campaignId = String(campaign.id);
+            console.log(`[yandex-sync-orders] Fetching orders for campaign ${campaignId}...`);
+
+            let page = 1;
+            let hasMore = true;
+            while (hasMore) {
+              const ordersRes = await fetch(
+                `${YANDEX_BASE}/campaigns/${campaignId}/orders?status=NEW,PROCESSING,READY_TO_SHIP,DELIVERY,PICKUP,DELIVERED,CANCELLED,RETURNED&fromDate=${since.toISOString().split("T")[0]}&page=${page}&pageSize=50`,
+                { method: "GET", headers: authHeaders }
+              );
+              if (!ordersRes.ok) {
+                const errText = await ordersRes.text().catch(() => "");
+                console.error(`[yandex-sync-orders] Orders API returned ${ordersRes.status}: ${errText.slice(0, 300)}`);
+                break;
+              }
+              const ordersData = await ordersRes.json();
+              const ordersList = ordersData?.orders || [];
+              const pager = ordersData?.pager;
+
+              for (const yOrder of ordersList) {
+                const yOrderId = String(yOrder.id);
+                const yStatus = yOrder.status || "NEW";
+                const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
+
+                const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
+
+                if (existingOrder) {
+                  const internalStatus = yandexStatusToInternal(yStatus);
+                  if (existingOrder.yandexStatus !== yStatus) {
+                    await storage.updateOrderYandexStatus(existingOrder.id, yStatus, internalStatus, yCreatedAt);
+                    updated++;
+                    storeUpdated++;
+                  } else {
+                    skipped++;
+                  }
+                  continue;
+                }
+
+                const items: { productId: number; quantity: number; price: number }[] = [];
+                let totalAmount = 0;
+
+                for (const yItem of yOrder.items || []) {
+                  const sku = yItem.offerId || yItem.shopSku || "";
+                  const qty = yItem.count || 1;
+                  const price = parseFloat(yItem.price || yItem.buyerPrice || "0");
+
+                  if (sku) {
+                    const [dbProduct] = await db.select().from(productsTable)
+                      .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+                    if (dbProduct) {
+                      items.push({ productId: dbProduct.id, quantity: qty, price });
+                      totalAmount += price * qty;
+                    }
+                  }
+                }
+
+                if (items.length > 0) {
+                  const internalStatus = yandexStatusToInternal(yStatus);
+                  await storage.createOrder({
+                    orderNumber: `YM-${yOrderId}`,
+                    status: internalStatus,
+                    totalAmount: totalAmount.toFixed(2),
+                    source: "yandex",
+                    externalId: yOrderId,
+                    postingNumber: null,
+                    ozonStatus: null,
+                    yandexStatus: yStatus,
+                    fulfillmentType: "FBS",
+                    storeId: resolvedStoreId ?? undefined,
+                    sourceStoreName: resolvedStoreName ?? undefined,
+                    companyId: resolvedCompanyId ?? undefined,
+                    organizationId: orgId,
+                    createdAt: yCreatedAt || undefined,
+                  }, items);
+                  created++;
+                  storeCreated++;
+                } else {
+                  storeSkippedNoSku++;
+                }
+              }
+
+              if (pager && page < pager.pagesCount) {
+                page++;
+              } else {
+                hasMore = false;
+              }
+            }
+          }
+
+          console.log(`[yandex-sync-orders] «${displayName}»: created ${storeCreated}, updated ${storeUpdated}, skipped no SKU ${storeSkippedNoSku}`);
+        } catch (err: any) {
+          console.error(`[yandex-sync-orders] Error for «${displayName}»:`, err.message);
+          storeError = `Ошибка для магазина «${displayName}»: ${err.message}`;
+        }
+
+        storeResults.push({ storeName: displayName, storeId: resolvedStoreId, created: storeCreated, updated: storeUpdated, skippedNoSku: storeSkippedNoSku, error: storeError });
+      }
+
+      await storage.createSyncHistory({
+        organizationId: orgId,
+        action: "yandex_order_sync",
+        status: storeResults.some(s => s.error) ? "partial" : "success",
+        details: `Синхронизация заказов Yandex: создано ${created}, обновлено ${updated}`,
+        itemsCount: created + updated,
+      });
+
+      res.json({ success: true, created, updated, skipped, storeResults });
+    } catch (error: any) {
+      console.error("[yandex-sync-orders] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Background auto-sync: Poll Ozon order statuses every 10 minutes
   const OZON_SYNC_INTERVAL = 10 * 60 * 1000; // 10 minutes
 
@@ -2736,6 +2988,123 @@ export async function registerRoutes(
   setInterval(autoSyncOzonStatuses, OZON_SYNC_INTERVAL);
   setTimeout(autoSyncOzonStatuses, 10000);
   console.log(`[ozon-auto-sync] Background sync scheduled every ${OZON_SYNC_INTERVAL / 60000} minutes`);
+
+  const YANDEX_SYNC_INTERVAL = 10 * 60 * 1000;
+  const autoSyncYandexOrders = async () => {
+    try {
+      const allSettings = await db.select().from(marketplaceSettingsTable);
+      const orgIds = [...new Set(allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey && s.warehouseId).map(s => s.organizationId))];
+      if (orgIds.length === 0) return;
+
+      for (const orgId of orgIds) {
+        const yandexSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey && s.warehouseId && s.organizationId === orgId);
+        const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+        const since = new Date();
+        since.setDate(since.getDate() - 7);
+        let updated = 0, created = 0;
+
+        for (const ySetting of yandexSettings) {
+          const { storeId: resolvedStoreId, companyId: resolvedCompanyId, storeName: resolvedStoreName } = await resolveStoreForYandex(ySetting);
+          try {
+            const cleanToken = ySetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+            const isAcmaKey = cleanToken.startsWith("ACMA:");
+            const authHeaders: Record<string, string> = {
+              ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `Bearer ${cleanToken}` }),
+              "Content-Type": "application/json",
+            };
+            const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { method: "GET", headers: authHeaders });
+            if (!campRes.ok) continue;
+            const campData = await campRes.json();
+            const campaigns = campData?.campaigns || [];
+
+            for (const campaign of campaigns) {
+              const campaignId = String(campaign.id);
+              let page = 1;
+              let hasMore = true;
+              while (hasMore) {
+                const ordersRes = await fetch(
+                  `${YANDEX_BASE}/campaigns/${campaignId}/orders?status=NEW,PROCESSING,READY_TO_SHIP,DELIVERY,PICKUP,DELIVERED,CANCELLED,RETURNED&fromDate=${since.toISOString().split("T")[0]}&page=${page}&pageSize=50`,
+                  { method: "GET", headers: authHeaders }
+                );
+                if (!ordersRes.ok) { hasMore = false; break; }
+                const ordersData = await ordersRes.json();
+                const ordersList = ordersData?.orders || [];
+                const pager = ordersData?.pager;
+
+                for (const yOrder of ordersList) {
+                  const yOrderId = String(yOrder.id);
+                  const yStatus = yOrder.status || "NEW";
+                  const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
+                  const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
+
+                  if (existingOrder) {
+                    if (existingOrder.yandexStatus !== yStatus) {
+                      const internalStatus = yandexStatusToInternal(yStatus);
+                      await storage.updateOrderYandexStatus(existingOrder.id, yStatus, internalStatus, yCreatedAt);
+                      updated++;
+                    }
+                  } else {
+                    const items: { productId: number; quantity: number; price: number }[] = [];
+                    let totalAmount = 0;
+                    for (const yItem of yOrder.items || []) {
+                      const sku = yItem.offerId || yItem.shopSku || "";
+                      const qty = yItem.count || 1;
+                      const price = parseFloat(yItem.price || yItem.buyerPrice || "0");
+                      if (sku) {
+                        const [dbProduct] = await db.select().from(productsTable)
+                          .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+                        if (dbProduct) {
+                          items.push({ productId: dbProduct.id, quantity: qty, price });
+                          totalAmount += price * qty;
+                        }
+                      }
+                    }
+                    if (items.length > 0) {
+                      await storage.createOrder({
+                        orderNumber: `YM-${yOrderId}`,
+                        status: yandexStatusToInternal(yStatus),
+                        totalAmount: totalAmount.toFixed(2),
+                        source: "yandex",
+                        externalId: yOrderId,
+                        postingNumber: null,
+                        ozonStatus: null,
+                        yandexStatus: yStatus,
+                        fulfillmentType: "FBS",
+                        storeId: resolvedStoreId ?? undefined,
+                        sourceStoreName: resolvedStoreName ?? undefined,
+                        companyId: resolvedCompanyId ?? undefined,
+                        organizationId: orgId,
+                        createdAt: yCreatedAt || undefined,
+                      }, items);
+                      created++;
+                    }
+                  }
+                }
+
+                if (pager && page < pager.pagesCount) {
+                  page++;
+                } else {
+                  hasMore = false;
+                }
+              }
+            }
+          } catch (err: any) {
+            console.error(`[yandex-auto-sync] Error for store:`, err.message);
+          }
+        }
+
+        if (updated > 0 || created > 0) {
+          console.log(`[yandex-auto-sync] Org ${orgId}: updated ${updated}, created ${created} orders`);
+        }
+      }
+    } catch (error) {
+      console.error("[yandex-auto-sync] Error:", error);
+    }
+  };
+
+  setInterval(autoSyncYandexOrders, YANDEX_SYNC_INTERVAL);
+  setTimeout(autoSyncYandexOrders, 15000);
+  console.log(`[yandex-auto-sync] Background sync scheduled every ${YANDEX_SYNC_INTERVAL / 60000} minutes`);
 
   return httpServer;
 }

@@ -276,6 +276,47 @@ export function useOzonPrintLabel() {
   });
 }
 
+export function useSyncYandexOrders() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/marketplace/yandex/sync-orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Ошибка синхронизации заказов Yandex");
+      }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
+      const storeDetails = data.storeResults?.map((s: any) => {
+        if (s.error) return s.error;
+        let detail = `${s.storeName}: +${s.created} новых, ${s.updated} обновлено`;
+        if (s.skippedNoSku > 0) detail += ` (${s.skippedNoSku} пропущено — нет товаров)`;
+        return detail;
+      }).join("\n") || "";
+      const hasErrors = data.storeResults?.some((s: any) => s.error);
+      const hasSkipped = data.storeResults?.some((s: any) => s.skippedNoSku > 0);
+      toast({
+        title: hasErrors ? "Yandex: синхронизация с ошибками" : hasSkipped ? "Yandex: синхронизация (есть пропуски)" : "Yandex: синхронизация завершена",
+        description: storeDetails || `Создано: ${data.created}, обновлено: ${data.updated}`,
+        variant: hasErrors ? "destructive" : "default",
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка Yandex", description: error.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useOzonBulkLabels() {
   const { toast } = useToast();
 

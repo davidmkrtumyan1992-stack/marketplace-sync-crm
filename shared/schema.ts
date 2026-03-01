@@ -104,6 +104,7 @@ export const orders = pgTable("orders", {
   externalId: text("external_id"),
   postingNumber: text("posting_number"),
   ozonStatus: text("ozon_status"),
+  yandexStatus: text("yandex_status"),
   fulfillmentType: text("fulfillment_type"),
   companyId: integer("company_id").references(() => companies.id),
   storeId: integer("store_id").references(() => stores.id, { onDelete: "cascade" }),

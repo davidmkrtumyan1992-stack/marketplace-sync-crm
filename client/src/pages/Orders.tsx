@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders, useOzonPrintLabel, useOzonBulkLabels, useResyncOzonOrders, useSilentSyncOzonOrders } from "@/hooks/use-orders";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders, useOzonPrintLabel, useOzonBulkLabels, useResyncOzonOrders, useSilentSyncOzonOrders, useSyncYandexOrders } from "@/hooks/use-orders";
 import { format, isToday, isYesterday } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
@@ -53,9 +53,10 @@ const OZON_STATUS_LABELS: Record<string, string> = {
   not_accepted: "Не принят",
 };
 
-type FulfillmentFilter = "all" | "FBS" | "FBO" | "direct";
+type FulfillmentFilter = "all" | "FBS" | "FBO" | "direct" | "yandex";
 type FbsSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "dispute" | "delivered" | "cancelled";
 type FboSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "delivered" | "cancelled";
+type YandexSubFilter = "all" | "NEW" | "PROCESSING" | "READY_TO_SHIP" | "DELIVERY" | "DELIVERED" | "CANCELLED";
 
 function getMarketplaceStatusLabel(ozonStatus: string | null | undefined): string {
   if (!ozonStatus) return "Новый";
@@ -77,6 +78,23 @@ function getMarketplaceStatusLabel(ozonStatus: string | null | undefined): strin
   }
 }
 
+function getYandexStatusLabel(yandexStatus: string | null | undefined): string {
+  if (!yandexStatus) return "Новый";
+  switch (yandexStatus) {
+    case "NEW": return "Новый";
+    case "PROCESSING": return "Ожидает сборки";
+    case "READY_TO_SHIP": return "Ожидает отгрузки";
+    case "DELIVERY": return "Доставка";
+    case "PICKUP": return "Ожидает получения";
+    case "DELIVERED": return "Доставлено";
+    case "CANCELLED": return "Отменено";
+    case "RETURNED": return "Возвращено";
+    case "UNPAID": return "Не оплачено";
+    case "RESERVED": return "Зарезервировано";
+    default: return yandexStatus;
+  }
+}
+
 const FBS_SUB_FILTERS: { key: FbsSubFilter; label: string; icon: any }[] = [
   { key: "all", label: "Все", icon: Package },
   { key: "awaiting_packaging", label: "Ожидают сборки", icon: Clock },
@@ -94,6 +112,16 @@ const FBO_SUB_FILTERS: { key: FboSubFilter; label: string; icon: any }[] = [
   { key: "delivering", label: "Доставляются", icon: Truck },
   { key: "delivered", label: "Доставлены", icon: CheckCircle },
   { key: "cancelled", label: "Отменены", icon: XCircle },
+];
+
+const YANDEX_SUB_FILTERS: { key: YandexSubFilter; label: string; icon: any }[] = [
+  { key: "all", label: "Все", icon: Package },
+  { key: "NEW", label: "Новые", icon: Clock },
+  { key: "PROCESSING", label: "Ожидают сборки", icon: Package },
+  { key: "READY_TO_SHIP", label: "Ожидают отгрузки", icon: Package },
+  { key: "DELIVERY", label: "Доставляются", icon: Truck },
+  { key: "DELIVERED", label: "Доставлены", icon: CheckCircle },
+  { key: "CANCELLED", label: "Отменены", icon: XCircle },
 ];
 
 
@@ -124,8 +152,10 @@ export default function Orders() {
   const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("all");
   const [fbsSubFilter, setFbsSubFilter] = useState<FbsSubFilter>("all");
   const [fboSubFilter, setFboSubFilter] = useState<FboSubFilter>("all");
+  const [yandexSubFilter, setYandexSubFilter] = useState<YandexSubFilter>("all");
   const [storeFilter, setStoreFilter] = useState<"all" | number>("all");
   const syncOzonOrders = useSyncOzonOrders();
+  const syncYandexOrders = useSyncYandexOrders();
   const resyncOzonOrders = useResyncOzonOrders();
   const silentSync = useSilentSyncOzonOrders();
   const bulkLabels = useOzonBulkLabels();
@@ -147,6 +177,11 @@ export default function Orders() {
     return storesList.filter(s => s.marketplace === "ozon");
   }, [storesList]);
 
+  const yandexStores = useMemo(() => {
+    if (!storesList) return [];
+    return storesList.filter(s => s.marketplace === "yandex");
+  }, [storesList]);
+
   const syncingStores = useMemo(() => {
     if (!ozonStores.length || !orders) return [];
     return ozonStores.filter(store => {
@@ -166,9 +201,21 @@ export default function Orders() {
     if (fulfillmentFilter === "direct") {
       result = result.filter((o: any) => o.source === "direct" || o.source === "manual");
     } else if (fulfillmentFilter === "FBS") {
-      result = result.filter((o: any) => o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon"));
+      result = result.filter((o: any) => (o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon")) && o.source !== "yandex");
     } else if (fulfillmentFilter === "FBO") {
       result = result.filter((o: any) => o.fulfillmentType === "FBO");
+    } else if (fulfillmentFilter === "yandex") {
+      result = result.filter((o: any) => o.source === "yandex");
+    }
+
+    if (fulfillmentFilter === "yandex" && yandexSubFilter !== "all") {
+      if (yandexSubFilter === "DELIVERY") {
+        result = result.filter((o: any) => o.yandexStatus === "DELIVERY" || o.yandexStatus === "PICKUP");
+      } else if (yandexSubFilter === "CANCELLED") {
+        result = result.filter((o: any) => o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED");
+      } else {
+        result = result.filter((o: any) => o.yandexStatus === yandexSubFilter);
+      }
     }
 
     if (fulfillmentFilter === "FBS" && fbsSubFilter !== "all") {
@@ -215,7 +262,7 @@ export default function Orders() {
     }
 
     return result;
-  }, [orders, fulfillmentFilter, fbsSubFilter, fboSubFilter, storeFilter]);
+  }, [orders, fulfillmentFilter, fbsSubFilter, fboSubFilter, yandexSubFilter, storeFilter]);
 
   const dateGroups = useMemo(() => groupOrdersByDate(filteredOrders), [filteredOrders]);
 
@@ -249,6 +296,19 @@ export default function Orders() {
       delivering: fboOrders.filter((o: any) => o.ozonStatus === "delivering").length,
       delivered: fboOrders.filter((o: any) => o.ozonStatus === "delivered").length,
       cancelled: fboOrders.filter((o: any) => o.ozonStatus === "cancelled").length,
+    };
+  }, [storeFilteredOrders]);
+
+  const yandexStatusCounts = useMemo(() => {
+    const yandexOrders = storeFilteredOrders.filter((o: any) => o.source === "yandex");
+    return {
+      all: yandexOrders.length,
+      NEW: yandexOrders.filter((o: any) => o.yandexStatus === "NEW").length,
+      PROCESSING: yandexOrders.filter((o: any) => o.yandexStatus === "PROCESSING").length,
+      READY_TO_SHIP: yandexOrders.filter((o: any) => o.yandexStatus === "READY_TO_SHIP").length,
+      DELIVERY: yandexOrders.filter((o: any) => o.yandexStatus === "DELIVERY" || o.yandexStatus === "PICKUP").length,
+      DELIVERED: yandexOrders.filter((o: any) => o.yandexStatus === "DELIVERED").length,
+      CANCELLED: yandexOrders.filter((o: any) => o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED").length,
     };
   }, [storeFilteredOrders]);
 
@@ -315,6 +375,17 @@ export default function Orders() {
               {syncOzonOrders.isPending && ozonStores.length > 0
                 ? `Синхронизация ${ozonStores.length > 1 ? ozonStores.map(s => s.name).join(", ") + "..." : "магазина " + ozonStores[0].name + "..."}`
                 : "Загрузить заказы Ozon"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => syncYandexOrders.mutate()}
+              disabled={syncYandexOrders.isPending}
+              data-testid="button-sync-yandex-orders"
+            >
+              {syncYandexOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+              {syncYandexOrders.isPending
+                ? `Синхронизация Yandex${yandexStores.length > 0 ? " (" + yandexStores.map(s => s.name).join(", ") + ")..." : "..."}`
+                : "Загрузить заказы Yandex"}
             </Button>
             <Button
               variant="outline"
@@ -398,22 +469,27 @@ export default function Orders() {
 
         <div className="flex gap-2 flex-wrap" data-testid="fulfillment-filter-tabs">
           {([
-            { key: "all", label: "Все заказы" },
-            { key: "FBS", label: "FBS (со склада продавца)" },
-            { key: "FBO", label: "FBO (со склада Ozon)" },
-            { key: "direct", label: "Прямые продажи" },
-          ] as const).map((tab) => (
+            { key: "all" as FulfillmentFilter, label: "Все заказы" },
+            { key: "FBS" as FulfillmentFilter, label: "FBS (со склада продавца)" },
+            { key: "FBO" as FulfillmentFilter, label: "FBO (со склада Ozon)" },
+            { key: "yandex" as FulfillmentFilter, label: "Yandex Market" },
+            { key: "direct" as FulfillmentFilter, label: "Прямые продажи" },
+          ]).map((tab) => (
             <Button
               key={tab.key}
               variant={fulfillmentFilter === tab.key ? "default" : "outline"}
               size="sm"
-              onClick={() => { setFulfillmentFilter(tab.key); setFbsSubFilter("all"); setFboSubFilter("all"); }}
+              onClick={() => { setFulfillmentFilter(tab.key); setFbsSubFilter("all"); setFboSubFilter("all"); setYandexSubFilter("all"); }}
               data-testid={`button-filter-${tab.key}`}
             >
               {tab.key === "FBO" && <Warehouse className="w-3.5 h-3.5 mr-1.5" />}
               {tab.key === "FBS" && <Truck className="w-3.5 h-3.5 mr-1.5" />}
+              {tab.key === "yandex" && <ShoppingCart className="w-3.5 h-3.5 mr-1.5" />}
               {tab.key === "direct" && <Store className="w-3.5 h-3.5 mr-1.5" />}
               {tab.label}
+              {tab.key === "yandex" && yandexStatusCounts.all > 0 && (
+                <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{yandexStatusCounts.all}</Badge>
+              )}
             </Button>
           ))}
         </div>
@@ -495,6 +571,33 @@ export default function Orders() {
               );
             })}
             {silentSync.isPending && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" data-testid="fbo-sync-spinner" />}
+          </div>
+        )}
+
+        {fulfillmentFilter === "yandex" && (
+          <div className="flex flex-wrap items-center gap-2" data-testid="yandex-sub-filter-tabs">
+            {YANDEX_SUB_FILTERS.map((sub) => {
+              const Icon = sub.icon;
+              const count = yandexStatusCounts[sub.key] || 0;
+              return (
+                <Button
+                  key={sub.key}
+                  variant={yandexSubFilter === sub.key ? "default" : "ghost"}
+                  size="sm"
+                  className={yandexSubFilter === sub.key ? "" : "text-muted-foreground"}
+                  onClick={() => setYandexSubFilter(sub.key)}
+                  data-testid={`button-yandex-sub-${sub.key}`}
+                >
+                  <Icon className="w-3.5 h-3.5 mr-1.5" />
+                  {sub.label}
+                  {count > 0 && (
+                    <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0" data-testid={`badge-yandex-count-${sub.key}`}>
+                      {count}
+                    </Badge>
+                  )}
+                </Button>
+              );
+            })}
           </div>
         )}
 
@@ -664,6 +767,11 @@ function OrderCard({ order, storeName, storeId, ozonStores, getStatusColor, getS
                       Ozon: {OZON_STATUS_LABELS[order.ozonStatus] || order.ozonStatus}
                     </Badge>
                   )}
+                  {order.source === "yandex" && order.yandexStatus && (
+                    <Badge variant="outline" className="text-xs border-yellow-300 text-yellow-700 dark:border-yellow-700 dark:text-yellow-400" data-testid={`badge-yandex-status-${order.id}`}>
+                      Yandex: {getYandexStatusLabel(order.yandexStatus)}
+                    </Badge>
+                  )}
                 </div>
               )}
               {order.items && order.items.length > 0 && (
@@ -714,7 +822,7 @@ function OrderCard({ order, storeName, storeId, ozonStores, getStatusColor, getS
                 className={`text-sm font-medium px-3 py-1.5 ${getStatusColor(order.status)}`}
                 data-testid={`badge-status-${order.id}`}
               >
-                {getMarketplaceStatusLabel(order.ozonStatus)}
+                {order.source === "yandex" ? getYandexStatusLabel(order.yandexStatus) : getMarketplaceStatusLabel(order.ozonStatus)}
               </Badge>
             )}
           </div>
@@ -779,16 +887,26 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
               <span className="text-sm font-medium">{getSourceLabel(order.source)}</span>
             </div>
             <Badge className={`${getStatusColor(order.status)}`}>
-              {isDirectSale ? getStatusLabel(order.status) : getMarketplaceStatusLabel(order.ozonStatus)}
+              {isDirectSale ? getStatusLabel(order.status) : order.source === "yandex" ? getYandexStatusLabel(order.yandexStatus) : getMarketplaceStatusLabel(order.ozonStatus)}
             </Badge>
             {order.source === "ozon" && (
               <Badge variant="outline" className={`text-xs ${order.fulfillmentType === "FBO" ? "border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-400" : "border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400"}`}>
                 {order.fulfillmentType === "FBO" ? "FBO (склад Ozon)" : "FBS (свой склад)"}
               </Badge>
             )}
+            {order.source === "yandex" && (
+              <Badge variant="outline" className="text-xs border-yellow-300 text-yellow-700 dark:border-yellow-700 dark:text-yellow-400">
+                Yandex Market FBS
+              </Badge>
+            )}
             {order.ozonStatus && (
               <Badge variant="outline" className="text-xs border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400">
                 Ozon: {OZON_STATUS_LABELS[order.ozonStatus] || order.ozonStatus}
+              </Badge>
+            )}
+            {order.source === "yandex" && order.yandexStatus && (
+              <Badge variant="outline" className="text-xs border-yellow-300 text-yellow-700 dark:border-yellow-700 dark:text-yellow-400">
+                Yandex: {getYandexStatusLabel(order.yandexStatus)}
               </Badge>
             )}
             <span className="text-sm text-muted-foreground flex items-center gap-1.5">
