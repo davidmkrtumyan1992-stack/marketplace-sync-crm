@@ -2715,13 +2715,24 @@ export async function registerRoutes(
           const authHeaders: Record<string, string> = {
             ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `Bearer ${cleanToken}` }),
             "Content-Type": "application/json",
+            "Accept": "application/json",
           };
 
-          console.log(`[yandex-sync-orders] Fetching campaigns for «${displayName}»...`);
-          const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { method: "GET", headers: authHeaders });
-          if (!campRes.ok) {
-            throw new Error(`Campaigns API returned ${campRes.status}`);
-          }
+          console.log(`[yandex-sync-orders] Fetching campaigns for «${displayName}» (Business ID: ${cleanBusinessId}) using ${isAcmaKey ? "Api-Key" : "Bearer token"}...`);
+            if (!campRes.ok) {
+              const errText = await campRes.text().catch(() => "");
+              let detail = "";
+              try {
+                const errJson = JSON.parse(errText);
+                detail = errJson.errors?.map((e: any) => `${e.code}: ${e.message}`).join(", ") || 
+                         errJson.message || 
+                         errJson.error_description || "";
+              } catch (e) {
+                detail = errText;
+              }
+              console.error(`[yandex-sync-orders] Campaigns API returned ${campRes.status}: ${errText}`);
+              throw new Error(`Ошибка Yandex API (${campRes.status}): ${detail || "Нет деталей"}`);
+            }
           const campData = await campRes.json();
           const campaigns = campData?.campaigns || [];
           console.log(`[yandex-sync-orders] Found ${campaigns.length} campaign(s) for «${displayName}»`);
@@ -2739,8 +2750,17 @@ export async function registerRoutes(
               );
               if (!ordersRes.ok) {
                 const errText = await ordersRes.text().catch(() => "");
+                let detail = "";
+                try {
+                  const errJson = JSON.parse(errText);
+                  detail = errJson.errors?.map((e: any) => `${e.code}: ${e.message}`).join(", ") || 
+                           errJson.message || 
+                           errJson.error_description || "";
+                } catch (e) {
+                  detail = errText;
+                }
                 console.error(`[yandex-sync-orders] Orders API returned ${ordersRes.status}: ${errText.slice(0, 300)}`);
-                break;
+                throw new Error(`Ошибка получения заказов (${ordersRes.status}): ${detail || "Нет деталей"}`);
               }
               const ordersData = await ordersRes.json();
               const ordersList = ordersData?.orders || [];
