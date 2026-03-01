@@ -494,9 +494,18 @@ const storeFormBaseSchema = z.object({
   isActive: z.boolean(),
 });
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const storeRefinement = (data: z.infer<typeof storeFormBaseSchema>, ctx: z.RefinementCtx) => {
-  if (data.marketplace === "ozon" && (!data.clientId || data.clientId.trim() === "")) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Client ID обязателен для Ozon", path: ["clientId"] });
+  if (data.marketplace === "ozon") {
+    if (!data.clientId || data.clientId.trim() === "") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Client ID обязателен для Ozon", path: ["clientId"] });
+    } else if (!DIGITS_ONLY_REGEX.test(data.clientId.trim())) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Client ID должен содержать только цифры", path: ["clientId"] });
+    }
+    if (data.apiKey && data.apiKey.trim() !== "" && !UUID_REGEX.test(data.apiKey.trim())) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "API-ключ Ozon должен быть в формате UUID (например, a1b2c3d4-e5f6-7890-abcd-ef1234567890)", path: ["apiKey"] });
+    }
   }
   if (data.marketplace === "yandex") {
     if (CYRILLIC_REGEX.test(data.apiKey) || !ASCII_ONLY_REGEX.test(data.apiKey)) {
@@ -562,12 +571,16 @@ function AddStoreDialog({ companies, onClose }: { companies: Company[]; onClose:
       const res = await apiRequest("POST", "/api/marketplace/settings", payload);
       return await res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/marketplace/settings"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stores"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
-      toast({ title: "Сохранено", description: "Магазин добавлен" });
+      if (data?.autoSyncStarted) {
+        toast({ title: "Магазин добавлен", description: "Импорт товаров запущен автоматически. Это может занять пару минут." });
+      } else {
+        toast({ title: "Сохранено", description: "Магазин добавлен" });
+      }
       onClose();
     },
     onError: (error: Error) => {

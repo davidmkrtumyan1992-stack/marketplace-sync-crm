@@ -498,7 +498,60 @@ export async function registerRoutes(
       }
     }
 
-    res.status(201).json(setting);
+    let autoSyncStarted = false;
+    if (body.marketplace === "ozon" && body.apiKey && body.clientId) {
+      autoSyncStarted = true;
+      const displayName = body.storeName || `Client ${body.clientId}`;
+      (async () => {
+        try {
+          console.log(`[Auto Import] Starting product import for new store «${displayName}»...`);
+          const products = await fetchOzonProducts(body.apiKey, body.clientId);
+          console.log(`[Auto Import] «${displayName}»: ${products.length} products fetched`);
+          let created = 0, updated = 0;
+          for (const mp of products) {
+            try {
+              if (!mp.sku) continue;
+              const existing = await storage.getProductBySkuAndOrg(mp.sku, orgId);
+              if (existing) {
+                const updates: any = {};
+                if (mp.price !== undefined && mp.price !== null) { updates.sellingPrice = String(mp.price); updates.price = String(mp.price); }
+                if (mp.stock !== undefined && mp.stock !== null) updates.centralStock = mp.stock;
+                if (mp.name && mp.name !== existing.name) updates.name = mp.name;
+                if (mp.barcode) updates.barcode = mp.barcode;
+                if (mp.imageUrl) updates.imageUrl = mp.imageUrl;
+                if (mp.category) updates.category = mp.category;
+                if (mp.marketplaceId) updates.ozonId = mp.marketplaceId;
+                if (Object.keys(updates).length > 0) await storage.updateProduct(existing.id, updates);
+                updated++;
+              } else {
+                await storage.createProduct({
+                  name: mp.name, sku: mp.sku, barcode: mp.barcode || null, category: mp.category || null,
+                  purchasePrice: "0", sellingPrice: String(mp.price ?? 0), price: String(mp.price ?? 0),
+                  centralStock: mp.stock ?? 0, stockQuantity: mp.stock ?? 0, imageUrl: mp.imageUrl || null,
+                  ozonId: mp.marketplaceId || null, wbId: null, yandexId: null, organizationId: orgId,
+                });
+                created++;
+              }
+            } catch (err: any) { /* skip individual product errors */ }
+          }
+          await storage.createSyncHistory({
+            organizationId: orgId, action: "product_import", status: "success",
+            details: `Автоимпорт для «${displayName}»: создано ${created}, обновлено ${updated}`,
+            itemsCount: created + updated,
+          });
+          console.log(`[Auto Import] «${displayName}» complete: created ${created}, updated ${updated}`);
+        } catch (err: any) {
+          console.error(`[Auto Import] Error for «${displayName}»:`, err.message);
+          await storage.createSyncHistory({
+            organizationId: orgId, action: "product_import", status: "fail",
+            details: `Ошибка автоимпорта для «${displayName}»: ${err.message}`,
+            itemsCount: 0,
+          });
+        }
+      })();
+    }
+
+    res.status(201).json({ ...setting, autoSyncStarted });
   });
 
   app.put("/api/marketplace/settings/:id", isAuthenticated, requireRole("owner"), async (req, res) => {

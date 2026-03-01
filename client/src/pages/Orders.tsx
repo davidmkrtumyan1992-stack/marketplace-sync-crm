@@ -147,6 +147,14 @@ export default function Orders() {
     return storesList.filter(s => s.marketplace === "ozon");
   }, [storesList]);
 
+  const syncingStores = useMemo(() => {
+    if (!ozonStores.length || !orders) return [];
+    return ozonStores.filter(store => {
+      const storeOrders = orders.filter((o: any) => o.storeId === store.id);
+      return storeOrders.length === 0;
+    });
+  }, [ozonStores, orders]);
+
   const filteredOrders = useMemo(() => {
     if (!orders) return [];
     let result = orders;
@@ -327,6 +335,15 @@ export default function Orders() {
           </div>
         </div>
 
+        {syncingStores.length > 0 && (
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 text-sm" data-testid="sync-status-banner">
+            <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+            <span>
+              Синхронизация товаров для {syncingStores.map(s => `«${s.name}»`).join(", ")}… Заказы появятся после завершения импорта и синхронизации.
+            </span>
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-3">
           <span className="teal-badge">
             <ShoppingCart className="w-4 h-4 mr-1.5 inline" />
@@ -339,7 +356,7 @@ export default function Orders() {
           )}
           <span className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 px-3 py-1.5 rounded-full text-sm font-medium">
             <CreditCard className="w-4 h-4 mr-1.5 inline" />
-            {formatCurrency(totalRevenue)}
+            {formatCurrency(totalRevenue, true)}
           </span>
         </div>
 
@@ -668,7 +685,7 @@ function OrderCard({ order, storeName, storeId, ozonStores, getStatusColor, getS
           
           <div className="flex items-center gap-4 lg:gap-6">
             <div className="text-right">
-              <p className="text-2xl font-bold">{formatCurrency(Number(order.totalAmount))}</p>
+              <p className="text-2xl font-bold">{formatCurrency(Number(order.totalAmount), true)}</p>
             </div>
             {isDirectSale ? (
               <div onClick={(e) => e.stopPropagation()}>
@@ -879,20 +896,20 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
                           </TableCell>
                           <TableCell className="text-right">
                             {hasOverride ? (
-                              <span className="text-sm text-muted-foreground line-through">{formatCurrency(originalPrice)}</span>
+                              <span className="text-sm text-muted-foreground line-through">{formatCurrency(originalPrice, true)}</span>
                             ) : (
-                              <span className="text-sm">{formatCurrency(originalPrice)}</span>
+                              <span className="text-sm">{formatCurrency(originalPrice, true)}</span>
                             )}
                           </TableCell>
                           <TableCell className="text-right">
                             {hasOverride ? (
-                              <span className="text-sm font-medium">{formatCurrency(salePrice)}</span>
+                              <span className="text-sm font-medium">{formatCurrency(salePrice, true)}</span>
                             ) : (
                               <span className="text-sm text-muted-foreground">-</span>
                             )}
                           </TableCell>
                           <TableCell className="text-right font-medium">
-                            {formatCurrency(salePrice * item.quantity)}
+                            {formatCurrency(salePrice * item.quantity, true)}
                           </TableCell>
                         </TableRow>
                       );
@@ -907,7 +924,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
 
           <div className="flex items-center justify-between p-4 bg-muted/50 rounded-md">
             <span className="text-sm font-medium text-muted-foreground">Итого:</span>
-            <span className="text-2xl font-bold" data-testid="text-order-total">{formatCurrency(totalAmount)}</span>
+            <span className="text-2xl font-bold" data-testid="text-order-total">{formatCurrency(totalAmount, true)}</span>
           </div>
 
           {order.source === "direct" ? (
@@ -1126,7 +1143,7 @@ function DirectSaleDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                     data-testid={`button-add-product-${p.id}`}
                   >
                     <span>{p.name} <span className="text-muted-foreground">({p.sku})</span></span>
-                    <span className="text-muted-foreground">{formatCurrency(Number(p.sellingPrice) || Number(p.price) || 0)}</span>
+                    <span className="text-muted-foreground">{formatCurrency(Number(p.sellingPrice) || Number(p.price) || 0, true)}</span>
                   </button>
                 ))}
               </div>
@@ -1160,7 +1177,7 @@ function DirectSaleDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                         data-testid={`input-price-${item.productId}`}
                       />
                       <span className="text-sm font-medium w-24 text-right">
-                        {formatCurrency(item.salePrice * item.quantity)}
+                        {formatCurrency(item.salePrice * item.quantity, true)}
                       </span>
                       <Button variant="ghost" size="sm" onClick={() => removeItem(item.productId)} data-testid={`button-remove-${item.productId}`}>
                         <Trash2 className="w-4 h-4 text-destructive" />
@@ -1169,7 +1186,7 @@ function DirectSaleDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                   </div>
                 ))}
                 <div className="flex justify-end pt-2 border-t">
-                  <span className="text-lg font-bold" data-testid="text-direct-sale-total">Итого: {formatCurrency(totalAmount)}</span>
+                  <span className="text-lg font-bold" data-testid="text-direct-sale-total">Итого: {formatCurrency(totalAmount, true)}</span>
                 </div>
               </div>
             )}
@@ -1225,7 +1242,7 @@ function DirectSaleDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
           <Button variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button>
           <Button onClick={handleSubmit} disabled={directSale.isPending || items.length === 0} data-testid="button-submit-direct-sale">
             {directSale.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CreditCard className="w-4 h-4 mr-2" />}
-            Оформить ({formatCurrency(totalAmount)})
+            Оформить ({formatCurrency(totalAmount, true)})
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -106,7 +106,7 @@ export const orders = pgTable("orders", {
   ozonStatus: text("ozon_status"),
   fulfillmentType: text("fulfillment_type"),
   companyId: integer("company_id").references(() => companies.id),
-  storeId: integer("store_id").references(() => stores.id),
+  storeId: integer("store_id").references(() => stores.id, { onDelete: "cascade" }),
   sourceStoreName: text("source_store_name"),
   organizationId: text("organization_id").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
@@ -114,7 +114,7 @@ export const orders = pgTable("orders", {
 
 export const orderItems = pgTable("order_items", {
   id: serial("id").primaryKey(),
-  orderId: integer("order_id").notNull().references(() => orders.id),
+  orderId: integer("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
   productId: integer("product_id").notNull().references(() => products.id),
   quantity: integer("quantity").notNull(),
   price: decimal("price", { precision: 10, scale: 2 }).notNull(),
@@ -125,7 +125,7 @@ export const orderItems = pgTable("order_items", {
 export const productStoreExclusions = pgTable("product_store_exclusions", {
   id: serial("id").primaryKey(),
   productId: integer("product_id").notNull().references(() => products.id),
-  storeId: integer("store_id").notNull().references(() => stores.id),
+  storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
   organizationId: text("organization_id").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -191,14 +191,14 @@ export const webhookLogs = pgTable("webhook_logs", {
   payload: text("payload"),
   status: text("status").notNull().default("received"),
   errorMessage: text("error_message"),
-  orderId: integer("order_id").references(() => orders.id),
+  orderId: integer("order_id").references(() => orders.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const syncHistory = pgTable("sync_history", {
   id: serial("id").primaryKey(),
   organizationId: text("organization_id").notNull(),
-  storeId: integer("store_id").references(() => stores.id),
+  storeId: integer("store_id").references(() => stores.id, { onDelete: "cascade" }),
   companyId: integer("company_id").references(() => companies.id),
   action: text("action").notNull(),
   status: text("status").notNull().default("success"),
@@ -210,11 +210,11 @@ export const syncHistory = pgTable("sync_history", {
 export const stockSyncLog = pgTable("stock_sync_log", {
   id: serial("id").primaryKey(),
   organizationId: text("organization_id").notNull(),
-  orderId: integer("order_id").references(() => orders.id),
+  orderId: integer("order_id").references(() => orders.id, { onDelete: "cascade" }),
   productId: integer("product_id").references(() => products.id),
   productName: text("product_name"),
   sku: text("sku"),
-  sourceStoreId: integer("source_store_id").references(() => stores.id),
+  sourceStoreId: integer("source_store_id").references(() => stores.id, { onDelete: "cascade" }),
   sourceStoreName: text("source_store_name"),
   action: text("action").notNull(),
   previousStock: integer("previous_stock").notNull().default(0),
