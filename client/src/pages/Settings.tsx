@@ -688,8 +688,9 @@ function AddStoreDialog({ companies, onClose }: { companies: Company[]; onClose:
 
           {marketplace === "yandex" && (
             <div className="space-y-2">
-              <Label>Business ID</Label>
-              <Input {...form.register("warehouseId")} placeholder="Business ID (только цифры)" data-testid="input-warehouse-id" />
+              <Label>ID кампании (Campaign ID)</Label>
+              <Input {...form.register("warehouseId")} placeholder="Например: 216691427" data-testid="input-warehouse-id" />
+              <p className="text-[10px] text-muted-foreground mt-1 italic">Используйте ID кампании (из раздела Настройки API в ЛК Яндекса)</p>
               {form.formState.errors.warehouseId && (
                 <span className="text-xs text-destructive">{form.formState.errors.warehouseId.message}</span>
               )}

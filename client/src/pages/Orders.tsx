@@ -616,13 +616,14 @@ export default function Orders() {
             </div>
 
             {yandexStores.length > 0 && (
-              <div className="flex gap-2 flex-wrap items-center" data-testid="yandex-store-filter-tabs">
-                <span className="text-sm text-muted-foreground mr-1">Магазин:</span>
+              <div className="flex gap-2 flex-wrap items-center mb-4 p-3 bg-yellow-50/50 dark:bg-yellow-900/10 border border-yellow-100 dark:border-yellow-900/30 rounded-lg" data-testid="yandex-store-filter-tabs">
+                <span className="text-sm font-medium text-yellow-800 dark:text-yellow-300 mr-1">Магазин:</span>
                 {yandexStores.length > 1 && (
                   <Button
                     variant={storeFilter === "all" ? "default" : "outline"}
                     size="sm"
                     onClick={() => setStoreFilter("all")}
+                    className={storeFilter === "all" ? "bg-yellow-600 hover:bg-yellow-700 text-white" : "text-yellow-700 border-yellow-200 hover:bg-yellow-100 dark:text-yellow-400 dark:border-yellow-800"}
                     data-testid="button-yandex-store-filter-all"
                   >
                     Все магазины
@@ -633,7 +634,9 @@ export default function Orders() {
                     key={store.id}
                     variant={storeFilter === store.id ? "default" : "outline"}
                     size="sm"
-                    className={storeFilter !== store.id ? "bg-yellow-100 text-yellow-800 border-yellow-300 hover:bg-yellow-200 dark:bg-yellow-900/40 dark:text-yellow-300 dark:border-yellow-700" : ""}
+                    className={storeFilter === store.id 
+                      ? "bg-yellow-600 hover:bg-yellow-700 text-white" 
+                      : "bg-yellow-100 text-yellow-800 border-yellow-300 hover:bg-yellow-200 dark:bg-yellow-900/40 dark:text-yellow-300 dark:border-yellow-700"}
                     onClick={() => setStoreFilter(store.id)}
                     data-testid={`button-yandex-store-filter-${store.id}`}
                   >

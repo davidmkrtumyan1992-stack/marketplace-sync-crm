@@ -2687,6 +2687,7 @@ export async function registerRoutes(
       const requestedStoreId = req.body?.storeId ? Number(req.body.storeId) : null;
       const allSettings = await storage.getMarketplaceSettings(orgId);
       let yandexSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey && s.warehouseId);
+      
       if (requestedStoreId) {
         yandexSettings = yandexSettings.filter(s => s.storeId === requestedStoreId);
       }
@@ -2713,31 +2714,47 @@ export async function registerRoutes(
           const cleanBusinessId = ySetting.warehouseId!.replace(/[^\x00-\x7F]/g, "").replace(/\s/g, "").trim();
           const isAcmaKey = cleanToken.startsWith("ACMA:");
           const authHeaders: Record<string, string> = {
-            ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `Bearer ${cleanToken}` }),
+            ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
             "Content-Type": "application/json",
             "Accept": "application/json",
           };
 
-          console.log(`[yandex-sync-orders] Fetching campaigns for «${displayName}» (Business ID: ${cleanBusinessId}) using ${isAcmaKey ? "Api-Key" : "Bearer token"}...`);
-            if (!campRes.ok) {
-              const errText = await campRes.text().catch(() => "");
-              let detail = "";
-              try {
-                const errJson = JSON.parse(errText);
-                detail = errJson.errors?.map((e: any) => `${e.code}: ${e.message}`).join(", ") || 
-                         errJson.message || 
-                         errJson.error_description || "";
-              } catch (e) {
-                detail = errText;
-              }
-              console.error(`[yandex-sync-orders] Campaigns API returned ${campRes.status}: ${errText}`);
-              throw new Error(`Ошибка Yandex API (${campRes.status}): ${detail || "Нет деталей"}`);
+          console.log(`[yandex-sync-orders] Fetching campaigns for «${displayName}» (Business ID: ${cleanBusinessId}) using ${isAcmaKey ? "Api-Key" : "OAuth token"}...`);
+          const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { method: "GET", headers: authHeaders });
+          
+          if (!campRes.ok) {
+            const errText = await campRes.text().catch(() => "");
+            if (campRes.status === 401 || campRes.status === 403) {
+              throw new Error("Неверный токен (OAuth)");
             }
+            throw new Error(`Ошибка Yandex API (${campRes.status}): ${errText || "Нет деталей"}`);
+          }
           const campData = await campRes.json();
           const campaigns = campData?.campaigns || [];
           console.log(`[yandex-sync-orders] Found ${campaigns.length} campaign(s) for «${displayName}»`);
 
-          for (const campaign of campaigns) {
+          // Auto-discovery and filtering logic:
+          // If the user provided an ID (Business ID or Campaign ID) in warehouseId field, use it to filter.
+          let filteredCampaigns = campaigns;
+          if (cleanBusinessId) {
+            // Check if cleanBusinessId is an exact campaign ID
+            const exactMatch = campaigns.find((c: any) => String(c.id) === cleanBusinessId);
+            if (exactMatch) {
+              console.log(`[yandex-sync-orders] Found exact campaign ID match for ${cleanBusinessId}`);
+              filteredCampaigns = [exactMatch];
+            } else {
+              // Otherwise, assume it's a Business ID and filter campaigns belonging to it
+              filteredCampaigns = campaigns.filter((c: any) => c.business?.id && String(c.business.id) === cleanBusinessId);
+              console.log(`[yandex-sync-orders] Filtered to ${filteredCampaigns.length} campaign(s) for Business ID ${cleanBusinessId}`);
+            }
+          }
+
+          if (filteredCampaigns.length === 0) {
+            console.warn(`[yandex-sync-orders] No campaigns found matching ID ${cleanBusinessId} for «${displayName}». Attempting all available.`);
+            filteredCampaigns = campaigns;
+          }
+          
+          for (const campaign of filteredCampaigns) {
             const campaignId = String(campaign.id);
             console.log(`[yandex-sync-orders] Fetching orders for campaign ${campaignId}...`);
 
@@ -2750,6 +2767,9 @@ export async function registerRoutes(
               );
               if (!ordersRes.ok) {
                 const errText = await ordersRes.text().catch(() => "");
+                if (ordersRes.status === 403) {
+                  throw new Error(`Доступ к кампании ${campaignId} запрещен`);
+                }
                 let detail = "";
                 try {
                   const errJson = JSON.parse(errText);

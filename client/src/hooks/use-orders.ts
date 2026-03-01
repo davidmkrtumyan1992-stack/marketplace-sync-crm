@@ -281,12 +281,12 @@ export function useSyncYandexOrders() {
   const { toast } = useToast();
 
   return useMutation({
-    mutationFn: async (storeId?: number) => {
+    mutationFn: async (storeId?: string | number) => {
       const res = await fetch("/api/marketplace/yandex/sync-orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(storeId ? { storeId } : {}),
+        body: JSON.stringify(storeId && storeId !== "all" ? { storeId: Number(storeId) } : {}),
       });
       if (!res.ok) {
         const error = await res.json();
@@ -308,8 +308,17 @@ export function useSyncYandexOrders() {
         lines.push(line);
       }
       for (const s of failedStores) {
-        const is403 = s.error && (s.error.includes("403") || s.error.includes("Forbidden") || s.error.includes("доступ"));
-        lines.push(`«${s.storeName}»: ${is403 ? "ошибка доступа (403)" : s.error}`);
+        const errorMsg = s.error || "";
+        const isSpecificError = errorMsg.includes("Неверный токен") || errorMsg.includes("Доступ к кампании");
+        
+        if (isSpecificError) {
+          // Extract the specific part if it's wrapped in "Ошибка для магазина ...: "
+          const cleanMsg = errorMsg.includes(": ") ? errorMsg.split(": ").slice(1).join(": ") : errorMsg;
+          lines.push(`«${s.storeName}»: ${cleanMsg}`);
+        } else {
+          const is403 = errorMsg.includes("403") || errorMsg.includes("Forbidden") || errorMsg.includes("доступ");
+          lines.push(`«${s.storeName}»: ${is403 ? "ошибка доступа (403)" : errorMsg}`);
+        }
       }
       const allFailed = successStores.length === 0 && failedStores.length > 0;
       const hasErrors = failedStores.length > 0;
