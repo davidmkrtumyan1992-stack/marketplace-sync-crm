@@ -144,17 +144,142 @@ export async function registerRoutes(
   });
 
   app.put(api.stores.update.path, isAuthenticated, async (req, res) => {
-    const existing = await storage.getStore(Number(req.params.id));
-    if (!existing) return res.status(404).json({ message: "Магазин не найден" });
-    const company = await storage.getCompany(existing.companyId);
-    if (!company || company.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
-    const store = await storage.updateStore(Number(req.params.id), req.body);
-    res.json(store);
+    try {
+      const existing = await storage.getStore(Number(req.params.id));
+      if (!existing) return res.status(404).json({ message: "Магазин не найден" });
+      const company = await storage.getCompany(existing.companyId);
+      if (!company || company.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
+      const store = await storage.updateStore(Number(req.params.id), req.body);
+
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const matchingSetting = allSettings.find(s => s.storeId === store.id);
+      if (matchingSetting) {
+        const settingUpdate: any = {};
+        if (req.body.apiKey !== undefined) settingUpdate.apiKey = req.body.apiKey;
+        if (req.body.clientId !== undefined) settingUpdate.clientId = req.body.clientId;
+        if (req.body.warehouseId !== undefined) settingUpdate.warehouseId = req.body.warehouseId;
+        if (req.body.name !== undefined) settingUpdate.storeName = req.body.name;
+        if (req.body.isActive !== undefined) settingUpdate.isActive = req.body.isActive;
+        if (Object.keys(settingUpdate).length > 0) {
+          await storage.updateMarketplaceSetting(matchingSetting.id, settingUpdate);
+        }
+      }
+
+      res.json(store);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
   });
 
   app.get("/api/stores", isAuthenticated, async (req, res) => {
     const allStores = await storage.getStoresByOrg(getOrgId(req));
     res.json(allStores);
+  });
+
+  app.post("/api/stores/:id/test-connection", isAuthenticated, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const existing = await storage.getStore(id);
+      if (!existing) return res.status(404).json({ message: "Магазин не найден" });
+      const company = await storage.getCompany(existing.companyId);
+      if (!company || company.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
+
+      const apiKey = (req.body?.apiKey || existing.apiKey || "").trim();
+      const clientId = (req.body?.clientId || existing.clientId || "").trim();
+      const marketplace = existing.marketplace;
+
+      if (!apiKey) {
+        return res.json({ success: false, message: "API-ключ не задан" });
+      }
+
+      if (marketplace === "ozon") {
+        if (!clientId) {
+          return res.json({ success: false, message: "Client ID не задан" });
+        }
+        try {
+          const headers = {
+            "Client-Id": String(parseInt(clientId, 10)),
+            "Api-Key": apiKey,
+            "Content-Type": "application/json",
+          };
+          const testRes = await fetch("https://api-seller.ozon.ru/v3/product/list", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ filter: { visibility: "ALL" }, limit: 1 }),
+          });
+          if (!testRes.ok) {
+            const errText = await testRes.text().catch(() => "");
+            let detail = "";
+            try {
+              const errJson = JSON.parse(errText);
+              detail = errJson.message || errJson.error || "";
+            } catch { detail = errText.slice(0, 200); }
+            if (testRes.status === 401 || testRes.status === 403) {
+              return res.json({ success: false, message: `Неверный API-ключ или Client ID: ${detail || "доступ запрещён"}` });
+            }
+            return res.json({ success: false, message: `Ошибка Ozon API (${testRes.status}): ${detail || "Нет деталей"}` });
+          }
+          return res.json({ success: true, message: "Подключение к Ozon успешно" });
+        } catch (error: any) {
+          return res.json({ success: false, message: `Ошибка сети: ${error.message}` });
+        }
+      }
+
+      if (marketplace === "yandex") {
+        try {
+          const cleanToken = apiKey.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+          const isAcmaKey = cleanToken.startsWith("ACMA:");
+          const authHeaders: Record<string, string> = {
+            ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+          };
+          const testRes = await fetch("https://api.partner.market.yandex.ru/campaigns", {
+            method: "GET",
+            headers: authHeaders,
+          });
+          if (!testRes.ok) {
+            if (testRes.status === 401 || testRes.status === 403) {
+              return res.json({ success: false, message: "Неверный токен (OAuth)" });
+            }
+            const errText = await testRes.text().catch(() => "");
+            return res.json({ success: false, message: `Ошибка Yandex API (${testRes.status}): ${errText.slice(0, 200) || "Нет деталей"}` });
+          }
+          const data = await testRes.json();
+          const campaignCount = data?.campaigns?.length || 0;
+          return res.json({ success: true, message: `Подключение к Yandex Market успешно (${campaignCount} кампаний)` });
+        } catch (error: any) {
+          return res.json({ success: false, message: `Ошибка сети: ${error.message}` });
+        }
+      }
+
+      if (marketplace === "wildberries") {
+        try {
+          const testRes = await fetch("https://common-api.wildberries.ru/api/v1/warehouses", {
+            method: "GET",
+            headers: {
+              "Authorization": apiKey,
+              "Content-Type": "application/json",
+            },
+          });
+          if (!testRes.ok) {
+            if (testRes.status === 401 || testRes.status === 403) {
+              return res.json({ success: false, message: "Неверный API-ключ Wildberries" });
+            }
+            const errText = await testRes.text().catch(() => "");
+            return res.json({ success: false, message: `Ошибка WB API (${testRes.status}): ${errText.slice(0, 200) || "Нет деталей"}` });
+          }
+          return res.json({ success: true, message: "Подключение к Wildberries успешно" });
+        } catch (error: any) {
+          return res.json({ success: false, message: `Ошибка сети: ${error.message}` });
+        }
+      }
+
+      return res.json({ success: false, message: "Неизвестный маркетплейс" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
   });
 
   app.delete("/api/stores/:id", isAuthenticated, async (req, res) => {

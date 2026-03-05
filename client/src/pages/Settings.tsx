@@ -16,7 +16,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store, type StockSyncLogEntry, type InventorySyncSetting, type MarketplaceSetting, type Company } from "@shared/schema";
-import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2 } from "lucide-react";
+import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2, Loader2, PlugZap } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -225,6 +225,7 @@ function CompanyCard({ company, onEdit, onDelete }: { company: Company; onEdit: 
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [deletingStore, setDeletingStore] = useState<Store | null>(null);
+  const [editingStore, setEditingStore] = useState<Store | null>(null);
 
   const deleteStoreMutation = useMutation({
     mutationFn: async (id: number) => {
@@ -322,6 +323,9 @@ function CompanyCard({ company, onEdit, onDelete }: { company: Company; onEdit: 
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-4">
+                      <Button variant="ghost" size="icon" onClick={() => setEditingStore(store)} data-testid={`button-edit-store-${store.id}`}>
+                        <Pencil className="w-4 h-4" />
+                      </Button>
                       <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => setDeletingStore(store)} data-testid={`button-delete-store-${store.id}`}>
                         <Trash2 className="w-4 h-4" />
                       </Button>
@@ -333,6 +337,10 @@ function CompanyCard({ company, onEdit, onDelete }: { company: Company; onEdit: 
           )}
         </CardContent>
       </Card>
+
+      {editingStore && (
+        <EditStoreDialog store={editingStore} companyId={company.id} onClose={() => setEditingStore(null)} />
+      )}
 
       <AlertDialog open={!!deletingStore} onOpenChange={(open) => !open && setDeletingStore(null)}>
         <AlertDialogContent>
@@ -526,6 +534,201 @@ const storeFormSchema = storeFormBaseSchema.superRefine(storeRefinement);
 const addStoreFormSchema = storeFormBaseSchema.extend({
   companyId: z.string().min(1, "Выберите компанию"),
 }).superRefine((data, ctx) => storeRefinement(data, ctx));
+
+function EditStoreDialog({ store, companyId, onClose }: { store: Store; companyId: number; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const marketplace = store.marketplace;
+  const [connectionStatus, setConnectionStatus] = useState<{ success: boolean; message: string } | null>(null);
+
+  const form = useForm<z.infer<typeof storeFormSchema>>({
+    resolver: zodResolver(storeFormSchema),
+    defaultValues: {
+      storeName: store.name,
+      marketplace: store.marketplace as "ozon" | "wildberries" | "yandex",
+      apiKey: store.apiKey || "",
+      clientId: store.clientId || "",
+      warehouseId: store.warehouseId || "",
+      isActive: store.isActive ?? true,
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async (data: z.infer<typeof storeFormSchema>) => {
+      const sanitize = (s: string) => s.replace(/[^\x00-\x7F]/g, "").trim();
+      const apiKey = data.marketplace === "yandex" ? sanitize(data.apiKey) : data.apiKey.trim();
+
+      const payload: any = {
+        name: data.storeName.trim(),
+        apiKey,
+        isActive: data.isActive,
+      };
+      if (data.marketplace === "ozon" && data.clientId) {
+        payload.clientId = data.clientId.trim();
+      }
+      if (data.marketplace === "wildberries" && data.warehouseId) {
+        payload.warehouseId = data.warehouseId.trim();
+      }
+      if (data.marketplace === "yandex" && data.warehouseId) {
+        payload.warehouseId = sanitize(data.warehouseId);
+      }
+
+      const res = await apiRequest("PUT", `/api/stores/${store.id}`, payload);
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "stores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stores"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      toast({ title: "Сохранено", description: "Магазин обновлён" });
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const testConnectionMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/stores/${store.id}/test-connection`, {
+        apiKey: form.getValues("apiKey"),
+        clientId: form.getValues("clientId"),
+        warehouseId: form.getValues("warehouseId"),
+      });
+      return await res.json();
+    },
+    onSuccess: (data: { success: boolean; message: string }) => {
+      setConnectionStatus(data);
+    },
+    onError: (error: Error) => {
+      setConnectionStatus({ success: false, message: error.message });
+    },
+  });
+
+  const selectedMp = MARKETPLACE_OPTIONS.find(m => m.value === marketplace);
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md w-[95vw] sm:w-full">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Pencil className="w-5 h-5" />
+            Редактировать магазин
+          </DialogTitle>
+          <DialogDescription>Изменить настройки подключения магазина</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={form.handleSubmit((data) => updateMutation.mutate(data))} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Маркетплейс</Label>
+            <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-muted/50">
+              <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: selectedMp?.color }} />
+              <span className="text-sm font-medium">{selectedMp?.label}</span>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Название магазина</Label>
+            <Input
+              {...form.register("storeName")}
+              data-testid="input-edit-store-name"
+            />
+            {form.formState.errors.storeName && (
+              <span className="text-xs text-destructive">{form.formState.errors.storeName.message}</span>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label>API-ключ</Label>
+            <Input
+              type="password"
+              {...form.register("apiKey")}
+              placeholder={marketplace === "wildberries" ? "eyJ... (JWT-токен WB)" : "API ключ"}
+              data-testid="input-edit-api-key"
+            />
+            {form.formState.errors.apiKey && (
+              <span className="text-xs text-destructive">{form.formState.errors.apiKey.message}</span>
+            )}
+          </div>
+
+          {marketplace === "ozon" && (
+            <div className="space-y-2">
+              <Label>Client ID</Label>
+              <Input {...form.register("clientId")} placeholder="Client ID" data-testid="input-edit-client-id" />
+              {form.formState.errors.clientId && (
+                <span className="text-xs text-destructive">{form.formState.errors.clientId.message}</span>
+              )}
+            </div>
+          )}
+
+          {marketplace === "wildberries" && (
+            <div className="space-y-2">
+              <Label>ID склада (опционально)</Label>
+              <Input {...form.register("warehouseId")} placeholder="ID склада WB" data-testid="input-edit-warehouse-id" />
+            </div>
+          )}
+
+          {marketplace === "yandex" && (
+            <div className="space-y-2">
+              <Label>ID кампании (Campaign ID)</Label>
+              <Input {...form.register("warehouseId")} placeholder="Например: 216691427" data-testid="input-edit-warehouse-id" />
+              <p className="text-[10px] text-muted-foreground mt-1 italic">Используйте ID кампании (из раздела Настройки API в ЛК Яндекса)</p>
+              {form.formState.errors.warehouseId && (
+                <span className="text-xs text-destructive">{form.formState.errors.warehouseId.message}</span>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={form.watch("isActive")}
+              onCheckedChange={(val) => form.setValue("isActive", val)}
+              data-testid="switch-edit-store-active"
+            />
+            <Label className="text-sm text-muted-foreground">Активен</Label>
+          </div>
+
+          <div className="border rounded-lg p-3 space-y-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => { setConnectionStatus(null); testConnectionMutation.mutate(); }}
+              disabled={testConnectionMutation.isPending}
+              data-testid="button-test-connection"
+            >
+              {testConnectionMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <PlugZap className="w-4 h-4 mr-2" />
+              )}
+              Проверить подключение
+            </Button>
+            {connectionStatus && (
+              <div className={`flex items-start gap-2 text-sm ${connectionStatus.success ? "text-green-600 dark:text-green-400" : "text-destructive"}`} data-testid="text-connection-result">
+                {connectionStatus.success ? (
+                  <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
+                ) : (
+                  <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                )}
+                <span>{connectionStatus.message}</span>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} data-testid="button-cancel-edit-store">
+              Отмена
+            </Button>
+            <Button type="submit" disabled={updateMutation.isPending} data-testid="button-save-edit-store">
+              {updateMutation.isPending ? "Сохранение..." : "Сохранить"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function AddStoreDialog({ companies, onClose }: { companies: Company[]; onClose: () => void }) {
   const queryClient = useQueryClient();
