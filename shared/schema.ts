@@ -135,6 +135,7 @@ export const marketplaceSettings = pgTable("marketplace_settings", {
   id: serial("id").primaryKey(),
   organizationId: text("organization_id").notNull(),
   companyId: integer("company_id").references(() => companies.id),
+  storeId: integer("store_id").references(() => stores.id, { onDelete: "cascade" }),
   marketplace: text("marketplace").notNull(),
   storeName: text("store_name"),
   apiKey: text("api_key").notNull(),

@@ -166,6 +166,7 @@ function groupOrdersByDate(orders: any[]): { label: string; orders: any[] }[] {
 
 export default function Orders() {
   const { data: orders, isLoading } = useOrders();
+  const { toast } = useToast();
   const [isDirectSaleOpen, setIsDirectSaleOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
 
@@ -183,7 +184,7 @@ export default function Orders() {
   const silentSync = useSilentSyncOzonOrders();
   const bulkLabels = useOzonBulkLabels();
 
-  const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number }[]>({
+  const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number; apiKey: string | null; warehouseId: string | null }[]>({
     queryKey: ["/api/stores"],
   });
 
@@ -604,7 +605,16 @@ export default function Orders() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => syncYandexOrders.mutate(storeFilter !== "all" ? storeFilter : undefined)}
+                onClick={() => {
+                  if (storeFilter !== "all") {
+                    const selectedStore = yandexStores.find(s => s.id === storeFilter);
+                    if (selectedStore && (!selectedStore.apiKey || !selectedStore.warehouseId)) {
+                      toast({ title: "Магазин не настроен", description: `Магазин «${selectedStore.name}» не настроен. Пожалуйста, введите API-ключ и Business ID в Настройках`, variant: "destructive" });
+                      return;
+                    }
+                  }
+                  syncYandexOrders.mutate(storeFilter !== "all" ? storeFilter : undefined);
+                }}
                 disabled={syncYandexOrders.isPending}
                 data-testid="button-sync-yandex-orders"
               >
@@ -629,21 +639,24 @@ export default function Orders() {
                     Все магазины
                   </Button>
                 )}
-                {yandexStores.map((store) => (
-                  <Button
-                    key={store.id}
-                    variant={storeFilter === store.id ? "default" : "outline"}
-                    size="sm"
-                    className={storeFilter === store.id 
-                      ? "bg-yellow-600 hover:bg-yellow-700 text-white" 
-                      : "bg-yellow-100 text-yellow-800 border-yellow-300 hover:bg-yellow-200 dark:bg-yellow-900/40 dark:text-yellow-300 dark:border-yellow-700"}
-                    onClick={() => setStoreFilter(store.id)}
-                    data-testid={`button-yandex-store-filter-${store.id}`}
-                  >
-                    <Store className="w-3.5 h-3.5 mr-1.5" />
-                    {store.name}
-                  </Button>
-                ))}
+                {yandexStores.map((store) => {
+                  const isUnconfigured = !store.apiKey || !store.warehouseId;
+                  return (
+                    <Button
+                      key={store.id}
+                      variant={storeFilter === store.id ? "default" : "outline"}
+                      size="sm"
+                      className={storeFilter === store.id 
+                        ? "bg-yellow-600 hover:bg-yellow-700 text-white" 
+                        : "bg-yellow-100 text-yellow-800 border-yellow-300 hover:bg-yellow-200 dark:bg-yellow-900/40 dark:text-yellow-300 dark:border-yellow-700"}
+                      onClick={() => setStoreFilter(store.id)}
+                      data-testid={`button-yandex-store-filter-${store.id}`}
+                    >
+                      {isUnconfigured ? <AlertTriangle className="w-3.5 h-3.5 mr-1.5 text-orange-500" /> : <Store className="w-3.5 h-3.5 mr-1.5" />}
+                      {store.name}
+                    </Button>
+                  );
+                })}
               </div>
             )}
 

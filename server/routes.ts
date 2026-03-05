@@ -139,7 +139,30 @@ export async function registerRoutes(
     if (!company || company.organizationId !== getOrgId(req)) {
       return res.status(403).json({ message: "Access denied" });
     }
+    const orgId = getOrgId(req);
+    if (req.body.apiKey) req.body.apiKey = req.body.apiKey.replace(/[^\x00-\x7F]/g, "").trim();
+    if (req.body.warehouseId) req.body.warehouseId = req.body.warehouseId.replace(/[^\x00-\x7F]/g, "").replace(/\s/g, "").trim();
+    if (req.body.clientId) req.body.clientId = req.body.clientId.replace(/\s/g, "").trim();
     const store = await storage.createStore(req.body);
+
+    if (store.apiKey) {
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const existingSetting = allSettings.find(s => s.storeId === store.id);
+      if (!existingSetting) {
+        await storage.createMarketplaceSetting({
+          organizationId: orgId,
+          companyId: company.id,
+          storeId: store.id,
+          marketplace: store.marketplace,
+          storeName: store.name,
+          apiKey: store.apiKey,
+          clientId: store.clientId || undefined,
+          warehouseId: store.warehouseId || undefined,
+          isActive: store.isActive ?? true,
+        });
+      }
+    }
+
     res.status(201).json(store);
   });
 
@@ -149,6 +172,9 @@ export async function registerRoutes(
       if (!existing) return res.status(404).json({ message: "Магазин не найден" });
       const company = await storage.getCompany(existing.companyId);
       if (!company || company.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
+      if (req.body.apiKey && typeof req.body.apiKey === "string") req.body.apiKey = req.body.apiKey.replace(/[^\x00-\x7F]/g, "").trim();
+      if (req.body.warehouseId && typeof req.body.warehouseId === "string") req.body.warehouseId = req.body.warehouseId.replace(/[^\x00-\x7F]/g, "").replace(/\s/g, "").trim();
+      if (req.body.clientId && typeof req.body.clientId === "string") req.body.clientId = req.body.clientId.replace(/\s/g, "").trim();
       const store = await storage.updateStore(Number(req.params.id), req.body);
 
       const orgId = getOrgId(req);
@@ -164,6 +190,18 @@ export async function registerRoutes(
         if (Object.keys(settingUpdate).length > 0) {
           await storage.updateMarketplaceSetting(matchingSetting.id, settingUpdate);
         }
+      } else if (store.apiKey) {
+        await storage.createMarketplaceSetting({
+          organizationId: orgId,
+          companyId: store.companyId,
+          storeId: store.id,
+          marketplace: store.marketplace,
+          storeName: store.name,
+          apiKey: store.apiKey,
+          clientId: store.clientId || undefined,
+          warehouseId: store.warehouseId || undefined,
+          isActive: store.isActive ?? true,
+        });
       }
 
       res.json(store);
@@ -606,17 +644,18 @@ export async function registerRoutes(
   app.post(api.marketplace.save.path, isAuthenticated, requireRole("owner"), async (req, res) => {
     const orgId = getOrgId(req);
     const body = { ...req.body, organizationId: orgId };
-    if (body.apiKey && typeof body.apiKey === "string") body.apiKey = body.apiKey.trim();
-    if (body.clientId && typeof body.clientId === "string") body.clientId = body.clientId.trim();
-    if (body.warehouseId && typeof body.warehouseId === "string") body.warehouseId = body.warehouseId.trim();
+    if (body.apiKey && typeof body.apiKey === "string") body.apiKey = body.apiKey.replace(/[^\x00-\x7F]/g, "").trim();
+    if (body.clientId && typeof body.clientId === "string") body.clientId = body.clientId.replace(/\s/g, "").trim();
+    if (body.warehouseId && typeof body.warehouseId === "string") body.warehouseId = body.warehouseId.replace(/[^\x00-\x7F]/g, "").replace(/\s/g, "").trim();
     if (body.storeName && typeof body.storeName === "string") body.storeName = body.storeName.trim();
     const input = api.marketplace.save.input.parse(body);
     const setting = await storage.createMarketplaceSetting(input);
 
+    let createdStoreId: number | null = null;
     if (body.companyId) {
       const company = await storage.getCompany(Number(body.companyId));
       if (company && company.organizationId === orgId) {
-        await storage.createStore({
+        const newStore = await storage.createStore({
           companyId: company.id,
           marketplace: body.marketplace,
           name: body.storeName || `${body.marketplace} магазин`,
@@ -625,6 +664,8 @@ export async function registerRoutes(
           warehouseId: body.warehouseId || null,
           isActive: body.isActive ?? true,
         });
+        createdStoreId = newStore.id;
+        await storage.updateMarketplaceSetting(setting.id, { storeId: newStore.id });
       }
     }
 
@@ -2796,7 +2837,11 @@ export async function registerRoutes(
     RESERVED: "Зарезервировано",
   };
 
-  const resolveStoreForYandex = async (setting: { companyId: number | null; warehouseId: string | null }): Promise<{ storeId: number | null; companyId: number | null; storeName: string | null }> => {
+  const resolveStoreForYandex = async (setting: { storeId?: number | null; companyId: number | null; warehouseId: string | null }): Promise<{ storeId: number | null; companyId: number | null; storeName: string | null }> => {
+    if (setting.storeId) {
+      const store = await storage.getStore(setting.storeId);
+      if (store) return { storeId: store.id, companyId: store.companyId, storeName: store.name };
+    }
     if (setting.companyId) {
       const companyStores = await storage.getStores(setting.companyId);
       const yandexStore = companyStores.find(s => s.marketplace === "yandex");
@@ -2815,9 +2860,37 @@ export async function registerRoutes(
       
       if (requestedStoreId) {
         yandexSettings = yandexSettings.filter(s => s.storeId === requestedStoreId);
+
+        if (yandexSettings.length === 0) {
+          const store = await storage.getStore(requestedStoreId);
+          if (store && store.marketplace === "yandex" && store.apiKey && store.warehouseId) {
+            const company = await storage.getCompany(store.companyId);
+            if (company && company.organizationId === orgId) {
+              const newSetting = await storage.createMarketplaceSetting({
+                organizationId: orgId,
+                companyId: store.companyId,
+                storeId: store.id,
+                marketplace: "yandex",
+                storeName: store.name,
+                apiKey: store.apiKey,
+                warehouseId: store.warehouseId,
+                isActive: store.isActive ?? true,
+              });
+              yandexSettings = [newSetting];
+              console.log(`[yandex-sync] Auto-provisioned marketplace_settings for store «${store.name}» (id=${store.id})`);
+            }
+          }
+        }
       }
 
       if (yandexSettings.length === 0) {
+        if (requestedStoreId) {
+          const store = await storage.getStore(requestedStoreId);
+          const storeName = store?.name || `ID ${requestedStoreId}`;
+          if (store && (!store.apiKey || !store.warehouseId)) {
+            return res.status(400).json({ message: `Магазин «${storeName}» не настроен. Пожалуйста, введите API-ключ и Business ID в Настройках` });
+          }
+        }
         return res.status(400).json({ message: "Настройки Yandex Market не найдены" });
       }
 
@@ -3183,8 +3256,9 @@ export async function registerRoutes(
             const cleanToken = ySetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
             const isAcmaKey = cleanToken.startsWith("ACMA:");
             const authHeaders: Record<string, string> = {
-              ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `Bearer ${cleanToken}` }),
+              ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
               "Content-Type": "application/json",
+              "Accept": "application/json",
             };
             const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { method: "GET", headers: authHeaders });
             if (!campRes.ok) continue;
