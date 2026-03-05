@@ -2959,8 +2959,10 @@ export async function registerRoutes(
             let page = 1;
             let hasMore = true;
             while (hasMore) {
+              const yandexStatuses = ['NEW', 'PROCESSING', 'READY_TO_SHIP', 'DELIVERY', 'PICKUP', 'DELIVERED', 'CANCELLED', 'RETURNED'];
+              const statusParams = yandexStatuses.map(s => `status=${s}`).join('&');
               const ordersRes = await fetch(
-                `${YANDEX_BASE}/campaigns/${campaignId}/orders?status=NEW,PROCESSING,READY_TO_SHIP,DELIVERY,PICKUP,DELIVERED,CANCELLED,RETURNED&fromDate=${since.toISOString().split("T")[0]}&page=${page}&pageSize=50`,
+                `${YANDEX_BASE}/campaigns/${campaignId}/orders?${statusParams}&fromDate=${since.toISOString().split("T")[0]}&page=${page}&pageSize=50`,
                 { method: "GET", headers: authHeaders }
               );
               if (!ordersRes.ok) {
@@ -3270,8 +3272,10 @@ export async function registerRoutes(
               let page = 1;
               let hasMore = true;
               while (hasMore) {
+                const yandexStatuses = ['NEW', 'PROCESSING', 'READY_TO_SHIP', 'DELIVERY', 'PICKUP', 'DELIVERED', 'CANCELLED', 'RETURNED'];
+                const statusParams = yandexStatuses.map(s => `status=${s}`).join('&');
                 const ordersRes = await fetch(
-                  `${YANDEX_BASE}/campaigns/${campaignId}/orders?status=NEW,PROCESSING,READY_TO_SHIP,DELIVERY,PICKUP,DELIVERED,CANCELLED,RETURNED&fromDate=${since.toISOString().split("T")[0]}&page=${page}&pageSize=50`,
+                  `${YANDEX_BASE}/campaigns/${campaignId}/orders?${statusParams}&fromDate=${since.toISOString().split("T")[0]}&page=${page}&pageSize=50`,
                   { method: "GET", headers: authHeaders }
                 );
                 if (!ordersRes.ok) { hasMore = false; break; }
