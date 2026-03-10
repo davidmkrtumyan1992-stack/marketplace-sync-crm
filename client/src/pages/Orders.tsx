@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useSyncOzonOrders, useOzonPrintLabel, useOzonBulkLabels, useResyncOzonOrders, useSilentSyncOzonOrders, useSyncYandexOrders } from "@/hooks/use-orders";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useOzonPrintLabel, useOzonBulkLabels, useSilentSyncOzonOrders } from "@/hooks/use-orders";
 import { format, isToday, isYesterday } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +24,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, RefreshCw, Truck, XCircle, Loader2, Printer, Warehouse, Download, AlertTriangle, CheckCircle, Clock } from "lucide-react";
+import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, Truck, XCircle, Loader2, Printer, Warehouse, Download, AlertTriangle, CheckCircle, Clock } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -178,9 +178,6 @@ export default function Orders() {
   const [wbSubFilter, setWbSubFilter] = useState<WbSubFilter>("all");
   const [storeFilter, setStoreFilter] = useState<"all" | number>("all");
 
-  const syncOzonOrders = useSyncOzonOrders();
-  const syncYandexOrders = useSyncYandexOrders();
-  const resyncOzonOrders = useResyncOzonOrders();
   const silentSync = useSilentSyncOzonOrders();
   const bulkLabels = useOzonBulkLabels();
 
@@ -438,32 +435,6 @@ export default function Orders() {
 
         {marketplaceTab === "ozon" && (
           <>
-            <div className="flex flex-wrap gap-2 items-center">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => syncOzonOrders.mutate()}
-                disabled={syncOzonOrders.isPending}
-                data-testid="button-sync-ozon-orders"
-              >
-                {syncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-                {syncOzonOrders.isPending && ozonStores.length > 0
-                  ? `Синхронизация ${ozonStores.length > 1 ? ozonStores.map(s => s.name).join(", ") + "..." : "магазина " + ozonStores[0].name + "..."}`
-                  : "Обновить вручную"}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => resyncOzonOrders.mutate()}
-                disabled={resyncOzonOrders.isPending}
-                data-testid="button-resync-ozon-orders"
-              >
-                {resyncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-                Пересинхронизация
-              </Button>
-              <span className="text-xs text-muted-foreground ml-1" data-testid="text-auto-sync-info">Авто-обновление каждые 5 мин</span>
-            </div>
-
             {syncingStores.length > 0 && (
               <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 text-sm" data-testid="sync-status-banner">
                 <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
@@ -602,31 +573,6 @@ export default function Orders() {
 
         {marketplaceTab === "yandex" && (
           <>
-            <div className="flex flex-wrap gap-2 items-center">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (storeFilter !== "all") {
-                    const selectedStore = yandexStores.find(s => s.id === storeFilter);
-                    if (selectedStore && (!selectedStore.apiKey || !selectedStore.warehouseId)) {
-                      toast({ title: "Магазин не настроен", description: `Магазин «${selectedStore.name}» не настроен. Пожалуйста, введите API-ключ и Business ID в Настройках`, variant: "destructive" });
-                      return;
-                    }
-                  }
-                  syncYandexOrders.mutate(storeFilter !== "all" ? storeFilter : undefined);
-                }}
-                disabled={syncYandexOrders.isPending}
-                data-testid="button-sync-yandex-orders"
-              >
-                {syncYandexOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-                {syncYandexOrders.isPending
-                  ? `Синхронизация Yandex${storeFilter !== "all" ? " (" + (yandexStores.find(s => s.id === storeFilter)?.name || "") + ")..." : yandexStores.length > 0 ? " (" + yandexStores.map(s => s.name).join(", ") + ")..." : "..."}`
-                  : storeFilter !== "all" ? `Обновить ${yandexStores.find(s => s.id === storeFilter)?.name || "Yandex"} вручную` : "Обновить вручную"}
-              </Button>
-              <span className="text-xs text-muted-foreground ml-1" data-testid="text-auto-sync-info-yandex">Авто-обновление каждые 5 мин</span>
-            </div>
-
             {yandexStores.length > 0 && (
               <div className="flex gap-2 flex-wrap items-center mb-4 p-3 bg-yellow-50/50 dark:bg-yellow-900/10 border border-yellow-100 dark:border-yellow-900/30 rounded-lg" data-testid="yandex-store-filter-tabs">
                 <span className="text-sm font-medium text-yellow-800 dark:text-yellow-300 mr-1">Магазин:</span>
@@ -691,19 +637,6 @@ export default function Orders() {
 
         {marketplaceTab === "wildberries" && (
           <>
-            <div className="flex flex-wrap gap-2 items-center">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled
-                data-testid="button-sync-wb-orders"
-                title="Интеграция Wildberries в разработке"
-              >
-                <RefreshCw className="w-4 h-4 mr-2" />
-                Обновить вручную
-              </Button>
-            </div>
-
             {wbStores.length > 1 && (
               <div className="flex gap-2 flex-wrap items-center" data-testid="wb-store-filter-tabs">
                 <span className="text-sm text-muted-foreground mr-1">Магазин:</span>

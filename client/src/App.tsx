@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
-import { Switch, Route, Redirect } from "wouter";
-import { queryClient, apiRequest } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { Switch, Route } from "wouter";
+import { queryClient } from "./lib/queryClient";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
@@ -15,23 +15,19 @@ import Reports from "@/pages/Reports";
 import Intake from "@/pages/Intake";
 import { useAuth } from "@/hooks/use-auth";
 import { useRole } from "@/hooks/use-role";
-import { Loader2, ShieldAlert, Database, Shield, BarChart3 } from "lucide-react";
+import { ShieldAlert, Database, Shield, BarChart3, Package } from "lucide-react";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent } from "@/components/ui/card";
+import { getQueryFn } from "./lib/queryClient";
 
-function SplashScreen({ stage }: { stage: "connecting" | "auth" | "data" | "ready" }) {
-  const stages = [
-    { key: "connecting", label: "Подключение к серверу...", icon: Database, progress: 20 },
-    { key: "auth", label: "Проверка авторизации...", icon: Shield, progress: 55 },
-    { key: "data", label: "Загрузка данных...", icon: BarChart3, progress: 85 },
-    { key: "ready", label: "Готово", icon: BarChart3, progress: 100 },
-  ];
-  const current = stages.find(s => s.key === stage) || stages[0];
-  const StageIcon = current.icon;
+function SplashScreen({ progress, label }: { progress: number; label: string }) {
+  const icons = [Database, Shield, Package, BarChart3];
+  const iconIdx = progress < 30 ? 0 : progress < 70 ? 1 : progress < 100 ? 2 : 3;
+  const Icon = icons[iconIdx];
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50/30 to-slate-100 dark:from-slate-950 dark:via-blue-950/20 dark:to-slate-900" data-testid="splash-screen">
-      <div className={`flex flex-col items-center gap-6 transition-opacity duration-500 ${stage === "ready" ? "opacity-0" : "opacity-100"}`}>
+      <div className={`flex flex-col items-center gap-6 transition-opacity duration-500 ${progress >= 100 ? "opacity-0" : "opacity-100"}`}>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center">
             <BarChart3 className="w-6 h-6 text-white" />
@@ -42,12 +38,12 @@ function SplashScreen({ stage }: { stage: "connecting" | "auth" | "data" | "read
           <div className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
             <div
               className="h-full bg-blue-600 rounded-full transition-all duration-700 ease-out"
-              style={{ width: `${current.progress}%` }}
+              style={{ width: `${Math.min(progress, 100)}%` }}
             />
           </div>
           <div className="flex items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-            <StageIcon className="w-4 h-4" />
-            <span>{current.label}</span>
+            <Icon className="w-4 h-4" />
+            <span>{label}</span>
           </div>
         </div>
       </div>
@@ -55,27 +51,28 @@ function SplashScreen({ stage }: { stage: "connecting" | "auth" | "data" | "read
   );
 }
 
-function ProtectedRoute({ component: Component }: { component: React.ComponentType; path?: string }) {
-  const { user, isLoading } = useAuth();
-  const [splashStage, setSplashStage] = useState<"connecting" | "auth" | "data" | "ready">("connecting");
-  const [showSplash, setShowSplash] = useState(true);
+function GlobalDataPreloader({ children }: { children: React.ReactNode }) {
+  const { user, isLoading: authLoading } = useAuth();
   const [syncTriggered, setSyncTriggered] = useState(false);
+  const [showSplash, setShowSplash] = useState(true);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setSplashStage("auth"), 400);
-    return () => clearTimeout(timer);
-  }, []);
+  const { isSuccess: ordersReady } = useQuery({
+    queryKey: ["/api/orders"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+    enabled: !!user,
+  });
 
-  useEffect(() => {
-    if (!isLoading) {
-      setSplashStage("data");
-      const timer = setTimeout(() => {
-        setSplashStage("ready");
-        setTimeout(() => setShowSplash(false), 500);
-      }, 600);
-      return () => clearTimeout(timer);
-    }
-  }, [isLoading]);
+  const { isSuccess: storesReady } = useQuery({
+    queryKey: ["/api/stores"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+    enabled: !!user,
+  });
+
+  const { isSuccess: productsReady } = useQuery({
+    queryKey: ["/api/products"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+    enabled: !!user,
+  });
 
   useEffect(() => {
     if (user && !syncTriggered) {
@@ -84,12 +81,47 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
     }
   }, [user, syncTriggered]);
 
-  if (showSplash && isLoading) {
-    return <SplashScreen stage={splashStage} />;
+  const allDataReady = !user || (ordersReady && storesReady && productsReady);
+
+  useEffect(() => {
+    if (!authLoading && allDataReady && showSplash) {
+      const timer = setTimeout(() => setShowSplash(false), 600);
+      return () => clearTimeout(timer);
+    }
+  }, [authLoading, allDataReady, showSplash]);
+
+  let progress = 0;
+  let label = "Подключение к серверу...";
+
+  if (authLoading) {
+    progress = 20;
+    label = "Подключение к серверу...";
+  } else if (!user) {
+    progress = 100;
+    label = "Готово";
+  } else if (!ordersReady || !storesReady) {
+    progress = 45;
+    label = "Загрузка заказов и магазинов...";
+  } else if (!productsReady) {
+    progress = 65;
+    label = "Загрузка товаров...";
+  } else {
+    progress = 90;
+    label = "Подготовка интерфейса...";
   }
 
-  if (showSplash && !isLoading && splashStage !== "ready") {
-    return <SplashScreen stage={splashStage} />;
+  if (showSplash && (authLoading || (user && !allDataReady))) {
+    return <SplashScreen progress={progress} label={label} />;
+  }
+
+  return <>{children}</>;
+}
+
+function ProtectedRoute({ component: Component }: { component: React.ComponentType; path?: string }) {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <SplashScreen progress={30} label="Проверка авторизации..." />;
   }
 
   if (!user) {
@@ -104,7 +136,7 @@ function RoleGuard({ component: Component, allowed }: { component: React.Compone
   const { isLoading: roleLoading } = useRole();
 
   if (isLoading || roleLoading) {
-    return <SplashScreen stage="auth" />;
+    return <SplashScreen progress={40} label="Проверка авторизации..." />;
   }
 
   if (!user) {
@@ -152,7 +184,9 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
-        <Router />
+        <GlobalDataPreloader>
+          <Router />
+        </GlobalDataPreloader>
       </TooltipProvider>
     </QueryClientProvider>
   );
