@@ -3080,8 +3080,7 @@ export async function registerRoutes(
     }
   });
 
-  // Background auto-sync: Poll Ozon order statuses every 10 minutes
-  const OZON_SYNC_INTERVAL = 10 * 60 * 1000; // 10 minutes
+  const OZON_SYNC_INTERVAL = 5 * 60 * 1000;
 
   const autoSyncOzonStatuses = async () => {
     try {
@@ -3238,7 +3237,7 @@ export async function registerRoutes(
   setTimeout(autoSyncOzonStatuses, 10000);
   console.log(`[ozon-auto-sync] Background sync scheduled every ${OZON_SYNC_INTERVAL / 60000} minutes`);
 
-  const YANDEX_SYNC_INTERVAL = 10 * 60 * 1000;
+  const YANDEX_SYNC_INTERVAL = 5 * 60 * 1000;
   const autoSyncYandexOrders = async () => {
     try {
       const allSettings = await db.select().from(marketplaceSettingsTable);
@@ -3357,6 +3356,21 @@ export async function registerRoutes(
   setInterval(autoSyncYandexOrders, YANDEX_SYNC_INTERVAL);
   setTimeout(autoSyncYandexOrders, 15000);
   console.log(`[yandex-auto-sync] Background sync scheduled every ${YANDEX_SYNC_INTERVAL / 60000} minutes`);
+
+  let lastSyncTrigger = 0;
+  app.post("/api/sync/trigger", isAuthenticated, async (req, res) => {
+    const now = Date.now();
+    if (now - lastSyncTrigger < 60000) {
+      return res.json({ ok: true, message: "Sync already triggered recently" });
+    }
+    lastSyncTrigger = now;
+    console.log(`[sync-trigger] Full sync triggered on login`);
+    setTimeout(() => {
+      autoSyncOzonStatuses().catch(e => console.error("[sync-trigger] Ozon error:", e));
+      autoSyncYandexOrders().catch(e => console.error("[sync-trigger] Yandex error:", e));
+    }, 100);
+    res.json({ ok: true, message: "Sync triggered" });
+  });
 
   return httpServer;
 }

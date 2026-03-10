@@ -449,7 +449,7 @@ export default function Orders() {
                 {syncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                 {syncOzonOrders.isPending && ozonStores.length > 0
                   ? `Синхронизация ${ozonStores.length > 1 ? ozonStores.map(s => s.name).join(", ") + "..." : "магазина " + ozonStores[0].name + "..."}`
-                  : "Загрузить заказы Ozon"}
+                  : "Обновить вручную"}
               </Button>
               <Button
                 variant="outline"
@@ -461,6 +461,7 @@ export default function Orders() {
                 {resyncOzonOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                 Пересинхронизация
               </Button>
+              <span className="text-xs text-muted-foreground ml-1" data-testid="text-auto-sync-info">Авто-обновление каждые 5 мин</span>
             </div>
 
             {syncingStores.length > 0 && (
@@ -621,8 +622,9 @@ export default function Orders() {
                 {syncYandexOrders.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                 {syncYandexOrders.isPending
                   ? `Синхронизация Yandex${storeFilter !== "all" ? " (" + (yandexStores.find(s => s.id === storeFilter)?.name || "") + ")..." : yandexStores.length > 0 ? " (" + yandexStores.map(s => s.name).join(", ") + ")..." : "..."}`
-                  : storeFilter !== "all" ? `Загрузить заказы ${yandexStores.find(s => s.id === storeFilter)?.name || "Yandex"}` : "Загрузить заказы Yandex"}
+                  : storeFilter !== "all" ? `Обновить ${yandexStores.find(s => s.id === storeFilter)?.name || "Yandex"} вручную` : "Обновить вручную"}
               </Button>
+              <span className="text-xs text-muted-foreground ml-1" data-testid="text-auto-sync-info-yandex">Авто-обновление каждые 5 мин</span>
             </div>
 
             {yandexStores.length > 0 && (
@@ -698,7 +700,7 @@ export default function Orders() {
                 title="Интеграция Wildberries в разработке"
               >
                 <RefreshCw className="w-4 h-4 mr-2" />
-                Загрузить заказы Wildberries
+                Обновить вручную
               </Button>
             </div>
 

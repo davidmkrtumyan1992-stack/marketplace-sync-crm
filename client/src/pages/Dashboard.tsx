@@ -51,7 +51,7 @@ export default function Dashboard() {
 
   const { data: syncStatus } = useQuery<SyncStatusSummary>({
     queryKey: ["/api/inventory-sync/status"],
-    refetchInterval: 15000,
+    refetchInterval: 60000,
   });
 
   const today = useMemo(() => new Date(), []);

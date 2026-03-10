@@ -85,6 +85,7 @@ const CATEGORIES = [
 export default function Products() {
   const { data: products, isLoading } = useProducts();
   const { canSeePurchasePrice } = useRole();
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
@@ -93,6 +94,11 @@ export default function Products() {
 
   const [importingMarketplace, setImportingMarketplace] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(searchInput), 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
 
   const syncMutation = useMutation({
@@ -234,8 +240,8 @@ export default function Products() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input 
               placeholder="Поиск по названию или артикулу..." 
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               className="pl-9"
               data-testid="input-search-products"
             />
