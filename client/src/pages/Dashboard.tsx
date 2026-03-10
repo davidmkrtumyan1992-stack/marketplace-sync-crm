@@ -21,9 +21,9 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatCurrency, formatQuantity, formatNumber } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
-import type { DashboardKPI, LowStockProduct, SalesDataPoint, SalesResponse, SyncStatusSummary } from "@shared/schema";
+import type { DashboardKPI, LowStockProduct, SalesDataPoint, SalesResponse, SyncStatusSummary, MarketplaceBreakdown } from "@shared/schema";
 import { Link } from "wouter";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from "recharts";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -33,6 +33,20 @@ import type { DateRange } from "react-day-picker";
 import { api } from "@shared/routes";
 
 const CHART_COLORS = ['#0FC2C0', '#0CABA8', '#008F8C', '#015958'];
+
+const MARKETPLACE_COLORS: Record<string, string> = {
+  ozon: "#005bff",
+  yandex: "#ffcc00",
+  wildberries: "#cb11ab",
+  other: "#6b7280",
+};
+
+const MARKETPLACE_LABELS: Record<string, string> = {
+  ozon: "Ozon",
+  yandex: "Yandex Market",
+  wildberries: "Wildberries",
+  other: "Прочее",
+};
 
 export default function Dashboard() {
   const { data: products } = useProducts();
@@ -116,6 +130,19 @@ export default function Dashboard() {
 
   const totalRevenue = salesResponse?.totalRevenue ?? 0;
   const totalOrders = salesResponse?.totalOrders ?? 0;
+
+  const donutData = useMemo(() => {
+    const breakdown = salesResponse?.marketplaceBreakdown;
+    if (!breakdown) return [];
+    return (["ozon", "yandex", "wildberries", "other"] as const)
+      .filter(key => breakdown[key] > 0)
+      .map(key => ({
+        name: MARKETPLACE_LABELS[key],
+        value: breakdown[key],
+        color: MARKETPLACE_COLORS[key],
+        key,
+      }));
+  }, [salesResponse]);
 
   const dateRangeLabel = useMemo(() => {
     if (!dateRange?.from) return "Выберите период";
@@ -726,78 +753,133 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                <div className="w-full" style={{ minHeight: 280 }}>
-                  {chartData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={280}>
-                      <BarChart
-                        data={chartData}
-                        barCategoryGap="20%"
-                        onMouseMove={(state: any) => {
-                          if (state?.activeTooltipIndex !== undefined) {
-                            setActiveBarIndex(state.activeTooltipIndex);
-                          }
-                        }}
-                        onMouseLeave={() => setActiveBarIndex(null)}
-                      >
-                        <defs>
-                          <linearGradient id="barGradientActive" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#ec4899" stopOpacity={0.95} />
-                            <stop offset="100%" stopColor="#a855f7" stopOpacity={0.85} />
-                          </linearGradient>
-                          <linearGradient id="barGradientInactive" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.15} />
-                            <stop offset="100%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.08} />
-                          </linearGradient>
-                        </defs>
-                        <XAxis
-                          dataKey="date"
-                          axisLine={false}
-                          tickLine={false}
-                          tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                          tickFormatter={(v: string) => {
-                            const parts = v.split("-");
-                            return parts.length >= 3 ? `${parts[2]}.${parts[1]}` : v;
+                <div className="grid grid-cols-1 lg:grid-cols-5 gap-6" style={{ minHeight: 280 }}>
+                  <div className="lg:col-span-3 w-full">
+                    {chartData.length > 0 ? (
+                      <ResponsiveContainer width="100%" height={280}>
+                        <BarChart
+                          data={chartData}
+                          barCategoryGap="20%"
+                          onMouseMove={(state: any) => {
+                            if (state?.activeTooltipIndex !== undefined) {
+                              setActiveBarIndex(state.activeTooltipIndex);
+                            }
                           }}
-                        />
-                        <YAxis
-                          axisLine={false}
-                          tickLine={false}
-                          tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                          tickFormatter={(v: number) => v >= 1000 ? `${Math.round(v / 1000)}к` : String(v)}
-                          width={45}
-                        />
-                        <Tooltip
-                          cursor={false}
-                          formatter={(value: number) => [formatCurrency(value), "Выручка"]}
-                          labelFormatter={(label: string) => {
-                            const parts = label.split("-");
-                            return parts.length >= 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : label;
-                          }}
-                          contentStyle={{
-                            borderRadius: "12px",
-                            border: "none",
-                            boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-                            padding: "10px 14px",
-                            background: "hsl(var(--popover))",
-                            color: "hsl(var(--popover-foreground))",
-                          }}
-                        />
-                        <Bar dataKey="revenue" radius={[8, 8, 4, 4]} maxBarSize={48}>
-                          {chartData.map((_, index) => (
-                            <Cell
-                              key={`cell-${index}`}
-                              fill={activeBarIndex === index ? "url(#barGradientActive)" : "url(#barGradientInactive)"}
-                              style={{ transition: "fill 0.2s ease", cursor: "pointer" }}
+                          onMouseLeave={() => setActiveBarIndex(null)}
+                        >
+                          <defs>
+                            <linearGradient id="barGradientActive" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#ec4899" stopOpacity={0.95} />
+                              <stop offset="100%" stopColor="#a855f7" stopOpacity={0.85} />
+                            </linearGradient>
+                            <linearGradient id="barGradientInactive" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.15} />
+                              <stop offset="100%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.08} />
+                            </linearGradient>
+                          </defs>
+                          <XAxis
+                            dataKey="date"
+                            axisLine={false}
+                            tickLine={false}
+                            tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                            tickFormatter={(v: string) => {
+                              const parts = v.split("-");
+                              return parts.length >= 3 ? `${parts[2]}.${parts[1]}` : v;
+                            }}
+                          />
+                          <YAxis
+                            axisLine={false}
+                            tickLine={false}
+                            tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                            tickFormatter={(v: number) => v >= 1000 ? `${Math.round(v / 1000)}к` : String(v)}
+                            width={45}
+                          />
+                          <Tooltip
+                            cursor={false}
+                            formatter={(value: number) => [formatCurrency(value), "Выручка"]}
+                            labelFormatter={(label: string) => {
+                              const parts = label.split("-");
+                              return parts.length >= 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : label;
+                            }}
+                            contentStyle={{
+                              borderRadius: "12px",
+                              border: "none",
+                              boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+                              padding: "10px 14px",
+                              background: "hsl(var(--popover))",
+                              color: "hsl(var(--popover-foreground))",
+                            }}
+                          />
+                          <Bar dataKey="revenue" radius={[8, 8, 4, 4]} maxBarSize={48}>
+                            {chartData.map((_, index) => (
+                              <Cell
+                                key={`cell-${index}`}
+                                fill={activeBarIndex === index ? "url(#barGradientActive)" : "url(#barGradientInactive)"}
+                                style={{ transition: "fill 0.2s ease", cursor: "pointer" }}
+                              />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="flex items-center justify-center h-[280px] text-muted-foreground text-sm">
+                        Нет данных за выбранный период
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="lg:col-span-2 flex flex-col items-center justify-center" data-testid="section-marketplace-donut">
+                    <p className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3">По маркетплейсам</p>
+                    {donutData.length > 0 ? (
+                      <>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <PieChart>
+                            <Pie
+                              data={donutData}
+                              dataKey="value"
+                              nameKey="name"
+                              cx="50%"
+                              cy="50%"
+                              innerRadius="55%"
+                              outerRadius="85%"
+                              paddingAngle={3}
+                              strokeWidth={0}
+                            >
+                              {donutData.map((entry, index) => (
+                                <Cell key={`donut-${index}`} fill={entry.color} />
+                              ))}
+                            </Pie>
+                            <Tooltip
+                              formatter={(value: number) => [formatCurrency(value, true), ""]}
+                              contentStyle={{
+                                borderRadius: "12px",
+                                border: "none",
+                                boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+                                padding: "10px 14px",
+                                background: "hsl(var(--popover))",
+                                color: "hsl(var(--popover-foreground))",
+                              }}
                             />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="flex flex-col gap-2 mt-2 w-full px-4" data-testid="donut-legend">
+                          {donutData.map((entry) => (
+                            <div key={entry.key} className="flex items-center justify-between gap-3" data-testid={`donut-legend-${entry.key}`}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: entry.color }} />
+                                <span className="text-sm font-medium">{entry.name}</span>
+                              </div>
+                              <span className="text-sm font-semibold tabular-nums">{formatCurrency(entry.value, true)}</span>
+                            </div>
                           ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="flex items-center justify-center h-[280px] text-muted-foreground text-sm">
-                      Нет данных за выбранный период
-                    </div>
-                  )}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex items-center justify-center h-[200px] text-muted-foreground text-sm">
+                        Нет данных
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </CardContent>

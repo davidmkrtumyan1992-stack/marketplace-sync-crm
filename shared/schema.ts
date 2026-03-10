@@ -379,10 +379,18 @@ export type SalesDataPoint = {
   companyName: string;
 };
 
+export type MarketplaceBreakdown = {
+  ozon: number;
+  yandex: number;
+  wildberries: number;
+  other: number;
+};
+
 export type SalesResponse = {
   data: SalesDataPoint[];
   totalOrders: number;
   totalRevenue: number;
+  marketplaceBreakdown: MarketplaceBreakdown;
 };
 
 // Sync Status

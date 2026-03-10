@@ -19,7 +19,7 @@ import {
   type ProductStoreExclusion, type InsertProductStoreExclusion,
   type WebhookLog, type InsertWebhookLog,
   type DashboardKPI, type CompanyWithStores, type StoreWithStats,
-  type ABCProduct, type LowStockProduct, type SalesDataPoint,
+  type ABCProduct, type LowStockProduct, type SalesDataPoint, type SalesResponse,
   type SyncStatusSummary,
 } from "@shared/schema";
 import { db } from "./db";
@@ -114,7 +114,7 @@ export interface IStorage {
   // Analytics
   getABCAnalysis(organizationId: string): Promise<ABCProduct[]>;
   getLowStockProducts(organizationId: string, threshold?: number): Promise<LowStockProduct[]>;
-  getSalesData(organizationId: string, options?: { days?: number; from?: string; to?: string; storeId?: number }): Promise<{ data: SalesDataPoint[]; totalOrders: number; totalRevenue: number }>;
+  getSalesData(organizationId: string, options?: { days?: number; from?: string; to?: string; storeId?: number }): Promise<SalesResponse>;
   
   // Stock Sync Log
   getStockSyncLogs(organizationId: string, limit?: number): Promise<StockSyncLogEntry[]>;
@@ -797,7 +797,7 @@ export class DatabaseStorage implements IStorage {
       .sort((a, b) => (a.centralStock || 0) - (b.centralStock || 0));
   }
 
-  async getSalesData(organizationId: string, options: { days?: number; from?: string; to?: string; storeId?: number } = {}): Promise<{ data: SalesDataPoint[]; totalOrders: number; totalRevenue: number }> {
+  async getSalesData(organizationId: string, options: { days?: number; from?: string; to?: string; storeId?: number } = {}): Promise<SalesResponse> {
     const companyList = await this.getCompanies(organizationId);
     const companyMap = new Map(companyList.map(c => [c.id, c.name]));
 
@@ -824,11 +824,13 @@ export class DatabaseStorage implements IStorage {
       const createdDateStr = new Date(o.createdAt).toISOString().split("T")[0];
       if (createdDateStr < fromDateStr || createdDateStr > toDateStr) return false;
       if (o.status === "cancelled" || o.ozonStatus === "cancelled") return false;
+      if (o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED") return false;
       if (options.storeId && o.storeId !== options.storeId) return false;
       return true;
     });
 
     const dataByDateCompany: Record<string, SalesDataPoint> = {};
+    const marketplaceBreakdown = { ozon: 0, yandex: 0, wildberries: 0, other: 0 };
 
     for (const order of filtered) {
       const dateStr = order.createdAt ? new Date(order.createdAt).toISOString().split("T")[0] : "unknown";
@@ -841,13 +843,20 @@ export class DatabaseStorage implements IStorage {
           companyName: companyMap.get(order.companyId || 0) || "—",
         };
       }
-      dataByDateCompany[key].revenue += Number(order.totalAmount || 0);
+      const amount = Number(order.totalAmount || 0);
+      dataByDateCompany[key].revenue += amount;
+
+      const src = (order.source || "").toLowerCase();
+      if (src === "ozon") marketplaceBreakdown.ozon += amount;
+      else if (src === "yandex") marketplaceBreakdown.yandex += amount;
+      else if (src === "wildberries" || src === "wb") marketplaceBreakdown.wildberries += amount;
+      else marketplaceBreakdown.other += amount;
     }
 
     const data = Object.values(dataByDateCompany).sort((a, b) => a.date.localeCompare(b.date));
     const totalRevenue = data.reduce((sum, d) => sum + d.revenue, 0);
 
-    return { data, totalOrders: filtered.length, totalRevenue };
+    return { data, totalOrders: filtered.length, totalRevenue, marketplaceBreakdown };
   }
 
   // Stock Sync Log

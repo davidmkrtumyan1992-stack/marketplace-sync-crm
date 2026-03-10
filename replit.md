@@ -9,7 +9,7 @@ Key capabilities include:
 - Centralized `centralStock` warehouse model with virtual mirroring to storefronts and per-product store exclusions.
 - Smart barcode intake system optimized for tablets.
 - Russian tax calculation engine and comprehensive expense tracking.
-- Dynamic dashboard with KPIs, low-stock alerts, sales charts, and pending order indicators.
+- Dynamic dashboard with KPIs, low-stock alerts, sales charts, marketplace revenue donut chart, and pending order indicators. Dashboard Sales Analysis section has a 60/40 split layout: bar chart (left) + donut chart (right) showing revenue breakdown by marketplace (Ozon #005bff, Yandex #ffcc00, Wildberries #cb11ab). Donut chart legend shows marketplace name + amount in «X руб.» format (no percentages). Both charts share the same date range picker and update together. Revenue formula (getSalesData): includes all order statuses except cancelled (status=cancelled, ozonStatus=cancelled, yandexStatus=CANCELLED/RETURNED). SalesResponse includes marketplaceBreakdown field aggregating revenue per source.
 - Advanced analytics including ABC analysis for product categorization.
 - CRM for customer management and full audit logging for inventory changes.
 - Marketplace synchronization infrastructure with detailed history logging for Ozon, Wildberries, and Yandex Market.
