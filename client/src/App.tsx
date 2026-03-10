@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClientProvider, useQueries } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
@@ -56,23 +56,28 @@ function GlobalDataPreloader({ children }: { children: React.ReactNode }) {
   const [syncTriggered, setSyncTriggered] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
 
-  const { isSuccess: ordersReady } = useQuery({
-    queryKey: ["/api/orders"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    enabled: !!user,
+  const queries = useQueries({
+    queries: [
+      {
+        queryKey: ["/api/orders"],
+        queryFn: getQueryFn({ on401: "returnNull" }),
+        enabled: !!user,
+      },
+      {
+        queryKey: ["/api/stores"],
+        queryFn: getQueryFn({ on401: "returnNull" }),
+        enabled: !!user,
+      },
+      {
+        queryKey: ["/api/products"],
+        queryFn: getQueryFn({ on401: "returnNull" }),
+        enabled: !!user,
+      },
+    ],
   });
 
-  const { isSuccess: storesReady } = useQuery({
-    queryKey: ["/api/stores"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    enabled: !!user,
-  });
-
-  const { isSuccess: productsReady } = useQuery({
-    queryKey: ["/api/products"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    enabled: !!user,
-  });
+  const [ordersQuery, storesQuery, productsQuery] = queries;
+  const allQueriesSuccess = user ? ordersQuery.isSuccess && storesQuery.isSuccess && productsQuery.isSuccess : true;
 
   useEffect(() => {
     if (user && !syncTriggered) {
@@ -81,36 +86,42 @@ function GlobalDataPreloader({ children }: { children: React.ReactNode }) {
     }
   }, [user, syncTriggered]);
 
-  const allDataReady = !user || (ordersReady && storesReady && productsReady);
-
   useEffect(() => {
-    if (!authLoading && allDataReady && showSplash) {
+    if (!authLoading && allQueriesSuccess && showSplash) {
       const timer = setTimeout(() => setShowSplash(false), 600);
       return () => clearTimeout(timer);
     }
-  }, [authLoading, allDataReady, showSplash]);
+  }, [authLoading, allQueriesSuccess, showSplash]);
 
   let progress = 0;
   let label = "Подключение к серверу...";
 
   if (authLoading) {
-    progress = 20;
+    progress = 30;
     label = "Подключение к серверу...";
   } else if (!user) {
     progress = 100;
     label = "Готово";
-  } else if (!ordersReady || !storesReady) {
-    progress = 45;
-    label = "Загрузка заказов и магазинов...";
-  } else if (!productsReady) {
-    progress = 65;
-    label = "Загрузка товаров...";
   } else {
-    progress = 90;
-    label = "Подготовка интерфейса...";
+    const anyLoading = ordersQuery.isLoading || storesQuery.isLoading || productsQuery.isLoading;
+    const anyFetching = ordersQuery.isFetching || storesQuery.isFetching || productsQuery.isFetching;
+
+    if (anyLoading) {
+      progress = 30;
+      label = "Загрузка данных...";
+    } else if (anyFetching) {
+      progress = 70;
+      label = "Обновление данных...";
+    } else if (allQueriesSuccess) {
+      progress = 100;
+      label = "Подготовка интерфейса...";
+    } else {
+      progress = 30;
+      label = "Подключение к серверу...";
+    }
   }
 
-  if (showSplash && (authLoading || (user && !allDataReady))) {
+  if (showSplash && (authLoading || (user && !allQueriesSuccess))) {
     return <SplashScreen progress={progress} label={label} />;
   }
 

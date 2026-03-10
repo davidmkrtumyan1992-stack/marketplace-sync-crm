@@ -178,7 +178,6 @@ export default function Orders() {
   const [wbSubFilter, setWbSubFilter] = useState<WbSubFilter>("all");
   const [storeFilter, setStoreFilter] = useState<"all" | number>("all");
 
-  const silentSync = useSilentSyncOzonOrders();
   const bulkLabels = useOzonBulkLabels();
 
   const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number; apiKey: string | null; warehouseId: string | null }[]>({
@@ -225,13 +224,6 @@ export default function Orders() {
     setStoreFilter("all");
   };
 
-  const syncingStores = useMemo(() => {
-    if (!ozonStores.length || !orders) return [];
-    return ozonStores.filter(store => {
-      const storeOrders = orders.filter((o: any) => o.storeId === store.id);
-      return storeOrders.length === 0;
-    });
-  }, [ozonStores, orders]);
 
   const marketplaceOrders = useMemo(() => {
     if (!orders) return [];
@@ -435,15 +427,6 @@ export default function Orders() {
 
         {marketplaceTab === "ozon" && (
           <>
-            {syncingStores.length > 0 && (
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 text-sm" data-testid="sync-status-banner">
-                <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
-                <span>
-                  Синхронизация товаров для {syncingStores.map(s => `«${s.name}»`).join(", ")}… Заказы появятся после завершения импорта и синхронизации.
-                </span>
-              </div>
-            )}
-
             {ozonStores.length > 1 && (
               <div className="flex gap-2 flex-wrap items-center" data-testid="store-filter-tabs">
                 <span className="text-sm text-muted-foreground mr-1">Магазин:</span>
