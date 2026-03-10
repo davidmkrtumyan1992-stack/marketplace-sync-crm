@@ -178,6 +178,7 @@ export default function Orders() {
   const [wbSubFilter, setWbSubFilter] = useState<WbSubFilter>("all");
   const [storeFilter, setStoreFilter] = useState<"all" | number>("all");
 
+  const silentSync = useSilentSyncOzonOrders();
   const bulkLabels = useOzonBulkLabels();
 
   const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number; apiKey: string | null; warehouseId: string | null }[]>({
