@@ -44,13 +44,16 @@ function formatPercent(value: number): string {
 interface CalculatorResult {
   sellingPrice: number;
   cost: number;
-  commissionPct: number;
+  commissionFBO: number;
+  commissionFBS: number;
+  commissionFBOPct: number;
+  commissionFBSPct: number;
   taxRate: number;
   volume: number;
 }
 
 function calculateResult(data: CalculatorResult) {
-  const { sellingPrice, cost, commissionPct, taxRate, volume } = data;
+  const { sellingPrice, cost, commissionFBO, commissionFBS, taxRate, volume } = data;
   const hasVolume = volume > 0;
 
   // FBO logistics calculation
@@ -81,16 +84,16 @@ function calculateResult(data: CalculatorResult) {
     }
   }
 
-  const commission = sellingPrice * (commissionPct / 100);
-  const acquiring = sellingPrice * 0.015;
-  const lastMile = Math.min(sellingPrice * 0.055, 500);
+  const acquiring = sellingPrice * 0.01; // 1% acquiring fee
+  const lastMile = 25; // Fixed 25 ₽
+  const processingFBS = 30; // Processing fee only for FBS
   const tax = sellingPrice * (taxRate / 100);
 
-  const ozonCostsFBO = commission + acquiring + logisticsFBO;
-  const ozonCostsFBS = commission + acquiring + logisticsFBS;
+  const ozonCostsFBO = commissionFBO + acquiring + logisticsFBO;
+  const ozonCostsFBS = commissionFBS + acquiring + logisticsFBS;
   
   const totalCostsFBO = ozonCostsFBO + lastMile + cost + tax;
-  const totalCostsFBS = ozonCostsFBS + lastMile + cost + tax;
+  const totalCostsFBS = ozonCostsFBS + lastMile + processingFBS + cost + tax;
 
   const profitFBO = sellingPrice - totalCostsFBO;
   const profitFBS = sellingPrice - totalCostsFBS;
@@ -100,14 +103,17 @@ function calculateResult(data: CalculatorResult) {
 
   return {
     sellingPrice,
-    commission,
-    commissionPct,
+    commissionFBO,
+    commissionFBS,
+    commissionFBOPct: data.commissionFBOPct,
+    commissionFBSPct: data.commissionFBSPct,
     acquiring,
     logisticsFBO: hasVolume ? logisticsFBO : null,
     logisticsFBS: hasVolume ? logisticsFBS : null,
     ozonCostsFBO,
     ozonCostsFBS,
     lastMile,
+    processingFBS,
     cost,
     tax,
     profitFBO,
@@ -122,10 +128,9 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
   const [searchInput, setSearchInput] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [category, setCategory] = useState<string>("");
+  const [selectedCategory, setSelectedCategory] = useState<(typeof OZON_CATEGORIES)[0] | null>(null);
   const [sellingPrice, setSellingPrice] = useState("");
   const [cost, setCost] = useState("");
-  const [commissionPct, setCommissionPct] = useState("15");
   const [dimensionTab, setDimensionTab] = useState(true);
   const [length, setLength] = useState("");
   const [width, setWidth] = useState("");
@@ -150,10 +155,9 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
   };
 
   const selectCategory = (catName: string) => {
-    setCategory(catName);
     const cat = OZON_CATEGORIES.find(c => c.name === catName);
     if (cat) {
-      setCommissionPct(cat.fbo.toString());
+      setSelectedCategory(cat);
     }
   };
 
@@ -170,14 +174,20 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
   const handleCalculate = () => {
     const price = parseFloat(sellingPrice) || 0;
     const c = parseFloat(cost) || 0;
-    const comm = parseFloat(commissionPct) || 15;
+    const cat = selectedCategory || { fbo: 15, fbs: 15 };
 
     if (price <= 0) return;
+
+    const commFBO = price * (cat.fbo / 100);
+    const commFBS = price * (cat.fbs / 100);
 
     const calc = calculateResult({
       sellingPrice: price,
       cost: c,
-      commissionPct: comm,
+      commissionFBO: commFBO,
+      commissionFBS: commFBS,
+      commissionFBOPct: cat.fbo,
+      commissionFBSPct: cat.fbs,
       taxRate,
       volume: calculatedVolume,
     });
@@ -185,16 +195,6 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
     setResult(calc);
   };
 
-  const totalCostsFBO = result
-    ? result.commission + result.acquiring + (result.logisticsFBO || 0) + result.lastMile + result.cost + result.tax
-    : 0;
-  const totalCostsFBS = result
-    ? result.commission + result.acquiring + (result.logisticsFBS || 0) + result.lastMile + result.cost + result.tax
-    : 0;
-
-  const getCostPercentage = (cost: number, total: number) => {
-    return total > 0 ? Math.round((cost / total) * 100) : 0;
-  };
 
   return (
     <>
@@ -241,7 +241,7 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
           {/* Category */}
           <div className="space-y-2">
             <Label className="text-sm font-medium">Категория товара</Label>
-            <Select value={category} onValueChange={selectCategory}>
+            <Select value={selectedCategory?.name || ""} onValueChange={selectCategory}>
               <SelectTrigger data-testid="select-calc-category">
                 <SelectValue placeholder="Выберите категорию..." />
               </SelectTrigger>
@@ -282,18 +282,12 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
             />
           </div>
 
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">Комиссия Ozon (%)</Label>
-            <Input
-              type="number"
-              value={commissionPct}
-              onChange={(e) => setCommissionPct(e.target.value)}
-              placeholder="15"
-              min="0"
-              step="0.1"
-              data-testid="input-calc-commission"
-            />
-          </div>
+          {selectedCategory && (
+            <div className="text-xs text-muted-foreground p-2 bg-muted/50 rounded">
+              <div>Комиссия FBO: {selectedCategory.fbo}%</div>
+              <div>Комиссия FBS: {selectedCategory.fbs}%</div>
+            </div>
+          )}
 
           {/* Dimensions/Volume Tabs */}
           <div className="pt-2 border-t">
@@ -417,13 +411,13 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
                   </TableRow>
 
                   <TableRow className="border-b text-muted-foreground">
-                    <TableCell className="p-2 pl-4">  Вознаграждение</TableCell>
-                    <TableCell className="p-2 text-right text-xs">-{formatRubles(result.commission)}</TableCell>
-                    <TableCell className="p-2 text-right text-xs">-{formatRubles(result.commission)}</TableCell>
+                    <TableCell className="p-2 pl-4">  Вознаграждение ({result.commissionFBOPct}%/{result.commissionFBSPct}%)</TableCell>
+                    <TableCell className="p-2 text-right text-xs">-{formatRubles(result.commissionFBO)}</TableCell>
+                    <TableCell className="p-2 text-right text-xs">-{formatRubles(result.commissionFBS)}</TableCell>
                   </TableRow>
 
                   <TableRow className="border-b text-muted-foreground">
-                    <TableCell className="p-2 pl-4">  Эквайринг</TableCell>
+                    <TableCell className="p-2 pl-4">  Эквайринг (1%)</TableCell>
                     <TableCell className="p-2 text-right text-xs">-{formatRubles(result.acquiring)}</TableCell>
                     <TableCell className="p-2 text-right text-xs">-{formatRubles(result.acquiring)}</TableCell>
                   </TableRow>
@@ -442,6 +436,12 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
                     <TableCell className="p-2">Последняя миля</TableCell>
                     <TableCell className="p-2 text-right text-red-600">-{formatRubles(result.lastMile)}</TableCell>
                     <TableCell className="p-2 text-right text-red-600">-{formatRubles(result.lastMile)}</TableCell>
+                  </TableRow>
+
+                  <TableRow className="border-b">
+                    <TableCell className="p-2">Обработка отправления</TableCell>
+                    <TableCell className="p-2 text-right text-red-600">—</TableCell>
+                    <TableCell className="p-2 text-right text-red-600">-{formatRubles(result.processingFBS)}</TableCell>
                   </TableRow>
 
                   <TableRow className="border-b">
