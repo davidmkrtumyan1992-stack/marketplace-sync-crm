@@ -1,0 +1,31 @@
+Вот промт — скопируй и отправь в Replit Agent:
+
+КРИТИЧЕСКИЙ БАГ: габариты товара не сохраняются и не подтягиваются с Ozon
+У нас два нерабочих места. Найди и исправь оба:
+Проблема 1 — габариты не сохраняются при нажатии «Сохранить»
+Открой файл с формой карточки товара. Найди функцию onSubmit или handleSubmit. Выведи в console.log всё что отправляется на сервер:
+typescriptconsole.log('SAVING PRODUCT DATA:', JSON.stringify(updateData, null, 2));
+Скорее всего поля dimensionLength, dimensionWidth, dimensionHeight, weight не попадают в объект который отправляется на PUT /api/products/:id.
+Проверь также серверный обработчик PUT /api/products/:id в server/routes.ts — убедись что эти поля не фильтруются и не игнорируются при обновлении. Найди где вызывается storage.updateProduct и проверь что все поля передаются.
+Также проверь storage.updateProduct в server/storage.ts — убедись что dimensionLength, dimensionWidth, dimensionHeight, weight, marketplaceCommission включены в SET при UPDATE.
+Проблема 2 — автообогащение с Ozon не работает
+Найди useEffect который должен вызывать /api/products/enrich-from-ozon при открытии карточки. Добавь подробное логирование:
+typescriptuseEffect(() => {
+  console.log('ENRICH CHECK:', {
+    productId: product?.id,
+    ozonId: product?.ozonId,
+    dimensionLength: product?.dimensionLength,
+  });
+  // остальной код...
+}, [product?.id]);
+Найди эндпоинт POST /api/products/enrich-from-ozon в server/routes.ts. Добавь логирование в начало:
+typescriptconsole.log('[enrich] Request body:', req.body);
+console.log('[enrich] Product found:', product?.id, 'ozonId:', product?.ozonId);
+После добавления логов — запусти приложение, открой карточку товара с Ozon ID и посмотри в консоль. Найди где именно обрывается цепочка и исправь.
+Дополнительно — проверь схему Zod
+В shared/routes.ts найди insertProductSchema. Убедись что поля dimensionLength, dimensionWidth, dimensionHeight, weight, marketplaceCommission есть в схеме и не помечены как .omit() или не отсутствуют. Если их нет в схеме — добавить:
+typescriptdimensionLength: z.string().optional(),
+dimensionWidth: z.string().optional(),
+dimensionHeight: z.string().optional(),
+weight: z.string().optional(),
+marketplaceCommission: z.string().optional(),
