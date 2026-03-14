@@ -1,7 +1,7 @@
 import { Layout } from "@/components/Layout";
 import { useProducts, useCreateProduct, useDeleteProduct, useSyncProduct } from "@/hooks/use-products";
 import { useCreateStockInflow } from "@/hooks/use-stock-inflow";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -736,27 +736,53 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [editCommissionFBS, setEditCommissionFBS] = useState(Number(product.marketplaceCommissionFbs || 0));
   const [showConfirm, setShowConfirm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const baselineRef = useRef({
+    name: product.name,
+    barcode: product.barcode || "",
+    price: Number(product.sellingPrice || product.price || 0),
+    category: product.category || "",
+    length: Number(product.dimensionLength || 0),
+    width: Number(product.dimensionWidth || 0),
+    height: Number(product.dimensionHeight || 0),
+    weight: Number(product.weight || 0),
+    commissionFBO: Number(product.marketplaceCommission || 0),
+    commissionFBS: Number(product.marketplaceCommissionFbs || 0),
+  });
 
   useEffect(() => {
-    if (
-      product?.ozonId &&
-      (!product.dimensionLength || product.dimensionLength === "0" || !product.dimensionWidth)
-    ) {
+    const needsEnrich = product?.ozonId &&
+      (Number(product.dimensionLength || 0) <= 0 ||
+       Number(product.dimensionWidth || 0) <= 0);
+    console.log("[enrich-check]", {
+      productId: product?.id,
+      ozonId: product?.ozonId,
+      dimensionLength: product?.dimensionLength,
+      dimensionWidth: product?.dimensionWidth,
+      needsEnrich,
+    });
+    if (needsEnrich) {
       const enrichData = async () => {
         try {
+          console.log("[enrich] calling /api/products/enrich-from-ozon for productId:", product.id);
           const res = await apiRequest("POST", "/api/products/enrich-from-ozon", { productId: product.id });
           if (res.ok) {
             const data = await res.json();
+            console.log("[enrich] response:", data);
             if (data.dimensionLength) {
-              setEditLength(data.dimensionLength || 0);
-              setEditWidth(data.dimensionWidth || 0);
-              setEditHeight(data.dimensionHeight || 0);
-              setEditWeight(data.weight || 0);
-              setEditCommissionFBO(data.commissionFbo || 15);
-              setEditCommissionFBS(data.commissionFbs || 19);
+              setEditLength(Number(data.dimensionLength) || 0);
+              setEditWidth(Number(data.dimensionWidth) || 0);
+              setEditHeight(Number(data.dimensionHeight) || 0);
+              setEditWeight(Number(data.weight) || 0);
+              setEditCommissionFBO(Number(data.commissionFbo) || 15);
+              setEditCommissionFBS(Number(data.commissionFbs) || 19);
             }
+          } else {
+            const errData = await res.json().catch(() => ({}));
+            console.warn("[enrich] failed:", res.status, errData);
           }
-        } catch {}
+        } catch (err) {
+          console.warn("[enrich] error:", err);
+        }
       };
       enrichData();
     }
@@ -767,16 +793,17 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const hasYandex = !!product.yandexId;
   const hasMarketplace = hasOzon || hasWb || hasYandex;
   const marketplaceNames = [hasOzon && "Ozon", hasWb && "Wildberries", hasYandex && "Yandex Market"].filter(Boolean).join(", ");
-  const hasChanges = editName !== product.name ||
-    editBarcode !== (product.barcode || "") ||
-    editPrice !== Number(product.sellingPrice || product.price || 0) ||
-    editCategory !== (product.category || "") ||
-    editLength !== Number(product.dimensionLength || 0) ||
-    editWidth !== Number(product.dimensionWidth || 0) ||
-    editHeight !== Number(product.dimensionHeight || 0) ||
-    editWeight !== Number(product.weight || 0) ||
-    editCommissionFBO !== Number(product.marketplaceCommission || 0) ||
-    editCommissionFBS !== Number(product.marketplaceCommissionFbs || 0);
+  const b = baselineRef.current;
+  const hasChanges = editName !== b.name ||
+    editBarcode !== b.barcode ||
+    editPrice !== b.price ||
+    editCategory !== b.category ||
+    editLength !== b.length ||
+    editWidth !== b.width ||
+    editHeight !== b.height ||
+    editWeight !== b.weight ||
+    editCommissionFBO !== b.commissionFBO ||
+    editCommissionFBS !== b.commissionFBS;
   const isValid = editName.trim().length > 0 && !isNaN(editPrice) && editPrice >= 0;
 
   const handleSaveClick = () => {
@@ -798,13 +825,15 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
         sellingPrice: String(editPrice),
         price: String(editPrice),
         category: editCategory || null,
-        dimensionLength: editLength ? String(editLength) : null,
-        dimensionWidth: editWidth ? String(editWidth) : null,
-        dimensionHeight: editHeight ? String(editHeight) : null,
-        weight: editWeight ? String(editWeight) : null,
-        marketplaceCommission: editCommissionFBO ? String(editCommissionFBO) : null,
-        marketplaceCommissionFbs: editCommissionFBS ? String(editCommissionFBS) : null,
+        dimensionLength: String(editLength || 0),
+        dimensionWidth: String(editWidth || 0),
+        dimensionHeight: String(editHeight || 0),
+        weight: String(editWeight || 0),
+        marketplaceCommission: String(editCommissionFBO || 0),
+        marketplaceCommissionFbs: String(editCommissionFBS || 0),
       };
+
+      console.log("SAVING PRODUCT:", JSON.stringify(body, null, 2));
 
       const endpoint = hasMarketplace
         ? `/api/products/${product.id}/sync-to-marketplace`
@@ -825,9 +854,49 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
         return;
       }
 
+      const responseData = await res.json();
+      const savedProduct = responseData.product ?? responseData;
+      console.log("SAVE RESULT:", JSON.stringify(savedProduct, null, 2));
+
+      if (savedProduct) {
+        const newName = savedProduct.name || editName;
+        const newBarcode = savedProduct.barcode || "";
+        const newPrice = Number(savedProduct.sellingPrice || savedProduct.price || editPrice);
+        const newCategory = savedProduct.category || "";
+        const newLength = Number(savedProduct.dimensionLength || 0);
+        const newWidth = Number(savedProduct.dimensionWidth || 0);
+        const newHeight = Number(savedProduct.dimensionHeight || 0);
+        const newWeight = Number(savedProduct.weight || 0);
+        const newCommFBO = Number(savedProduct.marketplaceCommission || 0);
+        const newCommFBS = Number(savedProduct.marketplaceCommissionFbs || 0);
+
+        setEditName(newName);
+        setEditBarcode(newBarcode);
+        setEditPrice(newPrice);
+        setEditCategory(newCategory);
+        setEditLength(newLength);
+        setEditWidth(newWidth);
+        setEditHeight(newHeight);
+        setEditWeight(newWeight);
+        setEditCommissionFBO(newCommFBO);
+        setEditCommissionFBS(newCommFBS);
+
+        baselineRef.current = {
+          name: newName,
+          barcode: newBarcode,
+          price: newPrice,
+          category: newCategory,
+          length: newLength,
+          width: newWidth,
+          height: newHeight,
+          weight: newWeight,
+          commissionFBO: newCommFBO,
+          commissionFBS: newCommFBS,
+        };
+      }
+
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       toast({ title: "Сохранено", description: "Товар обновлён" + (hasMarketplace ? ` и синхронизирован с ${marketplaceNames}` : "") });
-      onClose();
     } catch (err: any) {
       toast({
         title: "Ошибка",

@@ -410,6 +410,7 @@ export async function registerRoutes(
   });
 
   app.put(api.products.update.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    console.log("PUT /api/products/:id body:", JSON.stringify(req.body));
     const existing = await storage.getProduct(Number(req.params.id));
     if (!existing) return res.status(404).json({ message: "Товар не найден" });
     if (existing.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
@@ -1622,6 +1623,7 @@ export async function registerRoutes(
         });
       }
 
+      const { dimensionLength, dimensionWidth, dimensionHeight, weight, marketplaceCommission, marketplaceCommissionFbs } = req.body;
       const updateData: any = {};
       if (name) updateData.name = name;
       if (barcode !== undefined) updateData.barcode = barcode;
@@ -1630,6 +1632,12 @@ export async function registerRoutes(
         updateData.price = String(sellingPrice);
       }
       if (category !== undefined) updateData.category = category;
+      if (dimensionLength !== undefined) updateData.dimensionLength = String(dimensionLength);
+      if (dimensionWidth !== undefined) updateData.dimensionWidth = String(dimensionWidth);
+      if (dimensionHeight !== undefined) updateData.dimensionHeight = String(dimensionHeight);
+      if (weight !== undefined) updateData.weight = String(weight);
+      if (marketplaceCommission !== undefined) updateData.marketplaceCommission = String(marketplaceCommission);
+      if (marketplaceCommissionFbs !== undefined) updateData.marketplaceCommissionFbs = String(marketplaceCommissionFbs);
 
       const updated = await storage.updateProduct(productId, updateData);
 
