@@ -1,0 +1,174 @@
+Вижу проблему — кнопка «Сохранить» неактивна скорее всего потому что форма не видит изменений в новых полях. Но сначала разберём стратегию по автозагрузке:
+
+**Что можно подтянуть с Ozon автоматически:**
+
+| Данные | Источник | Автоматически? |
+|--------|----------|----------------|
+| Габариты (длина/ширина/высота) | Ozon API `/v3/product/info` | ✅ Да, если есть ozonId |
+| Вес | Ozon API `/v3/product/info` | ✅ Да |
+| Комиссия % | Ozon API `/v1/category/commission` | ✅ Да, по category_id |
+| Комиссия FBS vs FBO | Тот же эндпоинт | ✅ Разные значения |
+
+У этого товара есть `ID: 3587952526` — значит ozonId есть и всё можно подтянуть!
+
+Вот промт для Replit:
+
+---
+
+**Три исправления в карточке товара**
+
+**Баг 1 — кнопка «Сохранить» неактивна при изменении габаритов**
+
+Найди форму карточки товара. Поля `dimensionLength`, `dimensionWidth`, `dimensionHeight`, `weight`, `marketplaceCommission`, `marketplaceCommissionFbs` должны быть зарегистрированы в `react-hook-form` через `register()` или `Controller`. Проверь что:
+
+```typescript
+// Все новые поля должны быть в defaultValues формы:
+const form = useForm({
+  defaultValues: {
+    ...
+    dimensionLength: product?.dimensionLength || '',
+    dimensionWidth: product?.dimensionWidth || '',
+    dimensionHeight: product?.dimensionHeight || '',
+    weight: product?.weight || '',
+    marketplaceCommission: product?.marketplaceCommission || '',
+    marketplaceCommissionFbs: product?.marketplaceCommissionFbs || '',
+  }
+});
+
+// И поля должны использовать register:
+<Input {...form.register('dimensionLength')} type="number" step="0.1" />
+```
+
+Кнопка «Сохранить» должна быть активна всегда (не только при `isDirty`), или убедиться что `isDirty` срабатывает на новые поля.
+
+**Фича 2 — кнопка «Загрузить с Ozon» для габаритов и комиссий**
+
+Рядом с блоком «Габариты товара» добавить кнопку:
+```
+[↓ Загрузить с Ozon]
+```
+
+При нажатии — если у товара есть `ozonId`:
+
+```typescript
+// Шаг 1: получить габариты через Ozon API
+const response = await fetch('/api/products/enrich-from-ozon', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  credentials: 'include',
+  body: JSON.stringify({ productId: product.id })
+});
+const data = await response.json();
+// Заполнить поля формы полученными данными:
+form.setValue('dimensionLength', data.dimensionLength);
+form.setValue('dimensionWidth', data.dimensionWidth);
+form.setValue('dimensionHeight', data.dimensionHeight);
+form.setValue('weight', data.weight);
+form.setValue('marketplaceCommission', data.commissionFbo);
+form.setValue('marketplaceCommissionFbs', data.commissionFbs);
+```
+
+Показывать spinner пока идёт загрузка. После успеха — toast «✓ Данные загружены с Ozon».
+
+**Новый эндпоинт на бэкенде `POST /api/products/enrich-from-ozon`:**
+
+```typescript
+app.post('/api/products/enrich-from-ozon', isAuthenticated, async (req, res) => {
+  const { productId } = req.body;
+  const orgId = getOrgId(req);
+  
+  // 1. Получить товар из БД
+  const product = await storage.getProduct(productId);
+  if (!product || product.organizationId !== orgId) {
+    return res.status(404).json({ message: 'Товар не найден' });
+  }
+  if (!product.ozonId) {
+    return res.status(400).json({ message: 'У товара нет Ozon ID' });
+  }
+
+  // 2. Найти API ключи для Ozon
+  const allSettings = await storage.getMarketplaceSettings(orgId);
+  const ozonSetting = allSettings.find(s => 
+    s.marketplace === 'ozon' && s.isActive && s.apiKey && s.clientId
+  );
+  if (!ozonSetting) {
+    return res.status(400).json({ message: 'Не настроен Ozon API ключ' });
+  }
+
+  // 3. Получить данные товара с Ozon
+  const infoRes = await fetch('https://api-seller.ozon.ru/v3/product/info', {
+    method: 'POST',
+    headers: {
+      'Client-Id': ozonSetting.clientId!,
+      'Api-Key': ozonSetting.apiKey!,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ product_id: Number(product.ozonId) })
+  });
+  
+  if (!infoRes.ok) {
+    return res.status(400).json({ message: 'Ошибка Ozon API' });
+  }
+  
+  const info = await infoRes.json();
+  const item = info.result;
+  
+  // 4. Получить комиссию по категории
+  let commissionFbo = 15;
+  let commissionFbs = 19;
+  
+  if (item.description_category_id) {
+    const commRes = await fetch('https://api-seller.ozon.ru/v1/category/commission', {
+      method: 'POST',
+      headers: {
+        'Client-Id': ozonSetting.clientId!,
+        'Api-Key': ozonSetting.apiKey!,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        category_id: [item.description_category_id],
+        price: item.price
+      })
+    });
+    
+    if (commRes.ok) {
+      const commData = await commRes.json();
+      const comm = commData.result?.[0];
+      if (comm) {
+        commissionFbo = comm.fbo_percent || 15;
+        commissionFbs = comm.fbs_percent || 19;
+      }
+    }
+  }
+  
+  // 5. Обновить товар в БД
+  const dimensionLength = item.depth || item.dimension_unit === 'mm' 
+    ? (item.depth / 10) : item.depth;
+  const dimensionWidth = item.width || 0;
+  const dimensionHeight = item.height || 0;
+  const weight = item.weight ? item.weight / 1000 : 0; // граммы → кг
+  
+  await storage.updateProduct(productId, {
+    dimensionLength: String(dimensionLength),
+    dimensionWidth: String(dimensionWidth),
+    dimensionHeight: String(dimensionHeight),
+    weight: String(weight),
+    marketplaceCommission: String(commissionFbo),
+  });
+  
+  return res.json({
+    dimensionLength,
+    dimensionWidth, 
+    dimensionHeight,
+    weight,
+    commissionFbo,
+    commissionFbs,
+  });
+});
+```
+
+Если у товара нет `ozonId` — кнопку скрыть или показать серой с tooltip «Товар не привязан к Ozon».
+
+---
+
+Отправляй и проверяй!

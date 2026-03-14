@@ -47,7 +47,7 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown, Download } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
 import { calculateFromProduct, calculateProductProfit, getMarginColor, getMarginBadgeClasses, formatRub, formatPct, type OzonProfitResult } from "@/lib/ozon-calc";
@@ -736,6 +736,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [editCommissionFBS, setEditCommissionFBS] = useState(Number(product.marketplaceCommissionFbs || 0));
   const [showConfirm, setShowConfirm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingOzonData, setIsLoadingOzonData] = useState(false);
 
   const hasOzon = !!product.ozonId;
   const hasWb = !!product.wbId;
@@ -745,8 +746,37 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const hasChanges = editName !== product.name ||
     editBarcode !== (product.barcode || "") ||
     editPrice !== Number(product.sellingPrice || product.price || 0) ||
-    editCategory !== (product.category || "");
+    editCategory !== (product.category || "") ||
+    editLength !== Number(product.dimensionLength || 0) ||
+    editWidth !== Number(product.dimensionWidth || 0) ||
+    editHeight !== Number(product.dimensionHeight || 0) ||
+    editWeight !== Number(product.weight || 0) ||
+    editCommissionFBO !== Number(product.marketplaceCommission || 0) ||
+    editCommissionFBS !== Number(product.marketplaceCommissionFbs || 0);
   const isValid = editName.trim().length > 0 && !isNaN(editPrice) && editPrice >= 0;
+
+  const handleLoadOzonData = async () => {
+    setIsLoadingOzonData(true);
+    try {
+      const res = await apiRequest("POST", "/api/products/enrich-from-ozon", { productId: product.id });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Ошибка" }));
+        throw new Error(err.message || "Не удалось загрузить данные");
+      }
+      const data = await res.json();
+      setEditLength(data.dimensionLength || 0);
+      setEditWidth(data.dimensionWidth || 0);
+      setEditHeight(data.dimensionHeight || 0);
+      setEditWeight(data.weight || 0);
+      setEditCommissionFBO(data.commissionFbo || 15);
+      setEditCommissionFBS(data.commissionFbs || 19);
+      toast({ title: "✓ Данные загружены", description: "Габариты и комиссии обновлены с Ozon" });
+    } catch (err: any) {
+      toast({ title: "Ошибка", description: err.message || "Не удалось загрузить данные с Ozon", variant: "destructive" });
+    } finally {
+      setIsLoadingOzonData(false);
+    }
+  };
 
   const handleSaveClick = () => {
     if (!hasChanges) return;
@@ -937,7 +967,22 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                 </div>
 
                 <div className="border-t pt-4">
-                  <p className="text-sm font-semibold text-muted-foreground mb-3">Габариты товара (для расчёта логистики)</p>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm font-semibold text-muted-foreground">Габариты товара (для расчёта логистики)</p>
+                    {hasOzon && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleLoadOzonData}
+                        disabled={isLoadingOzonData}
+                        className="h-8 text-xs"
+                        data-testid="button-load-ozon-data"
+                      >
+                        {isLoadingOzonData ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Download className="w-3 h-3 mr-1" />}
+                        Загрузить с Ozon
+                      </Button>
+                    )}
+                  </div>
                   <div className="grid grid-cols-4 gap-3">
                     <div className="grid gap-2">
                       <Label htmlFor="detail-length" className="text-xs">Длина, см</Label>

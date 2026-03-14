@@ -1287,6 +1287,93 @@ export async function registerRoutes(
     }
   });
 
+  // Enrich product from Ozon (dimensions + commissions)
+  app.post("/api/products/enrich-from-ozon", isAuthenticated, async (req, res) => {
+    try {
+      const { productId } = req.body;
+      const orgId = getOrgId(req);
+      const product = await storage.getProduct(productId);
+      if (!product || product.organizationId !== orgId) {
+        return res.status(404).json({ message: "Товар не найден" });
+      }
+      if (!product.ozonId) {
+        return res.status(400).json({ message: "У товара нет Ozon ID" });
+      }
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSetting = allSettings.find(s => s.marketplace === "ozon" && s.isActive && s.apiKey && s.clientId);
+      if (!ozonSetting) {
+        return res.status(400).json({ message: "Не настроен Ozon API ключ" });
+      }
+
+      const infoRes = await fetch("https://api-seller.ozon.ru/v3/product/info", {
+        method: "POST",
+        headers: {
+          "Client-Id": ozonSetting.clientId!,
+          "Api-Key": ozonSetting.apiKey!,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ product_id: Number(product.ozonId) })
+      });
+      
+      if (!infoRes.ok) {
+        return res.status(400).json({ message: "Ошибка Ozon API" });
+      }
+      
+      const info = await infoRes.json();
+      const item = info.result;
+      let commissionFbo = 15;
+      let commissionFbs = 19;
+      
+      if (item.description_category_id) {
+        const commRes = await fetch("https://api-seller.ozon.ru/v1/category/commission", {
+          method: "POST",
+          headers: {
+            "Client-Id": ozonSetting.clientId!,
+            "Api-Key": ozonSetting.apiKey!,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ category_id: [item.description_category_id], price: item.price })
+        });
+        
+        if (commRes.ok) {
+          const commData = await commRes.json();
+          const comm = commData.result?.[0];
+          if (comm) {
+            commissionFbo = comm.fbo_percent || 15;
+            commissionFbs = comm.fbs_percent || 19;
+          }
+        }
+      }
+      
+      const dimensionLength = item.depth || 0;
+      const dimensionWidth = item.width || 0;
+      const dimensionHeight = item.height || 0;
+      const weight = item.weight ? item.weight / 1000 : 0;
+      
+      await storage.updateProduct(productId, {
+        dimensionLength: String(dimensionLength),
+        dimensionWidth: String(dimensionWidth),
+        dimensionHeight: String(dimensionHeight),
+        weight: String(weight),
+        marketplaceCommission: String(commissionFbo),
+        marketplaceCommissionFbs: String(commissionFbs),
+      });
+      
+      return res.json({
+        dimensionLength,
+        dimensionWidth,
+        dimensionHeight,
+        weight,
+        commissionFbo,
+        commissionFbs,
+      });
+    } catch (err: any) {
+      console.error("Enrich from Ozon error:", err);
+      res.status(500).json({ message: err.message || "Ошибка обогащения товара" });
+    }
+  });
+
   app.post("/api/marketplace/enrich/wildberries", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
