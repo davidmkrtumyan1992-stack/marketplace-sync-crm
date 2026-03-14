@@ -47,14 +47,17 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { formatCurrency, formatQuantity } from "@/lib/format";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useRole } from "@/hooks/use-role";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
+import { useTaxSettings } from "@/hooks/use-tax-settings";
+import { formatNumber } from "@/lib/format";
+import { OzonCalculatorDialog } from "@/components/OzonCalculatorDialog";
 
 const formSchema = insertProductSchema.extend({
   purchasePrice: z.coerce.number(),
@@ -85,10 +88,12 @@ const CATEGORIES = [
 export default function Products() {
   const { data: products, isLoading } = useProducts();
   const { canSeePurchasePrice } = useRole();
+  const { data: taxSettings } = useTaxSettings();
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isCalcOpen, setIsCalcOpen] = useState(false);
   const [inflowProduct, setInflowProduct] = useState<Product | null>(null);
   const { toast } = useToast();
 
@@ -160,6 +165,17 @@ export default function Products() {
             <p className="text-muted-foreground mt-2 text-lg">Управление товарами и остатками</p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Dialog open={isCalcOpen} onOpenChange={setIsCalcOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="lg" data-testid="button-ozon-calculator">
+                  <Calculator className="w-4 h-4 mr-2" />
+                  Ozon Калькулятор
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-4xl w-[95vw] sm:w-full max-h-[90vh] overflow-y-auto">
+                <OzonCalculatorDialog taxRate={Number(taxSettings?.taxRate) || 6} products={products || []} />
+              </DialogContent>
+            </Dialog>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="lg" disabled={syncMutation.isPending} data-testid="button-sync-marketplace">
