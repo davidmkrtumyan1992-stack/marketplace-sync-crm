@@ -47,7 +47,10 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Slider } from "@/components/ui/slider";
+import { calculateFromProduct, calculateProductProfit, getMarginColor, getMarginBadgeClasses, formatRub, formatPct, type OzonProfitResult } from "@/lib/ozon-calc";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { formatCurrency, formatQuantity } from "@/lib/format";
@@ -150,6 +153,9 @@ export default function Products() {
       setImportingMarketplace(null);
     },
   });
+
+  const taxRate = Number(taxSettings?.taxRate) || 6;
+  const defaultCommission = Number(taxSettings?.defaultMarketplaceCommission) || 15;
 
   const filteredProducts = products?.filter((p: any) => 
     p.name.toLowerCase().includes(search.toLowerCase()) || 
@@ -278,8 +284,10 @@ export default function Products() {
                 <TableHead>Артикул</TableHead>
                 {canSeePurchasePrice && <TableHead className="text-right">Закупка</TableHead>}
                 <TableHead className="text-right">Продажа</TableHead>
+                <TableHead className="text-right">FBO</TableHead>
+                <TableHead className="text-right">FBS</TableHead>
+                <TableHead className="text-right">Маржа</TableHead>
                 <TableHead className="text-center">Остаток</TableHead>
-
                 <TableHead>Склад</TableHead>
                 <TableHead className="w-[50px]"></TableHead>
               </TableRow>
@@ -287,17 +295,17 @@ export default function Products() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={canSeePurchasePrice ? 8 : 7} className="h-24 text-center">Загрузка товаров...</TableCell>
+                  <TableCell colSpan={canSeePurchasePrice ? 11 : 10} className="h-24 text-center">Загрузка товаров...</TableCell>
                 </TableRow>
               ) : filteredProducts?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={canSeePurchasePrice ? 8 : 7} className="h-32 text-center text-muted-foreground">
+                  <TableCell colSpan={canSeePurchasePrice ? 11 : 10} className="h-32 text-center text-muted-foreground">
                     Товары не найдены. Добавьте первый товар.
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredProducts?.map((product: any) => (
-                  <ProductRow key={product.id} product={product} onInflow={() => setInflowProduct(product)} canSeePurchasePrice={canSeePurchasePrice} onClick={() => setSelectedProduct(product)} />
+                  <ProductRow key={product.id} product={product} onInflow={() => setInflowProduct(product)} canSeePurchasePrice={canSeePurchasePrice} onClick={() => setSelectedProduct(product)} taxRate={taxRate} defaultCommission={defaultCommission} />
                 ))
               )}
             </TableBody>
@@ -324,6 +332,8 @@ export default function Products() {
           product={selectedProduct}
           canSeePurchasePrice={canSeePurchasePrice}
           onClose={() => setSelectedProduct(null)}
+          taxRate={taxRate}
+          defaultCommission={defaultCommission}
         />
       )}
     </Layout>
@@ -712,7 +722,7 @@ function StockInflowForm({ product, onSuccess }: { product: Product; onSuccess: 
   );
 }
 
-function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product: Product; canSeePurchasePrice: boolean; onClose: () => void }) {
+function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, defaultCommission }: { product: Product; canSeePurchasePrice: boolean; onClose: () => void; taxRate: number; defaultCommission: number }) {
   const { toast } = useToast();
   const [editName, setEditName] = useState(product.name);
   const [editBarcode, setEditBarcode] = useState(product.barcode || "");
@@ -797,153 +807,164 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
             <DialogDescription>Редактирование информации о товаре</DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6 py-2">
-            <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
-              <div className="w-full sm:w-48 h-48 rounded-xl border bg-muted flex items-center justify-center overflow-hidden shrink-0">
-                {product.imageUrl ? (
-                  <img
-                    src={product.imageUrl}
-                    alt={product.name}
-                    className="w-full h-full object-cover"
-                    data-testid="img-product-detail"
-                  />
-                ) : (
-                  <Package className="w-16 h-16 text-muted-foreground" />
-                )}
-              </div>
-              <div className="flex-1 space-y-3">
-                <div>
-                  <Label className="text-xs text-muted-foreground uppercase tracking-wide">Артикул (SKU)</Label>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Input
-                      value={product.sku}
-                      readOnly
-                      className="font-mono bg-muted cursor-not-allowed"
-                      data-testid="input-detail-sku"
+          <Tabs defaultValue="info" className="py-2">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="info">Информация</TabsTrigger>
+              <TabsTrigger value="analytics">Аналитика</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="info" className="space-y-6 mt-4">
+              <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
+                <div className="w-full sm:w-48 h-48 rounded-xl border bg-muted flex items-center justify-center overflow-hidden shrink-0">
+                  {product.imageUrl ? (
+                    <img
+                      src={product.imageUrl}
+                      alt={product.name}
+                      className="w-full h-full object-cover"
+                      data-testid="img-product-detail"
                     />
-                    <Badge variant="secondary" className="shrink-0 text-xs">Только чтение</Badge>
+                  ) : (
+                    <Package className="w-16 h-16 text-muted-foreground" />
+                  )}
+                </div>
+                <div className="flex-1 space-y-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wide">Артикул (SKU)</Label>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Input
+                        value={product.sku}
+                        readOnly
+                        className="font-mono bg-muted cursor-not-allowed"
+                        data-testid="input-detail-sku"
+                      />
+                      <Badge variant="secondary" className="shrink-0 text-xs">Только чтение</Badge>
+                    </div>
+                  </div>
+                  {hasOzon && (
+                    <div className="flex items-center gap-2">
+                      <Badge className="text-white" style={{ backgroundColor: "#005BFF" }}>Ozon</Badge>
+                      {product.ozonId && <span className="text-xs text-muted-foreground">ID: {product.ozonId}</span>}
+                    </div>
+                  )}
+                  {hasWb && (
+                    <div className="flex items-center gap-2">
+                      <Badge className="text-white" style={{ backgroundColor: "#CB11AB" }}>Wildberries</Badge>
+                      {product.wbId && <span className="text-xs text-muted-foreground">nmID: {product.wbId}</span>}
+                    </div>
+                  )}
+                  {hasYandex && (
+                    <div className="flex items-center gap-2">
+                      <Badge className="text-white" style={{ backgroundColor: "#FFCC00", color: "#000" }}>Yandex Market</Badge>
+                      {product.yandexId && <span className="text-xs text-muted-foreground">SKU: {product.yandexId}</span>}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      (product.centralStock || 0) === 0
+                        ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+                        : (product.centralStock || 0) <= 5
+                          ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
+                          : "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+                    }`}>
+                      Остаток: {product.centralStock || 0} шт.
+                    </span>
                   </div>
                 </div>
-                {hasOzon && (
-                  <div className="flex items-center gap-2">
-                    <Badge className="text-white" style={{ backgroundColor: "#005BFF" }}>Ozon</Badge>
-                    {product.ozonId && <span className="text-xs text-muted-foreground">ID: {product.ozonId}</span>}
-                  </div>
-                )}
-                {hasWb && (
-                  <div className="flex items-center gap-2">
-                    <Badge className="text-white" style={{ backgroundColor: "#CB11AB" }}>Wildberries</Badge>
-                    {product.wbId && <span className="text-xs text-muted-foreground">nmID: {product.wbId}</span>}
-                  </div>
-                )}
-                {hasYandex && (
-                  <div className="flex items-center gap-2">
-                    <Badge className="text-white" style={{ backgroundColor: "#FFCC00", color: "#000" }}>Yandex Market</Badge>
-                    {product.yandexId && <span className="text-xs text-muted-foreground">SKU: {product.yandexId}</span>}
-                  </div>
-                )}
-                <div className="flex items-center gap-4 text-sm">
-                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                    (product.centralStock || 0) === 0
-                      ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
-                      : (product.centralStock || 0) <= 5
-                        ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
-                        : "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
-                  }`}>
-                    Остаток: {product.centralStock || 0} шт.
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-4 border-t pt-4">
-              <div className="grid gap-2">
-                <Label htmlFor="detail-name">Название</Label>
-                <Input
-                  id="detail-name"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  data-testid="input-detail-name"
-                />
-                {editName.trim().length === 0 && (
-                  <span className="text-xs text-destructive">Название обязательно</span>
-                )}
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-4 border-t pt-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="detail-barcode">Штрих-код</Label>
+                  <Label htmlFor="detail-name">Название</Label>
                   <Input
-                    id="detail-barcode"
-                    value={editBarcode}
-                    onChange={(e) => setEditBarcode(e.target.value)}
-                    className="font-mono"
-                    data-testid="input-detail-barcode"
+                    id="detail-name"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    data-testid="input-detail-name"
                   />
+                  {editName.trim().length === 0 && (
+                    <span className="text-xs text-destructive">Название обязательно</span>
+                  )}
                 </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="detail-barcode">Штрих-код</Label>
+                    <Input
+                      id="detail-barcode"
+                      value={editBarcode}
+                      onChange={(e) => setEditBarcode(e.target.value)}
+                      className="font-mono"
+                      data-testid="input-detail-barcode"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="detail-price">Цена продажи, ₽</Label>
+                    <Input
+                      id="detail-price"
+                      type="number"
+                      step="0.01"
+                      value={editPrice}
+                      onChange={(e) => setEditPrice(Number(e.target.value))}
+                      data-testid="input-detail-price"
+                    />
+                  </div>
+                </div>
+
                 <div className="grid gap-2">
-                  <Label htmlFor="detail-price">Цена продажи, ₽</Label>
-                  <Input
-                    id="detail-price"
-                    type="number"
-                    step="0.01"
-                    value={editPrice}
-                    onChange={(e) => setEditPrice(Number(e.target.value))}
-                    data-testid="input-detail-price"
-                  />
+                  <Label>Категория</Label>
+                  <Select value={editCategory} onValueChange={setEditCategory}>
+                    <SelectTrigger data-testid="select-detail-category">
+                      <SelectValue placeholder="Выберите категорию" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CATEGORIES.map(cat => (
+                        <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
+
+                {canSeePurchasePrice && (
+                  <div className="bg-muted/50 rounded-lg p-3 text-sm">
+                    <span className="text-muted-foreground">Закупочная цена: </span>
+                    <span className="font-medium">{formatCurrency(product.purchasePrice || 0)}</span>
+                  </div>
+                )}
               </div>
 
-              <div className="grid gap-2">
-                <Label>Категория</Label>
-                <Select value={editCategory} onValueChange={setEditCategory}>
-                  <SelectTrigger data-testid="select-detail-category">
-                    <SelectValue placeholder="Выберите категорию" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CATEGORIES.map(cat => (
-                      <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {canSeePurchasePrice && (
-                <div className="bg-muted/50 rounded-lg p-3 text-sm">
-                  <span className="text-muted-foreground">Закупочная цена: </span>
-                  <span className="font-medium">{formatCurrency(product.purchasePrice || 0)}</span>
+              {hasMarketplace && hasChanges && (
+                <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                  <p className="text-xs text-amber-800 dark:text-amber-200">
+                    Изменения будут применены во всех подключённых магазинах ({marketplaceNames})
+                  </p>
                 </div>
               )}
-            </div>
 
-            {hasMarketplace && hasChanges && (
-              <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-                <p className="text-xs text-amber-800 dark:text-amber-200">
-                  Изменения будут применены во всех подключённых магазинах ({marketplaceNames})
-                </p>
+              <div className="flex justify-end gap-3 pt-2">
+                <Button variant="outline" onClick={onClose} data-testid="button-detail-cancel">
+                  Отмена
+                </Button>
+                <Button
+                  onClick={handleSaveClick}
+                  disabled={!hasChanges || !isValid || isSaving}
+                  className="premium-button"
+                  data-testid="button-detail-save"
+                >
+                  {isSaving ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4 mr-2" />
+                  )}
+                  {isSaving ? "Сохранение..." : "Сохранить"}
+                </Button>
               </div>
-            )}
+            </TabsContent>
 
-            <div className="flex justify-end gap-3 pt-2">
-              <Button variant="outline" onClick={onClose} data-testid="button-detail-cancel">
-                Отмена
-              </Button>
-              <Button
-                onClick={handleSaveClick}
-                disabled={!hasChanges || !isValid || isSaving}
-                className="premium-button"
-                data-testid="button-detail-save"
-              >
-                {isSaving ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <Save className="w-4 h-4 mr-2" />
-                )}
-                {isSaving ? "Сохранение..." : "Сохранить"}
-              </Button>
-            </div>
-          </div>
+            <TabsContent value="analytics" className="mt-4">
+              <ProductAnalyticsTab product={product} taxRate={taxRate} defaultCommission={defaultCommission} />
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
 
@@ -970,9 +991,194 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose }: { product
   );
 }
 
-function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick }: { product: Product; onInflow: () => void; canSeePurchasePrice?: boolean; onClick?: () => void }) {
+function ProductAnalyticsTab({ product, taxRate, defaultCommission }: { product: Product; taxRate: number; defaultCommission: number }) {
+  const { toast } = useToast();
+  const baseResult = calculateFromProduct(product, taxRate, defaultCommission);
+  const currentPrice = Number(product.sellingPrice || product.price || 0);
+  const [simPrice, setSimPrice] = useState(currentPrice);
+  const [isSavingPrice, setIsSavingPrice] = useState(false);
+
+  const simResult = simPrice !== currentPrice
+    ? calculateProductProfit(
+        simPrice,
+        Number(product.purchasePrice || 0),
+        Number(product.marketplaceCommission) || defaultCommission,
+        taxRate,
+        Number(product.dimensionLength || 0),
+        Number(product.dimensionWidth || 0),
+        Number(product.dimensionHeight || 0),
+      )
+    : baseResult;
+
+  const handleApplyPrice = async () => {
+    setIsSavingPrice(true);
+    try {
+      const hasMarketplace = product.ozonId || product.wbId || product.yandexId;
+      const endpoint = hasMarketplace
+        ? `/api/products/${product.id}/sync-to-marketplace`
+        : `/api/products/${product.id}`;
+      const method = hasMarketplace ? "POST" : "PUT";
+      const res = await apiRequest(method, endpoint, { sellingPrice: simPrice, name: product.name });
+      if (!res.ok) throw new Error("Failed");
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({ title: "Цена обновлена", description: `Новая цена: ${formatRub(simPrice)}` });
+    } catch {
+      toast({ title: "Ошибка", description: "Не удалось обновить цену", variant: "destructive" });
+    } finally {
+      setIsSavingPrice(false);
+    }
+  };
+
+  const noPurchasePrice = Number(product.purchasePrice || 0) === 0;
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-lg border p-3 text-center">
+          <p className="text-xs text-muted-foreground mb-1">Прибыль FBO</p>
+          <p className={`text-lg font-bold ${baseResult.profitFBO >= 0 ? "text-green-600" : "text-red-600"}`} data-testid="text-kpi-profit-fbo">
+            {formatRub(baseResult.profitFBO)}
+          </p>
+        </div>
+        <div className="rounded-lg border p-3 text-center">
+          <p className="text-xs text-muted-foreground mb-1">Прибыль FBS</p>
+          <p className={`text-lg font-bold ${baseResult.profitFBS >= 0 ? "text-green-600" : "text-red-600"}`} data-testid="text-kpi-profit-fbs">
+            {formatRub(baseResult.profitFBS)}
+          </p>
+        </div>
+        <div className="rounded-lg border p-3 text-center">
+          <p className="text-xs text-muted-foreground mb-1">Маржа FBO</p>
+          <p className={`text-lg font-bold ${getMarginColor(baseResult.marginFBO)}`} data-testid="text-kpi-margin-fbo">
+            {formatPct(baseResult.marginFBO)}
+          </p>
+        </div>
+      </div>
+
+      {!baseResult.hasVolume && (
+        <div className="flex gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <AlertTriangle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-yellow-700">Заполните габариты товара (длина, ширина, высота) для расчёта логистики</p>
+        </div>
+      )}
+
+      {noPurchasePrice && (
+        <p className="text-xs text-muted-foreground">Укажите себестоимость для точного расчёта прибыли</p>
+      )}
+
+      <Table className="text-xs">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="p-2">Параметр</TableHead>
+            <TableHead className="p-2 text-right">FBO</TableHead>
+            <TableHead className="p-2 text-right">FBS</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow className="border-b">
+            <TableCell className="p-2">Цена товара</TableCell>
+            <TableCell className="p-2 text-right font-medium">{formatRub(simResult.sellingPrice)} 100%</TableCell>
+            <TableCell className="p-2 text-right font-medium">{formatRub(simResult.sellingPrice)} 100%</TableCell>
+          </TableRow>
+          <TableRow className="border-b">
+            <TableCell className="p-2">Вознаграждение Ozon ({simResult.commissionFBOPct}%/{simResult.commissionFBSPct}%)</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.commissionFBO)} {simResult.commissionFBOPct}%</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.commissionFBS)} {simResult.commissionFBSPct}%</TableCell>
+          </TableRow>
+          <TableRow className="border-b">
+            <TableCell className="p-2">Эквайринг (1%)</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.acquiring)}</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.acquiring)}</TableCell>
+          </TableRow>
+          <TableRow className="border-b">
+            <TableCell className="p-2">Обработка отправления</TableCell>
+            <TableCell className="p-2 text-right text-red-600">—</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.processingFBS)}</TableCell>
+          </TableRow>
+          <TableRow className="border-b">
+            <TableCell className="p-2">Логистика</TableCell>
+            <TableCell className="p-2 text-right text-red-600">{simResult.hasVolume ? `-${formatRub(simResult.logisticsFBO!)}` : "—"}</TableCell>
+            <TableCell className="p-2 text-right text-red-600">{simResult.hasVolume ? `-${formatRub(simResult.logisticsFBS!)}` : "—"}</TableCell>
+          </TableRow>
+          <TableRow className="border-b">
+            <TableCell className="p-2">Доставка (последняя миля)</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.lastMile)}</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.lastMile)}</TableCell>
+          </TableRow>
+          <TableRow className="border-b">
+            <TableCell className="p-2">Себестоимость</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.purchasePrice)}</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.purchasePrice)}</TableCell>
+          </TableRow>
+          <TableRow className="border-b">
+            <TableCell className="p-2">Налог ({formatPct(simResult.taxRate)})</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.tax)}</TableCell>
+            <TableCell className="p-2 text-right text-red-600">-{formatRub(simResult.tax)}</TableCell>
+          </TableRow>
+          <TableRow className="bg-muted/50 font-semibold">
+            <TableCell className="p-2">Чистая прибыль</TableCell>
+            <TableCell className={`p-2 text-right ${simResult.profitFBO >= 0 ? "text-green-600" : "text-red-600"}`}>
+              {formatRub(simResult.profitFBO)}
+              {simPrice !== currentPrice && (
+                <span className={`ml-1 text-xs ${simResult.profitFBO - baseResult.profitFBO >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  ({simResult.profitFBO - baseResult.profitFBO >= 0 ? "+" : ""}{formatRub(simResult.profitFBO - baseResult.profitFBO)})
+                </span>
+              )}
+            </TableCell>
+            <TableCell className={`p-2 text-right ${simResult.profitFBS >= 0 ? "text-green-600" : "text-red-600"}`}>
+              {formatRub(simResult.profitFBS)}
+              {simPrice !== currentPrice && (
+                <span className={`ml-1 text-xs ${simResult.profitFBS - baseResult.profitFBS >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  ({simResult.profitFBS - baseResult.profitFBS >= 0 ? "+" : ""}{formatRub(simResult.profitFBS - baseResult.profitFBS)})
+                </span>
+              )}
+            </TableCell>
+          </TableRow>
+          <TableRow className="bg-muted/50 font-semibold">
+            <TableCell className="p-2">Маржинальность</TableCell>
+            <TableCell className={`p-2 text-right ${simResult.marginFBO >= 0 ? "text-green-600" : "text-red-600"}`}>{formatPct(simResult.marginFBO)}</TableCell>
+            <TableCell className={`p-2 text-right ${simResult.marginFBS >= 0 ? "text-green-600" : "text-red-600"}`}>{formatPct(simResult.marginFBS)}</TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+
+      <div className="border rounded-lg p-4 space-y-3">
+        <Label className="text-sm font-semibold">Симулятор цены</Label>
+        <p className="text-xs text-muted-foreground">Текущая цена: {formatRub(currentPrice)}</p>
+        <Slider
+          value={[simPrice]}
+          onValueChange={(v) => setSimPrice(v[0])}
+          min={Math.round(currentPrice * 0.5)}
+          max={Math.round(currentPrice * 2)}
+          step={1}
+          data-testid="slider-price-simulator"
+        />
+        <div className="flex items-center gap-2">
+          <Label className="text-xs whitespace-nowrap">Новая цена:</Label>
+          <Input
+            type="number"
+            value={simPrice}
+            onChange={(e) => setSimPrice(Number(e.target.value) || 0)}
+            className="w-32 h-8 text-sm"
+            data-testid="input-sim-price"
+          />
+          <span className="text-xs text-muted-foreground">₽</span>
+          {simPrice !== currentPrice && (
+            <Button size="sm" onClick={handleApplyPrice} disabled={isSavingPrice} className="ml-auto" data-testid="button-apply-price">
+              {isSavingPrice ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+              Применить цену
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, taxRate, defaultCommission }: { product: Product; onInflow: () => void; canSeePurchasePrice?: boolean; onClick?: () => void; taxRate: number; defaultCommission: number }) {
   const { mutate: deleteProduct } = useDeleteProduct();
   const { mutate: syncProduct, isPending: isSyncing } = useSyncProduct();
+
+  const result = calculateFromProduct(product, taxRate, defaultCommission);
 
   return (
     <TableRow className="group hover:bg-muted transition-colors cursor-pointer" onClick={onClick} data-testid={`row-product-${product.id}`}>
@@ -984,6 +1190,9 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick }: 
           <div>
             <div className="flex items-center gap-1.5">
               <span className="block">{product.name}</span>
+              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${getMarginBadgeClasses(result.marginFBO)}`} data-testid={`badge-margin-${product.id}`}>
+                {formatPct(result.marginFBO)}
+              </span>
               {product.ozonId && <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#005BFF" }} title="Ozon" />}
               {product.wbId && <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#CB11AB" }} title="Wildberries" />}
               {product.yandexId && <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: "#FFCC00" }} title="Yandex Market" />}
@@ -995,6 +1204,15 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick }: 
       <TableCell className="font-mono text-xs">{product.sku}</TableCell>
       {canSeePurchasePrice && <TableCell className="text-right text-sm">{formatCurrency(product.purchasePrice || 0)}</TableCell>}
       <TableCell className="text-right font-medium">{formatCurrency(product.sellingPrice || product.price || 0)}</TableCell>
+      <TableCell className={`text-right text-sm ${result.profitFBO >= 0 ? "text-green-600" : "text-red-600"}`} data-testid={`text-profit-fbo-${product.id}`}>
+        {formatRub(result.profitFBO)}
+      </TableCell>
+      <TableCell className={`text-right text-sm ${result.profitFBS >= 0 ? "text-green-600" : "text-red-600"}`} data-testid={`text-profit-fbs-${product.id}`}>
+        {formatRub(result.profitFBS)}
+      </TableCell>
+      <TableCell className={`text-right text-sm font-medium ${getMarginColor(result.marginFBO)}`} data-testid={`text-margin-${product.id}`}>
+        {formatPct(result.marginFBO)}
+      </TableCell>
       <TableCell className="text-center">
         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
           (product.centralStock || 0) === 0
