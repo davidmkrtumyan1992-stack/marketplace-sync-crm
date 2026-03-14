@@ -1,0 +1,47 @@
+Открой файл карточки товара (ProductModal или ProductDrawer или ProductForm — найди сам). Найди функцию сохранения и сделай ТРИ вещи:
+1. Карточка НЕ должна закрываться после сохранения
+Найди где вызывается onClose() или setOpen(false) или onOpenChange(false) после успешного сохранения — УБЕРИ этот вызов. Карточка должна оставаться открытой.
+2. Добавь console.log прямо перед fetch чтобы видеть что отправляется:
+typescriptconst body = {
+  name: values.name,
+  sellingPrice: String(values.sellingPrice || 0),
+  price: String(values.sellingPrice || 0),
+  purchasePrice: String(values.purchasePrice || 0),
+  dimensionLength: String(values.dimensionLength || 0),
+  dimensionWidth: String(values.dimensionWidth || 0),
+  dimensionHeight: String(values.dimensionHeight || 0),
+  weight: String(values.weight || 0),
+  marketplaceCommission: String(values.marketplaceCommission || 0),
+  marketplaceCommissionFbs: String(values.marketplaceCommissionFbs || 0),
+};
+console.log('SAVING:', body);
+
+const res = await fetch(`/api/products/${product.id}`, {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  credentials: 'include',
+  body: JSON.stringify(body),
+});
+const result = await res.json();
+console.log('SAVE RESULT:', result);
+3. После успешного сохранения — обновить данные в форме и показать toast:
+typescriptif (res.ok) {
+  queryClient.invalidateQueries({ queryKey: ['/api/products'] });
+  toast({ title: 'Сохранено', description: 'Изменения сохранены' });
+  // НЕ закрывать карточку!
+} else {
+  toast({ title: 'Ошибка', description: result.message, variant: 'destructive' });
+}
+4. Проверь server/routes.ts — PUT /api/products/:id
+Добавь лог в начало обработчика:
+typescriptconsole.log('PUT /api/products/:id body:', req.body);
+И убедись что storage.updateProduct вызывается со ВСЕМИ полями включая dimensionLength, dimensionWidth, dimensionHeight, weight.
+5. Проверь server/storage.ts — функцию updateProduct
+Найди updateProduct и убедись что в объекте обновления есть эти строки:
+typescriptif (data.dimensionLength !== undefined) updates.dimensionLength = data.dimensionLength;
+if (data.dimensionWidth !== undefined) updates.dimensionWidth = data.dimensionWidth;
+if (data.dimensionHeight !== undefined) updates.dimensionHeight = data.dimensionHeight;
+if (data.weight !== undefined) updates.weight = data.weight;
+if (data.marketplaceCommission !== undefined) updates.marketplaceCommission = data.marketplaceCommission;
+if (data.marketplaceCommissionFbs !== undefined) updates.marketplaceCommissionFbs = data.marketplaceCommissionFbs;
+После всех изменений — запусти, открой карточку, вбей габариты, нажми Сохранить. В консоли Replit должны появиться логи SAVING: и PUT /api/products/:id body: с данными габаритов.
