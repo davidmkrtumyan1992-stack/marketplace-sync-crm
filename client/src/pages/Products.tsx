@@ -728,6 +728,12 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [editBarcode, setEditBarcode] = useState(product.barcode || "");
   const [editPrice, setEditPrice] = useState(Number(product.sellingPrice || product.price || 0));
   const [editCategory, setEditCategory] = useState(product.category || "");
+  const [editLength, setEditLength] = useState(Number(product.dimensionLength || 0));
+  const [editWidth, setEditWidth] = useState(Number(product.dimensionWidth || 0));
+  const [editHeight, setEditHeight] = useState(Number(product.dimensionHeight || 0));
+  const [editWeight, setEditWeight] = useState(Number(product.weight || 0));
+  const [editCommissionFBO, setEditCommissionFBO] = useState(Number(product.marketplaceCommission || 0));
+  const [editCommissionFBS, setEditCommissionFBS] = useState(Number(product.marketplaceCommissionFbs || 0));
   const [showConfirm, setShowConfirm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -760,6 +766,12 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
         barcode: editBarcode || null,
         sellingPrice: editPrice,
         category: editCategory || null,
+        dimensionLength: editLength || null,
+        dimensionWidth: editWidth || null,
+        dimensionHeight: editHeight || null,
+        weight: editWeight || null,
+        marketplaceCommission: editCommissionFBO || null,
+        marketplaceCommissionFbs: editCommissionFBS || null,
       };
 
       const endpoint = hasMarketplace
@@ -924,6 +936,85 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                   </Select>
                 </div>
 
+                <div className="border-t pt-4">
+                  <p className="text-sm font-semibold text-muted-foreground mb-3">Габариты товара (для расчёта логистики)</p>
+                  <div className="grid grid-cols-4 gap-3">
+                    <div className="grid gap-2">
+                      <Label htmlFor="detail-length" className="text-xs">Длина, см</Label>
+                      <Input
+                        id="detail-length"
+                        type="number"
+                        step="0.1"
+                        value={editLength}
+                        onChange={(e) => setEditLength(Number(e.target.value) || 0)}
+                        data-testid="input-detail-length"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="detail-width" className="text-xs">Ширина, см</Label>
+                      <Input
+                        id="detail-width"
+                        type="number"
+                        step="0.1"
+                        value={editWidth}
+                        onChange={(e) => setEditWidth(Number(e.target.value) || 0)}
+                        data-testid="input-detail-width"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="detail-height" className="text-xs">Высота, см</Label>
+                      <Input
+                        id="detail-height"
+                        type="number"
+                        step="0.1"
+                        value={editHeight}
+                        onChange={(e) => setEditHeight(Number(e.target.value) || 0)}
+                        data-testid="input-detail-height"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="detail-weight" className="text-xs">Вес, кг</Label>
+                      <Input
+                        id="detail-weight"
+                        type="number"
+                        step="0.01"
+                        value={editWeight}
+                        onChange={(e) => setEditWeight(Number(e.target.value) || 0)}
+                        data-testid="input-detail-weight"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t pt-4">
+                  <p className="text-sm font-semibold text-muted-foreground mb-3">Комиссии маркетплейса</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="detail-commission-fbo" className="text-xs">FBO, %</Label>
+                      <Input
+                        id="detail-commission-fbo"
+                        type="number"
+                        step="0.1"
+                        value={editCommissionFBO}
+                        onChange={(e) => setEditCommissionFBO(Number(e.target.value) || 0)}
+                        data-testid="input-detail-commission-fbo"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="detail-commission-fbs" className="text-xs">FBS, %</Label>
+                      <Input
+                        id="detail-commission-fbs"
+                        type="number"
+                        step="0.1"
+                        value={editCommissionFBS}
+                        onChange={(e) => setEditCommissionFBS(Number(e.target.value) || 0)}
+                        data-testid="input-detail-commission-fbs"
+                        placeholder="Если не указано, = FBO + 4%"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 {canSeePurchasePrice && (
                   <div className="bg-muted/50 rounded-lg p-3 text-sm">
                     <span className="text-muted-foreground">Закупочная цена: </span>
@@ -1018,12 +1109,20 @@ function ProductAnalyticsTab({ product, taxRate, defaultCommission }: { product:
         ? `/api/products/${product.id}/sync-to-marketplace`
         : `/api/products/${product.id}`;
       const method = hasMarketplace ? "POST" : "PUT";
-      const res = await apiRequest(method, endpoint, { sellingPrice: simPrice, name: product.name });
-      if (!res.ok) throw new Error("Failed");
+      const res = await apiRequest(method, endpoint, {
+        sellingPrice: String(simPrice),
+        price: String(simPrice),
+        name: product.name,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Ошибка" }));
+        throw new Error(err.message || "Не удалось обновить");
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({ title: "Цена обновлена", description: `Новая цена: ${formatRub(simPrice)}` });
-    } catch {
-      toast({ title: "Ошибка", description: "Не удалось обновить цену", variant: "destructive" });
+      toast({ title: "✓ Цена обновлена", description: `Новая цена: ${formatRub(simPrice)}` });
+      setSimPrice(simPrice);
+    } catch (err: any) {
+      toast({ title: "Ошибка", description: err.message || "Не удалось обновить цену", variant: "destructive" });
     } finally {
       setIsSavingPrice(false);
     }

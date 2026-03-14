@@ -25,11 +25,12 @@ export interface OzonProfitResult {
 export function calculateProductProfit(
   price: number,
   purchasePrice: number,
-  commissionPct: number,
+  commissionFBOPct: number,
   taxRate: number,
   length: number,
   width: number,
   height: number,
+  commissionFBSPct?: number,
 ): OzonProfitResult {
   const hasVolume = length > 0 && width > 0 && height > 0;
   const volume = hasVolume ? (length * width * height) / 1000 : 0;
@@ -50,10 +51,9 @@ export function calculateProductProfit(
     else logisticsFBS = 4417;
   }
 
-  const commissionFBOPct = commissionPct;
-  const commissionFBSPct = commissionPct + 4;
+  const finalCommissionFBSPct = commissionFBSPct ?? (commissionFBOPct + 4);
   const commissionFBO = price * (commissionFBOPct / 100);
-  const commissionFBS = price * (commissionFBSPct / 100);
+  const commissionFBS = price * (finalCommissionFBSPct / 100);
   const acquiring = price * 0.01;
   const lastMile = 25;
   const processingFBS = 30;
@@ -97,12 +97,13 @@ export function calculateFromProduct(
 ): OzonProfitResult {
   const price = Number(product.sellingPrice || product.price || 0);
   const purchasePrice = Number(product.purchasePrice || 0);
-  const commissionPct = Number(product.marketplaceCommission) || defaultCommission;
+  const commissionFBOPct = Number(product.marketplaceCommission) || defaultCommission;
+  const commissionFBSPct = Number(product.marketplaceCommissionFbs) || undefined;
   const length = Number(product.dimensionLength || 0);
   const width = Number(product.dimensionWidth || 0);
   const height = Number(product.dimensionHeight || 0);
 
-  return calculateProductProfit(price, purchasePrice, commissionPct, taxRate, length, width, height);
+  return calculateProductProfit(price, purchasePrice, commissionFBOPct, taxRate, length, width, height, commissionFBSPct);
 }
 
 export function getMarginColor(margin: number): string {
