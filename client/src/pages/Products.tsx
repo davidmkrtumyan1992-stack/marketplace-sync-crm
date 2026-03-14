@@ -736,7 +736,31 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [editCommissionFBS, setEditCommissionFBS] = useState(Number(product.marketplaceCommissionFbs || 0));
   const [showConfirm, setShowConfirm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isLoadingOzonData, setIsLoadingOzonData] = useState(false);
+
+  useEffect(() => {
+    if (
+      product?.ozonId &&
+      (!product.dimensionLength || product.dimensionLength === "0" || !product.dimensionWidth)
+    ) {
+      const enrichData = async () => {
+        try {
+          const res = await apiRequest("POST", "/api/products/enrich-from-ozon", { productId: product.id });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.dimensionLength) {
+              setEditLength(data.dimensionLength || 0);
+              setEditWidth(data.dimensionWidth || 0);
+              setEditHeight(data.dimensionHeight || 0);
+              setEditWeight(data.weight || 0);
+              setEditCommissionFBO(data.commissionFbo || 15);
+              setEditCommissionFBS(data.commissionFbs || 19);
+            }
+          }
+        } catch {}
+      };
+      enrichData();
+    }
+  }, [product?.id]);
 
   const hasOzon = !!product.ozonId;
   const hasWb = !!product.wbId;
@@ -755,29 +779,6 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
     editCommissionFBS !== Number(product.marketplaceCommissionFbs || 0);
   const isValid = editName.trim().length > 0 && !isNaN(editPrice) && editPrice >= 0;
 
-  const handleLoadOzonData = async () => {
-    setIsLoadingOzonData(true);
-    try {
-      const res = await apiRequest("POST", "/api/products/enrich-from-ozon", { productId: product.id });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: "Ошибка" }));
-        throw new Error(err.message || "Не удалось загрузить данные");
-      }
-      const data = await res.json();
-      setEditLength(data.dimensionLength || 0);
-      setEditWidth(data.dimensionWidth || 0);
-      setEditHeight(data.dimensionHeight || 0);
-      setEditWeight(data.weight || 0);
-      setEditCommissionFBO(data.commissionFbo || 15);
-      setEditCommissionFBS(data.commissionFbs || 19);
-      toast({ title: "✓ Данные загружены", description: "Габариты и комиссии обновлены с Ozon" });
-    } catch (err: any) {
-      toast({ title: "Ошибка", description: err.message || "Не удалось загрузить данные с Ozon", variant: "destructive" });
-    } finally {
-      setIsLoadingOzonData(false);
-    }
-  };
-
   const handleSaveClick = () => {
     if (!hasChanges) return;
     if (hasMarketplace) {
@@ -794,14 +795,15 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
       const body = {
         name: editName,
         barcode: editBarcode || null,
-        sellingPrice: editPrice,
+        sellingPrice: String(editPrice),
+        price: String(editPrice),
         category: editCategory || null,
-        dimensionLength: editLength || null,
-        dimensionWidth: editWidth || null,
-        dimensionHeight: editHeight || null,
-        weight: editWeight || null,
-        marketplaceCommission: editCommissionFBO || null,
-        marketplaceCommissionFbs: editCommissionFBS || null,
+        dimensionLength: editLength ? String(editLength) : null,
+        dimensionWidth: editWidth ? String(editWidth) : null,
+        dimensionHeight: editHeight ? String(editHeight) : null,
+        weight: editWeight ? String(editWeight) : null,
+        marketplaceCommission: editCommissionFBO ? String(editCommissionFBO) : null,
+        marketplaceCommissionFbs: editCommissionFBS ? String(editCommissionFBS) : null,
       };
 
       const endpoint = hasMarketplace
@@ -967,22 +969,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                 </div>
 
                 <div className="border-t pt-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-sm font-semibold text-muted-foreground">Габариты товара (для расчёта логистики)</p>
-                    {hasOzon && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={handleLoadOzonData}
-                        disabled={isLoadingOzonData}
-                        className="h-8 text-xs"
-                        data-testid="button-load-ozon-data"
-                      >
-                        {isLoadingOzonData ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Download className="w-3 h-3 mr-1" />}
-                        Загрузить с Ozon
-                      </Button>
-                    )}
-                  </div>
+                  <p className="text-sm font-semibold text-muted-foreground mb-3">Габариты товара (для расчёта логистики)</p>
                   <div className="grid grid-cols-4 gap-3">
                     <div className="grid gap-2">
                       <Label htmlFor="detail-length" className="text-xs">Длина, см</Label>

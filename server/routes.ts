@@ -1306,6 +1306,8 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Не настроен Ozon API ключ" });
       }
 
+      console.log("[enrich-from-ozon] product_id:", product.ozonId);
+
       const infoRes = await fetch("https://api-seller.ozon.ru/v3/product/info", {
         method: "POST",
         headers: {
@@ -1322,10 +1324,25 @@ export async function registerRoutes(
       
       const info = await infoRes.json();
       const item = info.result;
+      console.log("[enrich-from-ozon] item keys:", Object.keys(item || {}));
+
+      const toCm = (val: any): number => {
+        const n = Number(val || 0);
+        return n > 100 ? Math.round((n / 10) * 10) / 10 : n;
+      };
+
+      let dimensionLength = toCm(item.depth);
+      let dimensionWidth = toCm(item.width);
+      let dimensionHeight = toCm(item.height);
+      const weight = Number(item.weight || 0) / 1000;
+
+      console.log("[enrich-from-ozon] dimensions:", { dimensionLength, dimensionWidth, dimensionHeight, weight });
+
       let commissionFbo = 15;
       let commissionFbs = 19;
       
-      if (item.description_category_id) {
+      const categoryId = item.description_category_id || item.category_id;
+      if (categoryId) {
         const commRes = await fetch("https://api-seller.ozon.ru/v1/category/commission", {
           method: "POST",
           headers: {
@@ -1333,23 +1350,23 @@ export async function registerRoutes(
             "Api-Key": ozonSetting.apiKey!,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ category_id: [item.description_category_id], price: item.price })
+          body: JSON.stringify({ 
+            category_id: [Number(categoryId)],
+            price: String(product.sellingPrice || "1000")
+          })
         });
         
         if (commRes.ok) {
           const commData = await commRes.json();
           const comm = commData.result?.[0];
           if (comm) {
-            commissionFbo = comm.fbo_percent || 15;
-            commissionFbs = comm.fbs_percent || 19;
+            commissionFbo = Number(comm.fbo_percent || 15);
+            commissionFbs = Number(comm.fbs_percent || 19);
           }
         }
       }
-      
-      const dimensionLength = item.depth || 0;
-      const dimensionWidth = item.width || 0;
-      const dimensionHeight = item.height || 0;
-      const weight = item.weight ? item.weight / 1000 : 0;
+
+      console.log("[enrich-from-ozon] commission:", { commissionFbo, commissionFbs });
       
       await storage.updateProduct(productId, {
         dimensionLength: String(dimensionLength),

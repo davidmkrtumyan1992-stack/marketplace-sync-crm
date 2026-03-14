@@ -1,0 +1,152 @@
+Три проблемы понятны. Разберём по порядку:
+
+**Ошибка API** — скорее всего неправильный эндпоинт или формат запроса к Ozon. Нужно отладить.
+
+**По поводу кнопки** — ты абсолютно прав. Лишняя кнопка не нужна. Правильная логика: при открытии карточки товара система сама автоматически подтягивает актуальные данные с Ozon если есть ozonId.
+
+**Габариты не сохраняются** — баг в форме, поля не попадают в PUT запрос.
+
+Вот промт:
+
+---
+
+**Исправить три проблемы с карточкой товара**
+
+**Баг 1 — габариты не сохраняются**
+
+Найди PUT запрос при сохранении товара. Убедись что новые поля включены в тело запроса:
+
+```typescript
+// В функции onSubmit формы товара — добавить все поля:
+const updateData = {
+  name: data.name,
+  sku: data.sku,
+  sellingPrice: String(data.sellingPrice),
+  price: String(data.sellingPrice),
+  purchasePrice: String(data.purchasePrice || 0),
+  dimensionLength: String(data.dimensionLength || 0),
+  dimensionWidth: String(data.dimensionWidth || 0),
+  dimensionHeight: String(data.dimensionHeight || 0),
+  weight: String(data.weight || 0),
+  marketplaceCommission: String(data.marketplaceCommission || 0),
+  // остальные существующие поля...
+};
+
+await fetch(`/api/products/${product.id}`, {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  credentials: 'include',
+  body: JSON.stringify(updateData)
+});
+```
+
+**Баг 2 — убрать кнопку «Загрузить с Ozon», сделать автозагрузку**
+
+Удали кнопку «Загрузить с Ozon» полностью. Вместо этого — при открытии карточки товара автоматически вызывать обогащение данных если:
+- у товара есть `ozonId`
+- И хотя бы одно из полей пустое: `dimensionLength`, `dimensionWidth`, `dimensionHeight`
+
+```typescript
+// В компоненте карточки товара — useEffect при открытии:
+useEffect(() => {
+  if (
+    product?.ozonId && 
+    (!product.dimensionLength || product.dimensionLength === '0' || !product.dimensionWidth)
+  ) {
+    // Автоматически обогатить данные
+    fetch('/api/products/enrich-from-ozon', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ productId: product.id })
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.dimensionLength) {
+        form.setValue('dimensionLength', data.dimensionLength);
+        form.setValue('dimensionWidth', data.dimensionWidth);
+        form.setValue('dimensionHeight', data.dimensionHeight);
+        form.setValue('weight', data.weight);
+        form.setValue('marketplaceCommission', data.commissionFbo);
+        form.setValue('marketplaceCommissionFbs', data.commissionFbs);
+      }
+    })
+    .catch(() => {}); // тихая ошибка — не мешать пользователю
+  }
+}, [product?.id]);
+```
+
+Никакого toast и никакого spinner — всё происходит тихо в фоне. Пользователь просто видит заполненные поля когда открывает карточку.
+
+**Баг 3 — исправить эндпоинт `/api/products/enrich-from-ozon`**
+
+Проблема в запросе к Ozon API. Исправить эндпоинт:
+
+```typescript
+// Шаг 1 — получить габариты:
+const infoRes = await fetch('https://api-seller.ozon.ru/v3/product/info', {
+  method: 'POST',
+  headers: {
+    'Client-Id': ozonSetting.clientId!,
+    'Api-Key': ozonSetting.apiKey!,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({ product_id: Number(product.ozonId) })
+});
+
+const info = await infoRes.json();
+const item = info.result;
+
+// Размеры у Ozon могут быть в мм — конвертировать в см:
+const toСm = (val: any) => {
+  const n = Number(val || 0);
+  return n > 100 ? Math.round(n / 10 * 10) / 10 : n; // если > 100 то мм→см
+};
+
+const dimensionLength = toСm(item.depth);
+const dimensionWidth = toСm(item.width);  
+const dimensionHeight = toСm(item.height);
+const weight = Number(item.weight || 0) / 1000; // граммы → кг
+
+// Шаг 2 — получить комиссию по категории:
+const categoryId = item.description_category_id || item.category_id;
+let commissionFbo = 15, commissionFbs = 19;
+
+if (categoryId) {
+  const commRes = await fetch('https://api-seller.ozon.ru/v1/category/commission', {
+    method: 'POST',
+    headers: {
+      'Client-Id': ozonSetting.clientId!,
+      'Api-Key': ozonSetting.apiKey!,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      category_id: [Number(categoryId)],
+      price: String(product.sellingPrice || '1000')
+    })
+  });
+  
+  if (commRes.ok) {
+    const commData = await commRes.json();
+    const comm = commData.result?.[0];
+    if (comm) {
+      commissionFbo = Number(comm.fbo_percent || 15);
+      commissionFbs = Number(comm.fbs_percent || 19);
+    }
+  }
+}
+
+// Шаг 3 — добавить логирование для отладки:
+console.log('[enrich-from-ozon] product_id:', product.ozonId);
+console.log('[enrich-from-ozon] item keys:', Object.keys(item || {}));
+console.log('[enrich-from-ozon] dimensions:', { dimensionLength, dimensionWidth, dimensionHeight, weight });
+console.log('[enrich-from-ozon] commission:', { commissionFbo, commissionFbs });
+```
+
+**Бонус — автообогащение при синхронизации**
+
+В существующем коде синхронизации заказов Ozon (`/api/marketplace/ozon/sync-orders`) после импорта товаров — автоматически вызывать обогащение для всех товаров у которых нет габаритов. Так данные будут актуальными без каких-либо действий от пользователя.
+
+---
+
+Отправляй и проверяй!
