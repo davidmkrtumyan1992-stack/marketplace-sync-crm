@@ -1132,7 +1132,8 @@ function SyncHistorySection() {
 }
 
 const taxFormSchema = z.object({
-  taxSystem: z.enum(["usn_6", "usn_15"]),
+  taxSystem: z.enum(["usn_6", "usn_15", "custom"]),
+  taxRate: z.coerce.number().min(0).max(100).optional(),
   defaultLogisticsCost: z.coerce.number(),
   defaultMarketplaceCommission: z.coerce.number(),
 });
@@ -1152,15 +1153,32 @@ function TaxSettingsCard({
     resolver: zodResolver(taxFormSchema),
     defaultValues: {
       taxSystem: "usn_6",
+      taxRate: 6,
       defaultLogisticsCost: 100,
       defaultMarketplaceCommission: 15,
     }
   });
 
+  const TAX_OPTIONS = [
+    { value: "usn_6", label: "УСН «Доходы» 6%", description: "Налог = Выручка × 6%. Простая схема без учёта расходов.", rate: 6 },
+    { value: "usn_15", label: "УСН «Доходы минус Расходы» 15%", description: "Налог = (Выручка − Расходы) × 15%. Минимум 1% от выручки.", rate: 15 },
+    { value: "custom", label: "Своя ставка", description: "Установите произвольный процент налога", rate: null },
+  ];
+
   useEffect(() => {
     if (settings) {
+      let taxSystem = settings.taxSystem || "usn_6";
+      let taxRate = Number(settings.taxRate) || 6;
+      if (taxRate !== 6 && taxRate !== 15) {
+        taxSystem = "custom";
+      } else if (taxRate === 6) {
+        taxSystem = "usn_6";
+      } else if (taxRate === 15) {
+        taxSystem = "usn_15";
+      }
       form.reset({
-        taxSystem: settings.taxSystem || "usn_6",
+        taxSystem,
+        taxRate,
         defaultLogisticsCost: Number(settings.defaultLogisticsCost) || 100,
         defaultMarketplaceCommission: Number(settings.defaultMarketplaceCommission) || 15,
       });
@@ -1168,8 +1186,10 @@ function TaxSettingsCard({
   }, [settings, form]);
 
   const onSubmit = (data: z.infer<typeof taxFormSchema>) => {
+    const effectiveRate = data.taxSystem === "custom" ? data.taxRate : (data.taxSystem === "usn_6" ? 6 : 15);
     onSave({
       taxSystem: data.taxSystem,
+      taxRate: effectiveRate?.toString() || "6",
       defaultLogisticsCost: data.defaultLogisticsCost.toString(),
       defaultMarketplaceCommission: data.defaultMarketplaceCommission.toString(),
     } as InsertTaxSetting);
@@ -1197,32 +1217,54 @@ function TaxSettingsCard({
               <Label className="text-base font-medium">Система налогообложения</Label>
               <RadioGroup 
                 value={form.watch("taxSystem")} 
-                onValueChange={(val) => form.setValue("taxSystem", val as "usn_6" | "usn_15")}
+                onValueChange={(val) => {
+                  form.setValue("taxSystem", val as "usn_6" | "usn_15" | "custom");
+                  const opt = TAX_OPTIONS.find(o => o.value === val);
+                  if (opt?.rate !== null) {
+                    form.setValue("taxRate", opt!.rate);
+                  }
+                }}
                 className="grid gap-3"
               >
-                <div className="flex items-start space-x-3 p-4 border rounded-lg hover:bg-muted cursor-pointer">
-                  <RadioGroupItem value="usn_6" id="usn_6" className="mt-1" />
-                  <div className="flex-1">
-                    <Label htmlFor="usn_6" className="font-medium cursor-pointer">
-                      УСН «Доходы» 6%
-                    </Label>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Налог = Выручка × 6%. Простая схема без учёта расходов.
-                    </p>
+                {TAX_OPTIONS.map(opt => (
+                  <div key={opt.value} className="flex items-start space-x-3 p-4 border rounded-lg hover:bg-muted cursor-pointer">
+                    <RadioGroupItem value={opt.value} id={opt.value} className="mt-1" />
+                    <div className="flex-1">
+                      <Label htmlFor={opt.value} className="font-medium cursor-pointer">
+                        {opt.label}
+                      </Label>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        {opt.description}
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <div className="flex items-start space-x-3 p-4 border rounded-lg hover:bg-muted cursor-pointer">
-                  <RadioGroupItem value="usn_15" id="usn_15" className="mt-1" />
-                  <div className="flex-1">
-                    <Label htmlFor="usn_15" className="font-medium cursor-pointer">
-                      УСН «Доходы минус Расходы» 15%
-                    </Label>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Налог = (Выручка − Расходы) × 15%. Минимум 1% от выручки.
-                    </p>
-                  </div>
-                </div>
+                ))}
               </RadioGroup>
+
+              {form.watch("taxSystem") === "custom" && (
+                <div className="mt-4 p-4 bg-muted/50 border rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <Label htmlFor="customRate" className="text-sm font-medium mb-2 block">
+                        Введите налоговую ставку
+                      </Label>
+                      <div className="flex items-center gap-2 max-w-xs">
+                        <Input 
+                          id="customRate"
+                          type="number" 
+                          min="0" 
+                          max="100" 
+                          step="0.1"
+                          placeholder="например 2 или 17.5"
+                          {...form.register("taxRate", { valueAsNumber: true })}
+                          className="flex-1"
+                        />
+                        <span className="text-sm font-medium text-muted-foreground whitespace-nowrap">%</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-4">
