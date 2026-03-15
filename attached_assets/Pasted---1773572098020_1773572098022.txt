@@ -1,0 +1,53 @@
+Исправить кнопку «Сохранить» в карточке товара — убрать автосинхронизацию
+Найди компонент карточки товара (ProductModal или ProductDrawer). Найди функцию doSave или onSubmit или handleSubmit.
+Сейчас после сохранения в БД она вызывает синхронизацию с маркетплейсами через /api/products/:id/sync — это вызывает ошибку если WB или Яндекс не подключены.
+Исправить — убрать вызов sync из сохранения:
+typescriptconst doSave = async () => {
+  try {
+    // Только сохранить в БД — никакой синхронизации!
+    const res = await fetch(`/api/products/${product.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        name: formData.name,
+        sellingPrice: String(formData.sellingPrice || 0),
+        price: String(formData.sellingPrice || 0),
+        purchasePrice: String(formData.purchasePrice || 0),
+        dimensionLength: String(formData.dimensionLength || 0),
+        dimensionWidth: String(formData.dimensionWidth || 0),
+        dimensionHeight: String(formData.dimensionHeight || 0),
+        weight: String(formData.weight || 0),
+        marketplaceCommission: String(formData.marketplaceCommission || 0),
+        marketplaceCommissionFbs: String(formData.marketplaceCommissionFbs || 0),
+        // все остальные поля...
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.message || 'Ошибка сохранения');
+    }
+
+    // Обновить кэш
+    queryClient.invalidateQueries({ queryKey: ['/api/products'] });
+    
+    // Показать успех — карточка НЕ закрывается
+    toast({ title: '✓ Сохранено', description: 'Изменения сохранены в CRM' });
+
+    // НЕ вызывать /api/products/:id/sync здесь!
+    // НЕ закрывать карточку!
+
+  } catch (err: any) {
+    toast({ title: 'Ошибка', description: err.message, variant: 'destructive' });
+  }
+};
+Найди и удали любые вызовы типа:
+
+syncProductToOzon(...)
+syncProductToWb(...)
+fetch('/api/products/${id}/sync', ...)
+apiRequest('POST', /api/products/${id}/sync, ...)
+
+из функции сохранения карточки товара.
+Синхронизация с маркетплейсами будет реализована отдельно через диалог выбора магазинов (следующий промт). Кнопка «Сохранить» должна делать только одно — сохранять данные в БД CRM.
