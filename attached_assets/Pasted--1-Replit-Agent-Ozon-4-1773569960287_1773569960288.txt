@@ -1,0 +1,135 @@
+Вот промт 1 — копируй и отправляй в Replit Agent целиком:
+
+---
+
+**Исправить Ozon Калькулятор — 4 бага в формулах расчёта**
+
+Найди файл с утилитой расчёта Ozon калькулятора (ozon-calc.ts или похожий). Исправь следующие баги которые подтверждены сравнением с официальным calculator.ozon.ru на 3 реальных товарах:
+
+**Баг 1 — Эквайринг: 1.5% → 1%**
+```typescript
+// БЫЛО:
+const acquiring = price * 0.015;
+// СТАЛО:
+const acquiring = price * 0.01;
+```
+
+**Баг 2 — Последняя миля: формула → фиксированные 25 ₽**
+```typescript
+// БЫЛО:
+const lastMile = Math.min(price * 0.055, 500);
+// СТАЛО:
+const lastMile = 25;
+```
+
+**Баг 3 — Добавить «Обработка отправления» для FBS = фиксированные 30 ₽**
+```typescript
+// Добавить новую переменную:
+const processingFBO = 0;   // для FBO = 0 (показывать «—»)
+const processingFBS = 30;  // для FBS = 30 ₽ всегда
+```
+
+В таблице результатов добавить строку между «Логистика» и «Последняя миля»:
+- FBO колонка: «—»
+- FBS колонка: «-30 ₽»
+
+**Баг 4 — FBS комиссия отдельная от FBO**
+
+В списке категорий каждый объект уже имеет `fbo` и `fbs` поля. Убедись что расчёт использует разные значения:
+
+```typescript
+// БЫЛО (неправильно — одинаковая для FBO и FBS):
+const commission = price * (commissionPct / 100);
+
+// СТАЛО (правильно — разные для FBO и FBS):
+const commissionFBO = price * (categoryFboPct / 100);
+const commissionFBS = price * (categoryFbsPct / 100);
+```
+
+Если пользователь вручную вводит % комиссии (не выбирает категорию) — FBS = введённый % + 4.
+
+**Обновить итоговые формулы:**
+```typescript
+// FBO:
+const totalCostFBO = commissionFBO + acquiring + logisticsFBO + processingFBO + lastMile;
+const profitFBO = price - totalCostFBO - purchasePrice - tax;
+const marginFBO = price > 0 ? (profitFBO / price) * 100 : 0;
+
+// FBS:
+const totalCostFBS = commissionFBS + acquiring + logisticsFBS + processingFBS + lastMile;
+const profitFBS = price - totalCostFBS - purchasePrice - tax;
+const marginFBS = price > 0 ? (profitFBS / price) * 100 : 0;
+```
+
+**Баг 5 — Симулятор цены: ошибка «Маркетплейс отклонил изменения»**
+
+Найди обработчик кнопки «Применить цену» в компоненте аналитики. Исправить — при применении цены делать ТОЛЬКО локальное сохранение в CRM без синхронизации с маркетплейсами:
+
+```typescript
+const handleApplyPrice = async () => {
+  setApplying(true);
+  try {
+    const res = await fetch(`/api/products/${product.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        sellingPrice: String(simulatedPrice),
+        price: String(simulatedPrice),
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.message || 'Ошибка сохранения');
+    }
+
+    queryClient.invalidateQueries({ queryKey: ['/api/products'] });
+    toast({
+      title: '✓ Цена обновлена',
+      description: `Новая цена: ${simulatedPrice.toLocaleString('ru-RU')} ₽. Для синхронизации с маркетплейсами — сохраните карточку товара.`,
+    });
+
+  } catch (error: any) {
+    toast({
+      title: 'Ошибка',
+      description: error.message,
+      variant: 'destructive',
+    });
+  } finally {
+    setApplying(false);
+  }
+};
+```
+
+Никаких вызовов `/api/products/:id/sync` в симуляторе — только PUT с новой ценой.
+
+**Проверка после исправлений:**
+
+Для товара Londa Extra Rich, цена 919 ₽, габариты 5.5×3×15.5 см, комиссия FBO 39% / FBS 43%:
+
+```
+Ожидаемый результат FBO:
+- Вознаграждение: -358 ₽ (39%)
+- Эквайринг: -9 ₽ (1%)
+- Обработка отправления: —
+- Логистика: ~46 ₽
+- Последняя миля: -25 ₽
+- Итого затраты Ozon: ~438 ₽
+- К начислению: ~481 ₽
+
+Ожидаемый результат FBS:
+- Вознаграждение: -395 ₽ (43%)
+- Эквайринг: -9 ₽
+- Обработка отправления: -30 ₽
+- Логистика: ~80 ₽
+- Последняя миля: -25 ₽
+- Итого затраты Ozon: ~539 ₽
+- К начислению: ~380 ₽
+```
+
+Эти цифры должны совпасть с официальным Ozon калькулятором.
+
+---
+
+Отправляй и скидывай скрин результата — сравним с Ozon!
