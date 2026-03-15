@@ -1,0 +1,51 @@
+В компоненте OzonCalculatorDialog найди таблицу результатов. Проблема: три строки с итогами («Затраты на Ozon», «К начислению» / «Чистая прибыль», «Маржинальность») не видны в тёмной теме — скорее всего используется хардкод color: white или color: #000 вместо CSS переменных.
+Исправить все цвета текста в таблице результатов — заменить любые хардкодные цвета на CSS переменные:
+typescript// БЫЛО (неправильно — невидимо в тёмной теме):
+className="text-white" 
+// или
+style={{ color: '#000' }}
+// или  
+className="bg-white text-gray-900"
+
+// СТАЛО (правильно — работает в обоих темах):
+className="text-foreground"
+// или для выделенных строк итогов:
+className="font-medium text-foreground"
+// фон выделенных строк:
+className="bg-muted/50"
+Конкретно найди строки таблицы которые показывают:
+
+«Затраты на Ozon» (totalCostFBO / totalCostFBS)
+«Чистая прибыль» (profitFBO / profitFBS)
+«Маржинальность» (marginFBO / marginFBS)
+
+И замени их стили на:
+tsx// Строка "Затраты на Ozon" — выделенная красноватым:
+<tr className="bg-destructive/10 font-medium">
+  <td className="text-foreground">Затраты на Ozon</td>
+  <td className="text-destructive">-{formatPrice(totalCostFBO)} ₽</td>
+  <td className="text-destructive">-{formatPrice(totalCostFBS)} ₽</td>
+</tr>
+
+// Строка "Чистая прибыль" — зелёная если > 0:
+<tr className="bg-primary/10 font-medium">
+  <td className="text-foreground">Чистая прибыль</td>
+  <td className={profitFBO >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}>
+    {formatPrice(profitFBO)} ₽
+  </td>
+  <td className={profitFBS >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}>
+    {formatPrice(profitFBS)} ₽
+  </td>
+</tr>
+
+// Строка "Маржинальность":
+<tr className="bg-primary/10 font-medium">
+  <td className="text-foreground">Маржинальность</td>
+  <td className={marginFBO >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}>
+    {marginFBO.toFixed(1)}%
+  </td>
+  <td className={marginFBS >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}>
+    {marginFBS.toFixed(1)}%
+  </td>
+</tr>
+Также проверь ВСЕ остальные строки таблицы — убедись что нигде нет хардкодных белых или чёрных цветов. Все тексты должны использовать text-foreground, text-muted-foreground, text-destructive или text-green-*.

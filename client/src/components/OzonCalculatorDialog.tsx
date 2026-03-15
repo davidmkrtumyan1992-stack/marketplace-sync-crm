@@ -404,10 +404,10 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
                     <TableCell className="p-2 text-right font-medium">{formatRubles(result.sellingPrice)}</TableCell>
                   </TableRow>
 
-                  <TableRow className="border-b bg-red-50">
-                    <TableCell className="p-2 font-medium">Затраты на Ozon</TableCell>
-                    <TableCell className="p-2 text-right text-red-600 font-medium">-{formatRubles(result.ozonCostsFBO)}</TableCell>
-                    <TableCell className="p-2 text-right text-red-600 font-medium">-{formatRubles(result.ozonCostsFBS)}</TableCell>
+                  <TableRow className="border-b bg-destructive/10">
+                    <TableCell className="p-2 font-medium text-foreground">Затраты на Ozon</TableCell>
+                    <TableCell className="p-2 text-right text-destructive font-medium">-{formatRubles(result.ozonCostsFBO)}</TableCell>
+                    <TableCell className="p-2 text-right text-destructive font-medium">-{formatRubles(result.ozonCostsFBS)}</TableCell>
                   </TableRow>
 
                   <TableRow className="border-b text-muted-foreground">
@@ -433,45 +433,45 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
                   </TableRow>
 
                   <TableRow className="border-b">
-                    <TableCell className="p-2">Последняя миля</TableCell>
-                    <TableCell className="p-2 text-right text-red-600">-{formatRubles(result.lastMile)}</TableCell>
-                    <TableCell className="p-2 text-right text-red-600">-{formatRubles(result.lastMile)}</TableCell>
+                    <TableCell className="p-2 text-foreground">Последняя миля</TableCell>
+                    <TableCell className="p-2 text-right text-destructive">-{formatRubles(result.lastMile)}</TableCell>
+                    <TableCell className="p-2 text-right text-destructive">-{formatRubles(result.lastMile)}</TableCell>
                   </TableRow>
 
                   <TableRow className="border-b">
-                    <TableCell className="p-2">Обработка отправления</TableCell>
-                    <TableCell className="p-2 text-right text-red-600">—</TableCell>
-                    <TableCell className="p-2 text-right text-red-600">-{formatRubles(result.processingFBS)}</TableCell>
+                    <TableCell className="p-2 text-foreground">Обработка отправления</TableCell>
+                    <TableCell className="p-2 text-right text-destructive">—</TableCell>
+                    <TableCell className="p-2 text-right text-destructive">-{formatRubles(result.processingFBS)}</TableCell>
                   </TableRow>
 
                   <TableRow className="border-b">
-                    <TableCell className="p-2">Себестоимость</TableCell>
-                    <TableCell className="p-2 text-right text-red-600">-{formatRubles(result.cost)}</TableCell>
-                    <TableCell className="p-2 text-right text-red-600">-{formatRubles(result.cost)}</TableCell>
+                    <TableCell className="p-2 text-foreground">Себестоимость</TableCell>
+                    <TableCell className="p-2 text-right text-destructive">-{formatRubles(result.cost)}</TableCell>
+                    <TableCell className="p-2 text-right text-destructive">-{formatRubles(result.cost)}</TableCell>
                   </TableRow>
 
                   <TableRow className="border-b">
-                    <TableCell className="p-2">Налог ({formatPercent(taxRate)})</TableCell>
-                    <TableCell className="p-2 text-right text-red-600">-{formatRubles(result.tax)}</TableCell>
-                    <TableCell className="p-2 text-right text-red-600">-{formatRubles(result.tax)}</TableCell>
+                    <TableCell className="p-2 text-foreground">Налог ({formatPercent(taxRate)})</TableCell>
+                    <TableCell className="p-2 text-right text-destructive">-{formatRubles(result.tax)}</TableCell>
+                    <TableCell className="p-2 text-right text-destructive">-{formatRubles(result.tax)}</TableCell>
                   </TableRow>
 
-                  <TableRow className="bg-green-50 font-semibold">
-                    <TableCell className="p-2">Чистая прибыль</TableCell>
-                    <TableCell className={`p-2 text-right ${result.profitFBO >= 0 ? "text-green-600" : "text-red-600"}`}>
+                  <TableRow className="bg-primary/10 font-semibold">
+                    <TableCell className="p-2 text-foreground">Чистая прибыль</TableCell>
+                    <TableCell className={`p-2 text-right font-semibold ${result.profitFBO >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
                       {formatRubles(result.profitFBO)}
                     </TableCell>
-                    <TableCell className={`p-2 text-right ${result.profitFBS >= 0 ? "text-green-600" : "text-red-600"}`}>
+                    <TableCell className={`p-2 text-right font-semibold ${result.profitFBS >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
                       {formatRubles(result.profitFBS)}
                     </TableCell>
                   </TableRow>
 
-                  <TableRow className="bg-green-50 font-semibold">
-                    <TableCell className="p-2">Маржа</TableCell>
-                    <TableCell className={`p-2 text-right ${result.marginFBO >= 0 ? "text-green-600" : "text-red-600"}`}>
+                  <TableRow className="bg-primary/10 font-semibold">
+                    <TableCell className="p-2 text-foreground">Маржа</TableCell>
+                    <TableCell className={`p-2 text-right font-semibold ${result.marginFBO >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
                       {formatPercent(result.marginFBO)}
                     </TableCell>
-                    <TableCell className={`p-2 text-right ${result.marginFBS >= 0 ? "text-green-600" : "text-red-600"}`}>
+                    <TableCell className={`p-2 text-right font-semibold ${result.marginFBS >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
                       {formatPercent(result.marginFBS)}
                     </TableCell>
                   </TableRow>
@@ -479,9 +479,9 @@ export function OzonCalculatorDialog({ taxRate, products }: OzonCalculatorProps)
               </Table>
 
               {!result.hasVolume && (
-                <div className="flex gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <AlertCircle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-yellow-700">Введите габариты или объём для расчёта логистики</p>
+                <div className="flex gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                  <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-500 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-700 dark:text-amber-400">Введите габариты или объём для расчёта логистики</p>
                 </div>
               )}
 
