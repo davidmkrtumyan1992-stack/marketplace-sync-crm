@@ -1205,22 +1205,19 @@ function ProductAnalyticsTab({ product, taxRate, defaultCommission }: { product:
   const handleApplyPrice = async () => {
     setIsSavingPrice(true);
     try {
-      const hasMarketplace = product.ozonId || product.wbId || product.yandexId;
-      const endpoint = hasMarketplace
-        ? `/api/products/${product.id}/sync-to-marketplace`
-        : `/api/products/${product.id}`;
-      const method = hasMarketplace ? "POST" : "PUT";
-      const res = await apiRequest(method, endpoint, {
+      const res = await apiRequest("PUT", `/api/products/${product.id}`, {
         sellingPrice: String(simPrice),
         price: String(simPrice),
-        name: product.name,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: "Ошибка" }));
         throw new Error(err.message || "Не удалось обновить");
       }
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({ title: "✓ Цена обновлена", description: `Новая цена: ${formatRub(simPrice)}` });
+      toast({
+        title: "Цена обновлена",
+        description: `Новая цена: ${simPrice.toLocaleString("ru-RU")} руб. Для синхронизации с маркетплейсами сохраните карточку товара.`,
+      });
       setSimPrice(simPrice);
     } catch (err: any) {
       toast({ title: "Ошибка", description: err.message || "Не удалось обновить цену", variant: "destructive" });
