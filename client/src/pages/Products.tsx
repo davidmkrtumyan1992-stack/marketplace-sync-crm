@@ -21,16 +21,6 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -734,7 +724,6 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [editWeight, setEditWeight] = useState(Number(product.weight || 0));
   const [editCommissionFBO, setEditCommissionFBO] = useState(Number(product.marketplaceCommission || 0));
   const [editCommissionFBS, setEditCommissionFBS] = useState(Number(product.marketplaceCommissionFbs || 0));
-  const [showConfirm, setShowConfirm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const baselineRef = useRef({
     name: product.name,
@@ -808,16 +797,11 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
 
   const handleSaveClick = () => {
     if (!hasChanges) return;
-    if (hasMarketplace) {
-      setShowConfirm(true);
-    } else {
-      doSave();
-    }
+    doSave();
   };
 
   const doSave = async () => {
     setIsSaving(true);
-    setShowConfirm(false);
     try {
       const body = {
         name: editName,
@@ -835,12 +819,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
 
       console.log("SAVING PRODUCT:", JSON.stringify(body, null, 2));
 
-      const endpoint = hasMarketplace
-        ? `/api/products/${product.id}/sync-to-marketplace`
-        : `/api/products/${product.id}`;
-      const method = hasMarketplace ? "POST" : "PUT";
-
-      const res = await apiRequest(method, endpoint, body);
+      const res = await apiRequest("PUT", `/api/products/${product.id}`, body);
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: "Ошибка сохранения" }));
@@ -896,7 +875,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
       }
 
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({ title: "Сохранено", description: "Товар обновлён" + (hasMarketplace ? ` и синхронизирован с ${marketplaceNames}` : "") });
+      toast({ title: "Сохранено", description: "Изменения сохранены в CRM" });
     } catch (err: any) {
       toast({
         title: "Ошибка",
@@ -1125,10 +1104,10 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
               </div>
 
               {hasMarketplace && hasChanges && (
-                <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-                  <p className="text-xs text-amber-800 dark:text-amber-200">
-                    Изменения будут применены во всех подключённых магазинах ({marketplaceNames})
+                <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 flex items-start gap-2">
+                  <Store className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+                  <p className="text-xs text-blue-800 dark:text-blue-200">
+                    Изменения сохранятся только в CRM. Для синхронизации с {marketplaceNames} используйте отдельную функцию синхронизации.
                   </p>
                 </div>
               )}
@@ -1160,25 +1139,6 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-amber-500" />
-              Подтверждение синхронизации
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              Внимание: изменения будут применены во всех подключённых магазинах. Цена, название и атрибуты товара будут обновлены на маркетплейсе {marketplaceNames}. Продолжить?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="button-sync-cancel">Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={doSave} data-testid="button-sync-confirm">
-              Сохранить и синхронизировать
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </>
   );
 }
