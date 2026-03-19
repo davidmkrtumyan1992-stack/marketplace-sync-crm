@@ -535,11 +535,14 @@ export async function registerRoutes(
             console.log("[sync-price] Полный ответ Ozon:", responseText);
             let data: any;
             try { data = JSON.parse(responseText); } catch { data = null; }
-            const item = data?.result?.items?.[0];
-            if (item && (!item.errors || item.errors.length === 0)) {
+            const item = data?.result?.[0];
+            if (item?.updated === true && (!item.errors || item.errors.length === 0)) {
               success = true;
             } else {
-              errorMsg = item?.errors?.[0]?.message || data?.message || "Ozon вернул ошибку";
+              const ozonError = item?.errors?.[0]?.message || data?.message || "Ozon вернул ошибку";
+              errorMsg = ozonError;
+              console.log("[sync-price] Ozon error detail:", ozonError);
+              console.log("[sync-price] Full Ozon response:", JSON.stringify(data));
             }
           } else if (setting.marketplace === "yandex" && setting.apiKey) {
             errorMsg = "Синхронизация цен Яндекс Маркет пока не реализована";
