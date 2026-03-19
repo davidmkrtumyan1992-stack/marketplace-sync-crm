@@ -968,7 +968,7 @@ export class DatabaseStorage implements IStorage {
         const setting = allSettings.find(ms => ms.storeId === store.id && ms.isActive);
         const link = linksMap.get(store.id);
         const isConnected = !!setting && !!setting.apiKey;
-        const hasProduct = !!link;
+        const hasProduct = !!link && link.isActive === true;
         return {
           storeId: store.id,
           storeName: store.name,

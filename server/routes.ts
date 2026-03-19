@@ -4,10 +4,10 @@ import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
 import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, fixWbPhotos, syncProductToOzon, syncProductToWb } from "./marketplace-import";
 import { api } from "@shared/routes";
-import { marketplaceSettings as marketplaceSettingsTable, products as productsTable, orders as ordersTable } from "@shared/schema";
+import { marketplaceSettings as marketplaceSettingsTable, products as productsTable, orders as ordersTable, productMarketplaceLinks } from "@shared/schema";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { db } from "./db";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -491,6 +491,8 @@ export async function registerRoutes(
 
       const priceStr = String(Math.round(Number(price)));
       const allSettings = await storage.getMarketplaceSettings(orgId);
+      const productLinks = await storage.getProductMarketplaceLinks(productId);
+      const activeLinksMap = new Map(productLinks.filter(l => l.isActive).map(l => [l.storeId, l]));
       const results: { storeId: number; storeName: string; marketplace: string; success: boolean; error?: string }[] = [];
 
       for (const storeId of storeIds) {
@@ -498,6 +500,10 @@ export async function registerRoutes(
         const setting = allSettings.find(s => s.storeId === storeNum && s.isActive);
         if (!setting) {
           results.push({ storeId: storeNum, storeName: String(storeId), marketplace: "unknown", success: false, error: "Магазин не найден или не настроен" });
+          continue;
+        }
+        if (!activeLinksMap.has(storeNum)) {
+          results.push({ storeId: storeNum, storeName: setting.storeName || String(storeId), marketplace: setting.marketplace, success: false, error: "Товар не найден в этом магазине" });
           continue;
         }
 
@@ -592,6 +598,110 @@ export async function registerRoutes(
       res.json({ message: "Миграция завершена", created, skipped });
     } catch (err: any) {
       console.error("[POST /api/admin/migrate-product-links]", err);
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/admin/fix-product-links — проверить реальное наличие товаров в магазинах через Ozon API
+  app.post("/api/admin/fix-product-links", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+
+      // Загружаем все связи для этой организации
+      const allLinks = await db.select().from(productMarketplaceLinks)
+        .where(eq(productMarketplaceLinks.organizationId, orgId));
+
+      if (allLinks.length === 0) {
+        return res.json({ message: "Нет записей для проверки", checked: 0, active: 0, inactive: 0 });
+      }
+
+      // Группируем по (storeId, marketplaceProductId) — один запрос к Ozon на уникальную пару
+      const uniquePairs = new Map<string, { storeId: number; marketplaceProductId: string }>();
+      for (const link of allLinks) {
+        if (!link.marketplaceProductId) continue;
+        const key = `${link.storeId}:${link.marketplaceProductId}`;
+        if (!uniquePairs.has(key)) {
+          uniquePairs.set(key, { storeId: link.storeId, marketplaceProductId: link.marketplaceProductId });
+        }
+      }
+
+      const pairs = Array.from(uniquePairs.values());
+      console.log(`[fix-product-links] Всего уникальных пар (storeId, marketplaceProductId): ${pairs.length}`);
+
+      // Результаты: ключ → true (exists) / false (not found)
+      const pairResults = new Map<string, boolean>();
+      let checked = 0;
+      let apiErrors = 0;
+
+      for (const pair of pairs) {
+        const setting = allSettings.find(s => s.storeId === pair.storeId && s.marketplace === "ozon" && s.isActive && s.apiKey && s.clientId);
+        if (!setting) {
+          pairResults.set(`${pair.storeId}:${pair.marketplaceProductId}`, false);
+          continue;
+        }
+
+        try {
+          const ozonRes = await fetch("https://api-seller.ozon.ru/v3/product/info", {
+            method: "POST",
+            headers: {
+              "Client-Id": setting.clientId!,
+              "Api-Key": setting.apiKey!,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ product_id: Number(pair.marketplaceProductId) }),
+          });
+          const data = await ozonRes.json() as any;
+          const exists = ozonRes.ok && !data?.code && !data?.message?.includes("NOT_FOUND");
+          pairResults.set(`${pair.storeId}:${pair.marketplaceProductId}`, exists);
+          checked++;
+        } catch (e) {
+          pairResults.set(`${pair.storeId}:${pair.marketplaceProductId}`, false);
+          apiErrors++;
+        }
+
+        if (checked % 50 === 0 && checked > 0) {
+          console.log(`[fix-product-links] Прогресс: проверено ${checked}/${pairs.length}`);
+        }
+
+        // Небольшая пауза чтобы не перегружать API
+        await new Promise(r => setTimeout(r, 80));
+      }
+
+      console.log(`[fix-product-links] API запросов: ${checked}, ошибок: ${apiErrors}`);
+
+      // Обновляем isActive в таблице для всех записей
+      let activeCount = 0;
+      let inactiveCount = 0;
+
+      for (const link of allLinks) {
+        if (!link.marketplaceProductId) {
+          await db.update(productMarketplaceLinks)
+            .set({ isActive: false })
+            .where(eq(productMarketplaceLinks.id, link.id));
+          inactiveCount++;
+          continue;
+        }
+        const key = `${link.storeId}:${link.marketplaceProductId}`;
+        const exists = pairResults.get(key) ?? false;
+        await db.update(productMarketplaceLinks)
+          .set({ isActive: exists })
+          .where(eq(productMarketplaceLinks.id, link.id));
+        if (exists) activeCount++;
+        else inactiveCount++;
+      }
+
+      console.log(`[fix-product-links] Готово: активных=${activeCount}, неактивных=${inactiveCount}`);
+      res.json({
+        message: "Проверка завершена",
+        totalLinks: allLinks.length,
+        uniquePairsChecked: checked,
+        active: activeCount,
+        inactive: inactiveCount,
+        apiErrors,
+      });
+    } catch (err: any) {
+      console.error("[POST /api/admin/fix-product-links]", err);
       res.status(500).json({ message: err.message });
     }
   });
