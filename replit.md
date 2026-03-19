@@ -23,7 +23,8 @@ Key capabilities include:
 - Product Analytics Tab in product card modal: KPI cards (Profit FBO, Profit FBS, Margin FBO), detailed FBO/FBS cost breakdown table, price simulator with slider (50%-200% range) and "Apply Price" button that saves to DB and syncs to marketplace. Yellow warnings for missing dimensions and purchase price.
 - Product list mini-KPI columns: Profit FBO, Profit FBS, Margin displayed inline per product row. Margin badge next to product name color-coded (green >30%, yellow 10-30%, red <10%). All calculations on frontend using shared `ozon-calc.ts` utility.
 - Custom tax rate: three options in Settings — УСН 6%, УСН 15%, "Своя ставка" (custom rate 0-100%). taxRate field in DB stores effective rate.
-- Excel export functionality for products and P&L reports.
+- Excel export functionality for products and P&L reports. P&L export (`/api/export/pnl`) uses real sales from `order_items` for the selected period (default 30 days, supports `from`/`to` query params). Formula: revenue − cost − commission − logistics − expenses − tax = net profit.
+- Real profit KPI on dashboard: «Чистая прибыль (30 дней)» card shows actual 30-day net profit from order_items (non-cancelled orders). `order_items` table now stores `purchase_price` at time of sale. DashboardKPI type: `realProfit` field (replaces old `expectedProfit` stock-based estimate).
 The UI is fully localized in Russian.
 
 ## User Preferences

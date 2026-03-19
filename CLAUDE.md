@@ -101,6 +101,6 @@ npm run build        # production сборка
 ✓ POST /api/products/:id/sync-price — синхронизация цены на Ozon
 ✓ POST /api/admin/migrate-product-links — миграция ozonId
 ✓ SyncPriceDialog — диалог выбора магазинов после сохранения
-📋 P&L по реальным продажам — запланировано
+✓ P&L по реальным продажам — из order_items, 30 дней, realProfit в KPI
 📋 WB sync-orders — после подключения WB
 📋 Синхронизация цены Яндекс Маркет — планируется

@@ -24,7 +24,7 @@ import {
   type SyncStatusSummary,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, sql, inArray } from "drizzle-orm";
+import { eq, desc, and, sql, inArray, gte } from "drizzle-orm";
 import { authStorage } from "./replit_integrations/auth/storage";
 
 export interface IStorage {
@@ -409,6 +409,10 @@ export class DatabaseStorage implements IStorage {
       const [order] = await tx.insert(orders).values(orderData as any).returning();
       
       for (const item of itemsData) {
+        const [product] = await tx.select().from(products)
+          .where(eq(products.id, item.productId))
+          .for("update");
+
         await tx.insert(orderItems).values({
           orderId: order.id,
           productId: item.productId,
@@ -416,11 +420,9 @@ export class DatabaseStorage implements IStorage {
           price: item.price.toString(),
           originalPrice: item.originalPrice?.toString() || null,
           salePrice: item.salePrice?.toString() || null,
+          purchasePrice: product?.purchasePrice?.toString() || null,
         });
 
-        const [product] = await tx.select().from(products)
-          .where(eq(products.id, item.productId))
-          .for("update");
         if (product) {
           const newCentralStock = Math.max(0, (product.centralStock || 0) - item.quantity);
           
@@ -658,15 +660,26 @@ export class DatabaseStorage implements IStorage {
     const defaultCommission = Number(taxSetting?.defaultMarketplaceCommission || 15) / 100;
     const defaultLogistics = Number(taxSetting?.defaultLogisticsCost || 0);
 
-    let expectedProfit = 0;
-    for (const p of productsList) {
-      const qty = p.centralStock || 0;
-      const revenue = qty * Number(p.sellingPrice || p.price || 0);
-      const cost = qty * Number(p.purchasePrice || 0);
-      const commission = revenue * (Number(p.marketplaceCommission || 0) / 100 || defaultCommission);
-      const logistics = qty * (Number(p.logisticsCost) || defaultLogistics);
-      const tax = revenue * taxRate;
-      expectedProfit += revenue - cost - commission - logistics - tax;
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const recentOrders = allOrders.filter(o =>
+      o.status !== "cancelled" &&
+      o.ozonStatus !== "cancelled" &&
+      o.yandexStatus !== "CANCELLED" &&
+      o.yandexStatus !== "RETURNED" &&
+      new Date(o.createdAt || 0) >= thirtyDaysAgo
+    );
+    const recentOrderIds = recentOrders.map(o => o.id);
+    let realProfit = 0;
+    if (recentOrderIds.length > 0) {
+      const recentItems = await db.select().from(orderItems).where(inArray(orderItems.orderId, recentOrderIds));
+      for (const item of recentItems) {
+        const revenue = Number(item.price) * item.quantity;
+        const cost = Number(item.purchasePrice || 0) * item.quantity;
+        const commission = revenue * defaultCommission;
+        const logistics = item.quantity * defaultLogistics;
+        const tax = revenue * taxRate;
+        realProfit += revenue - cost - commission - logistics - tax;
+      }
     }
 
     const companiesWithStores: CompanyWithStores[] = [];
@@ -714,7 +727,7 @@ export class DatabaseStorage implements IStorage {
       totalStock,
       capitalization,
       expectedRevenue,
-      expectedProfit,
+      realProfit,
       today: {
         ordersCount: activeOrders.length,
         revenue: activeRevenue,

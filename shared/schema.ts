@@ -122,6 +122,7 @@ export const orderItems = pgTable("order_items", {
   price: decimal("price", { precision: 10, scale: 2 }).notNull(),
   originalPrice: decimal("original_price", { precision: 10, scale: 2 }),
   salePrice: decimal("sale_price", { precision: 10, scale: 2 }),
+  purchasePrice: decimal("purchase_price", { precision: 10, scale: 2 }),
 });
 
 export const productStoreExclusions = pgTable("product_store_exclusions", {
@@ -465,7 +466,7 @@ export type DashboardKPI = {
   totalStock: number;
   capitalization: number;
   expectedRevenue: number;
-  expectedProfit: number;
+  realProfit: number;
   today: TodayKPI;
   stockDistribution: {
     local: number;

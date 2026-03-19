@@ -4,10 +4,10 @@ import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
 import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, fixWbPhotos, syncProductToOzon, syncProductToWb } from "./marketplace-import";
 import { api } from "@shared/routes";
-import { marketplaceSettings as marketplaceSettingsTable, products as productsTable, orders as ordersTable, productMarketplaceLinks } from "@shared/schema";
+import { marketplaceSettings as marketplaceSettingsTable, products as productsTable, orders as ordersTable, orderItems as orderItemsTable, productMarketplaceLinks } from "@shared/schema";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { db } from "./db";
-import { eq, and, sql, inArray } from "drizzle-orm";
+import { eq, and, sql, inArray, gte, lte } from "drizzle-orm";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -2098,39 +2098,83 @@ export async function registerRoutes(
   });
 
   app.get("/api/export/pnl", isAuthenticated, requireRole("owner", "accountant"), async (req, res) => {
-    const orgId = getOrgId(req);
-    const productsList = await storage.getProducts(orgId);
-    const expensesList = await storage.getExpenses(orgId);
-    const taxSetting = await storage.getTaxSettings(orgId);
-    const taxRate = Number(taxSetting?.taxRate || 7) / 100;
+    try {
+      const orgId = getOrgId(req);
+      const expensesList = await storage.getExpenses(orgId);
+      const taxSetting = await storage.getTaxSettings(orgId);
+      const taxRate = Number(taxSetting?.taxRate || 7) / 100;
+      const defaultCommission = Number(taxSetting?.defaultMarketplaceCommission || 15) / 100;
+      const defaultLogistics = Number(taxSetting?.defaultLogisticsCost || 0);
 
-    let totalRevenue = 0, totalCost = 0;
-    for (const p of productsList) {
-      totalRevenue += p.stockQuantity * Number(p.sellingPrice || p.price || 0);
-      totalCost += p.stockQuantity * Number(p.purchasePrice || 0);
+      const fromParam = req.query.from as string | undefined;
+      const toParam = req.query.to as string | undefined;
+      const fromDate = fromParam ? new Date(fromParam) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const toDate = toParam ? new Date(toParam) : new Date();
+      toDate.setHours(23, 59, 59, 999);
+
+      const periodOrders = await db.select().from(ordersTable).where(
+        and(
+          eq(ordersTable.organizationId, orgId),
+          gte(ordersTable.createdAt, fromDate),
+          lte(ordersTable.createdAt, toDate)
+        )
+      );
+
+      const nonCancelledOrders = periodOrders.filter(o =>
+        o.status !== "cancelled" &&
+        o.ozonStatus !== "cancelled" &&
+        o.yandexStatus !== "CANCELLED" &&
+        o.yandexStatus !== "RETURNED"
+      );
+      const orderIds = nonCancelledOrders.map(o => o.id);
+
+      let totalRevenue = 0, totalCost = 0, totalCommission = 0, totalLogistics = 0;
+
+      if (orderIds.length > 0) {
+        const items = await db.select().from(orderItemsTable).where(inArray(orderItemsTable.orderId, orderIds));
+        for (const item of items) {
+          const rev = Number(item.price) * item.quantity;
+          const cost = Number(item.purchasePrice || 0) * item.quantity;
+          totalRevenue += rev;
+          totalCost += cost;
+          totalCommission += rev * defaultCommission;
+          totalLogistics += item.quantity * defaultLogistics;
+        }
+      }
+
+      const totalExpenses = expensesList.reduce((s, e) => s + Number(e.amount), 0);
+      const tax = totalRevenue * taxRate;
+      const profit = totalRevenue - totalCost - totalCommission - totalLogistics - totalExpenses - tax;
+
+      const fromLabel = fromDate.toLocaleDateString("ru-RU");
+      const toLabel = toDate.toLocaleDateString("ru-RU");
+
+      const ws = XLSX.utils.json_to_sheet([
+        { "Показатель": `Период`, "Сумма": `${fromLabel} — ${toLabel}` },
+        { "Показатель": "Выручка (продажи)", "Сумма": Math.round(totalRevenue) },
+        { "Показатель": "Себестоимость", "Сумма": Math.round(totalCost) },
+        { "Показатель": `Комиссия МП (${(defaultCommission * 100).toFixed(0)}%)`, "Сумма": Math.round(totalCommission) },
+        { "Показатель": "Логистика", "Сумма": Math.round(totalLogistics) },
+        { "Показатель": "Операционные расходы", "Сумма": Math.round(totalExpenses) },
+        { "Показатель": `Налог (${(taxRate * 100).toFixed(0)}%)`, "Сумма": Math.round(tax) },
+        { "Показатель": "Чистая прибыль", "Сумма": Math.round(profit) },
+        {},
+        { "Показатель": "Расшифровка расходов", "Сумма": "" },
+        ...expensesList.map(e => ({
+          "Показатель": e.description || e.type,
+          "Сумма": Number(e.amount),
+        })),
+      ]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "P&L");
+      const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", "attachment; filename=pnl-report.xlsx");
+      res.send(Buffer.from(buffer));
+    } catch (err: any) {
+      console.error("[pnl-export] Error:", err);
+      res.status(500).json({ message: "Ошибка формирования P&L" });
     }
-    const totalExpenses = expensesList.reduce((s, e) => s + Number(e.amount), 0);
-    const tax = totalRevenue * taxRate;
-    const profit = totalRevenue - totalCost - totalExpenses - tax;
-
-    const ws = XLSX.utils.json_to_sheet([
-      { "Показатель": "Выручка", "Сумма": totalRevenue },
-      { "Показатель": "Себестоимость", "Сумма": totalCost },
-      { "Показатель": "Расходы", "Сумма": totalExpenses },
-      { "Показатель": `Налог (${(taxRate * 100).toFixed(0)}%)`, "Сумма": tax },
-      { "Показатель": "Прибыль", "Сумма": profit },
-      {},
-      ...expensesList.map(e => ({
-        "Показатель": e.description || e.type,
-        "Сумма": Number(e.amount),
-      })),
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "P&L");
-    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", "attachment; filename=pnl-report.xlsx");
-    res.send(Buffer.from(buffer));
   });
 
   // Inventory Sync Endpoints
