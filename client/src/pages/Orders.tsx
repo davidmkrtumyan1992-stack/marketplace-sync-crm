@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useOzonPrintLabel, useOzonBulkLabels, useSilentSyncOzonOrders } from "@/hooks/use-orders";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useOzonPrintLabel, useOzonBulkLabels, useSilentSyncOzonOrders, useSyncOzonOrders } from "@/hooks/use-orders";
 import { format, isToday, isYesterday } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +24,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, Truck, XCircle, Loader2, Printer, Warehouse, Download, AlertTriangle, CheckCircle, Clock } from "lucide-react";
+import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, Truck, XCircle, Loader2, Printer, Warehouse, Download, AlertTriangle, CheckCircle, Clock, RefreshCw } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -179,6 +179,7 @@ export default function Orders() {
   const [storeFilter, setStoreFilter] = useState<"all" | number>("all");
 
   const silentSync = useSilentSyncOzonOrders();
+  const syncOrders = useSyncOzonOrders();
   const bulkLabels = useOzonBulkLabels();
 
   const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number; apiKey: string | null; warehouseId: string | null }[]>({
@@ -397,6 +398,17 @@ export default function Orders() {
             <p className="text-muted-foreground mt-2 text-lg">Отслеживание и выполнение заказов</p>
           </div>
           <div className="flex gap-2">
+            <Button
+              variant="outline"
+              data-testid="button-sync-orders"
+              onClick={() => syncOrders.mutate()}
+              disabled={syncOrders.isPending}
+            >
+              {syncOrders.isPending
+                ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                : <RefreshCw className="w-4 h-4 mr-2" />}
+              Синхронизировать заказы
+            </Button>
             <Button
               data-testid="button-direct-sale"
               onClick={() => setIsDirectSaleOpen(true)}
