@@ -96,7 +96,11 @@ npm run build        # production сборка
 ✓ Поля габаритов в карточке товара
 ✓ Кнопка Сохранить НЕ закрывает карточку
 ✓ Кнопка Сохранить НЕ синхронизирует с МП автоматически
-⚡ product_marketplace_links — в процессе
-📋 Синхронизация цены на выбранные магазины — следующий шаг
+✓ product_marketplace_links — таблица в БД
+✓ GET /api/products/:id/stores — статус товара по магазинам
+✓ POST /api/products/:id/sync-price — синхронизация цены на Ozon
+✓ POST /api/admin/migrate-product-links — миграция ozonId
+✓ SyncPriceDialog — диалог выбора магазинов после сохранения
 📋 P&L по реальным продажам — запланировано
 📋 WB sync-orders — после подключения WB
+📋 Синхронизация цены Яндекс Маркет — планируется

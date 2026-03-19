@@ -456,6 +456,133 @@ export async function registerRoutes(
     res.json(exclusions);
   });
 
+  // GET /api/products/:id/stores — список магазинов с статусом для товара
+  app.get("/api/products/:id/stores", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const productId = Number(req.params.id);
+      const orgId = getOrgId(req);
+      const product = await storage.getProduct(productId);
+      if (!product) return res.status(404).json({ message: "Товар не найден" });
+      if (product.organizationId !== orgId) return res.status(403).json({ message: "Доступ запрещён" });
+      const statuses = await storage.getProductStoresWithStatus(productId, orgId);
+      res.json(statuses);
+    } catch (err: any) {
+      console.error("[GET /api/products/:id/stores]", err);
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/products/:id/sync-price — синхронизировать цену на выбранные магазины
+  app.post("/api/products/:id/sync-price", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const productId = Number(req.params.id);
+      const orgId = getOrgId(req);
+      const product = await storage.getProduct(productId);
+      if (!product) return res.status(404).json({ message: "Товар не найден" });
+      if (product.organizationId !== orgId) return res.status(403).json({ message: "Доступ запрещён" });
+
+      const { storeIds, price } = req.body;
+      if (!Array.isArray(storeIds) || storeIds.length === 0) {
+        return res.status(400).json({ message: "storeIds must be a non-empty array" });
+      }
+      if (typeof price !== "number" && typeof price !== "string") {
+        return res.status(400).json({ message: "price is required" });
+      }
+
+      const priceStr = String(Math.round(Number(price)));
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const results: { storeId: number; storeName: string; marketplace: string; success: boolean; error?: string }[] = [];
+
+      for (const storeId of storeIds) {
+        const storeNum = Number(storeId);
+        const setting = allSettings.find(s => s.storeId === storeNum && s.isActive);
+        if (!setting) {
+          results.push({ storeId: storeNum, storeName: String(storeId), marketplace: "unknown", success: false, error: "Магазин не найден или не настроен" });
+          continue;
+        }
+
+        let storeName = setting.storeName || String(storeId);
+        let success = false;
+        let errorMsg: string | undefined;
+
+        try {
+          if (setting.marketplace === "ozon" && setting.apiKey && setting.clientId) {
+            const offerId = product.sku;
+            const response = await fetch("https://api-seller.ozon.ru/v1/product/import/prices", {
+              method: "POST",
+              headers: { "Client-Id": setting.clientId, "Api-Key": setting.apiKey, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                prices: [{ offer_id: offerId, price: priceStr, old_price: "0", premium_price: "0", min_price: "0" }],
+              }),
+            });
+            const data = await response.json() as any;
+            const item = data?.result?.items?.[0];
+            if (item && (!item.errors || item.errors.length === 0)) {
+              success = true;
+            } else {
+              errorMsg = item?.errors?.[0]?.message || "Ozon вернул ошибку";
+            }
+          } else if (setting.marketplace === "yandex" && setting.apiKey) {
+            errorMsg = "Синхронизация цен Яндекс Маркет пока не реализована";
+          } else if (setting.marketplace === "wildberries" && setting.apiKey) {
+            errorMsg = "Синхронизация цен Wildberries пока не реализована";
+          } else {
+            errorMsg = "Маркетплейс не поддерживается или не настроен";
+          }
+        } catch (e: any) {
+          errorMsg = e.message || "Ошибка сети";
+        }
+
+        await storage.updateProductMarketplaceLinkSync(productId, storeNum, success ? "success" : "error", errorMsg);
+        results.push({ storeId: storeNum, storeName, marketplace: setting.marketplace, success, error: errorMsg });
+      }
+
+      res.json({ results });
+    } catch (err: any) {
+      console.error("[POST /api/products/:id/sync-price]", err);
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/admin/migrate-product-links — миграция ozonId в product_marketplace_links
+  app.post("/api/admin/migrate-product-links", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allProducts = await storage.getProducts(orgId);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSettings = allSettings.filter(s => s.marketplace === "ozon" && s.isActive && s.storeId);
+
+      let created = 0;
+      let skipped = 0;
+
+      for (const product of allProducts) {
+        if (!product.ozonId) { skipped++; continue; }
+
+        for (const setting of ozonSettings) {
+          if (!setting.storeId) continue;
+          try {
+            await storage.upsertProductMarketplaceLink({
+              productId: product.id,
+              storeId: setting.storeId,
+              marketplaceProductId: product.ozonId,
+              isActive: true,
+              organizationId: orgId,
+            });
+            created++;
+          } catch (e) {
+            console.warn("[migrate-product-links] skip", product.id, setting.storeId, e);
+          }
+        }
+      }
+
+      console.log(`[migrate-product-links] done: created=${created} skipped=${skipped}`);
+      res.json({ message: "Миграция завершена", created, skipped });
+    } catch (err: any) {
+      console.error("[POST /api/admin/migrate-product-links]", err);
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // Customers (owner & administrator only)
   app.get(api.customers.list.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     const list = await storage.getCustomers(getOrgId(req));

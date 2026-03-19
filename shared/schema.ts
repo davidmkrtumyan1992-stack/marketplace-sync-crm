@@ -239,6 +239,20 @@ export const inventorySyncSettings = pgTable("inventory_sync_settings", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const productMarketplaceLinks = pgTable("product_marketplace_links", {
+  id: serial("id").primaryKey(),
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
+  marketplaceProductId: text("marketplace_product_id"),
+  isActive: boolean("is_active").default(true),
+  lastSyncAt: timestamp("last_sync_at"),
+  lastSyncStatus: text("last_sync_status"),
+  lastSyncError: text("last_sync_error"),
+  organizationId: text("organization_id").notNull(),
+}, (table) => ({
+  productStoreUnique: uniqueIndex("pml_product_store_idx").on(table.productId, table.storeId),
+}));
+
 // === RELATIONS ===
 
 export const companiesRelations = relations(companies, ({ many }) => ({
@@ -310,6 +324,7 @@ export const insertStockSyncLogSchema = createInsertSchema(stockSyncLog).omit({ 
 export const insertWebhookLogSchema = createInsertSchema(webhookLogs).omit({ id: true, createdAt: true });
 export const insertInventorySyncSettingsSchema = createInsertSchema(inventorySyncSettings).omit({ id: true, updatedAt: true });
 export const insertProductStoreExclusionSchema = createInsertSchema(productStoreExclusions).omit({ id: true, createdAt: true });
+export const insertProductMarketplaceLinkSchema = createInsertSchema(productMarketplaceLinks).omit({ id: true });
 
 // === TYPES ===
 
@@ -347,6 +362,21 @@ export type ProductStoreExclusion = typeof productStoreExclusions.$inferSelect;
 export type InsertProductStoreExclusion = z.infer<typeof insertProductStoreExclusionSchema>;
 export type WebhookLog = typeof webhookLogs.$inferSelect;
 export type InsertWebhookLog = z.infer<typeof insertWebhookLogSchema>;
+export type ProductMarketplaceLink = typeof productMarketplaceLinks.$inferSelect;
+export type InsertProductMarketplaceLink = z.infer<typeof insertProductMarketplaceLinkSchema>;
+
+// Product store status for SyncPriceDialog
+export type ProductStoreStatus = {
+  storeId: number;
+  storeName: string;
+  marketplace: string;
+  isConnected: boolean;
+  hasProduct: boolean;
+  marketplaceProductId: string | null;
+  lastSyncAt: string | null;
+  lastSyncStatus: string | null;
+  lastSyncError: string | null;
+};
 
 // API Requests
 export type CreateProductRequest = InsertProduct;

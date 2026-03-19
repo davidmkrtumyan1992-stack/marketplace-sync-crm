@@ -1,7 +1,7 @@
 import { 
   companies, stores, userRoles, expenses,
   products, customers, orders, orderItems, marketplaceSettings, taxSettings, auditLog, stockInflow, syncHistory,
-  stockSyncLog, inventorySyncSettings, productStoreExclusions, webhookLogs,
+  stockSyncLog, inventorySyncSettings, productStoreExclusions, webhookLogs, productMarketplaceLinks,
   type Company, type InsertCompany,
   type Store, type InsertStore,
   type UserRole, type InsertUserRole,
@@ -18,6 +18,7 @@ import {
   type InventorySyncSetting, type InsertInventorySyncSettings,
   type ProductStoreExclusion, type InsertProductStoreExclusion,
   type WebhookLog, type InsertWebhookLog,
+  type ProductMarketplaceLink, type InsertProductMarketplaceLink, type ProductStoreStatus,
   type DashboardKPI, type CompanyWithStores, type StoreWithStats,
   type ABCProduct, type LowStockProduct, type SalesDataPoint, type SalesResponse,
   type SyncStatusSummary,
@@ -127,6 +128,12 @@ export interface IStorage {
   // Store Exclusions
   getProductStoreExclusions(productId: number): Promise<ProductStoreExclusion[]>;
   setProductStoreExclusions(productId: number, storeIds: number[], organizationId: string): Promise<ProductStoreExclusion[]>;
+
+  // Product Marketplace Links
+  getProductMarketplaceLinks(productId: number): Promise<ProductMarketplaceLink[]>;
+  upsertProductMarketplaceLink(data: InsertProductMarketplaceLink): Promise<ProductMarketplaceLink>;
+  updateProductMarketplaceLinkSync(productId: number, storeId: number, status: string, error?: string): Promise<void>;
+  getProductStoresWithStatus(productId: number, organizationId: string): Promise<ProductStoreStatus[]>;
 
   // Seed
   seedData(organizationId: string): Promise<void>;
@@ -914,6 +921,66 @@ export class DatabaseStorage implements IStorage {
     }));
     
     return await db.insert(productStoreExclusions).values(values).returning();
+  }
+
+  async getProductMarketplaceLinks(productId: number): Promise<ProductMarketplaceLink[]> {
+    return await db.select().from(productMarketplaceLinks)
+      .where(eq(productMarketplaceLinks.productId, productId));
+  }
+
+  async upsertProductMarketplaceLink(data: InsertProductMarketplaceLink): Promise<ProductMarketplaceLink> {
+    const [result] = await db.insert(productMarketplaceLinks)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [productMarketplaceLinks.productId, productMarketplaceLinks.storeId],
+        set: {
+          marketplaceProductId: data.marketplaceProductId,
+          isActive: data.isActive,
+          organizationId: data.organizationId,
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async updateProductMarketplaceLinkSync(productId: number, storeId: number, status: string, error?: string): Promise<void> {
+    await db.update(productMarketplaceLinks)
+      .set({
+        lastSyncAt: new Date(),
+        lastSyncStatus: status,
+        lastSyncError: error ?? null,
+      })
+      .where(and(
+        eq(productMarketplaceLinks.productId, productId),
+        eq(productMarketplaceLinks.storeId, storeId),
+      ));
+  }
+
+  async getProductStoresWithStatus(productId: number, organizationId: string): Promise<ProductStoreStatus[]> {
+    const orgStores = await this.getStoresByOrg(organizationId);
+    const allSettings = await this.getMarketplaceSettings(organizationId);
+    const links = await this.getProductMarketplaceLinks(productId);
+    const linksMap = new Map(links.map(l => [l.storeId, l]));
+
+    return orgStores
+      .filter(s => s.isActive)
+      .map(store => {
+        const setting = allSettings.find(ms => ms.storeId === store.id && ms.isActive);
+        const link = linksMap.get(store.id);
+        const isConnected = !!setting && !!setting.apiKey;
+        const hasProduct = !!link;
+        return {
+          storeId: store.id,
+          storeName: store.name,
+          marketplace: store.marketplace,
+          isConnected,
+          hasProduct,
+          marketplaceProductId: link?.marketplaceProductId ?? null,
+          lastSyncAt: link?.lastSyncAt ? link.lastSyncAt.toISOString() : null,
+          lastSyncStatus: link?.lastSyncStatus ?? null,
+          lastSyncError: link?.lastSyncError ?? null,
+        };
+      });
   }
 
   async seedData(orgId: string): Promise<void> {

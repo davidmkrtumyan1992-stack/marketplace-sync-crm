@@ -1,4 +1,5 @@
 import { Layout } from "@/components/Layout";
+import { SyncPriceDialog } from "@/components/SyncPriceDialog";
 import { useProducts, useCreateProduct, useDeleteProduct, useSyncProduct } from "@/hooks/use-products";
 import { useCreateStockInflow } from "@/hooks/use-stock-inflow";
 import { useState, useEffect, useRef } from "react";
@@ -725,6 +726,8 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [editCommissionFBO, setEditCommissionFBO] = useState(Number(product.marketplaceCommission || 0));
   const [editCommissionFBS, setEditCommissionFBS] = useState(Number(product.marketplaceCommissionFbs || 0));
   const [isSaving, setIsSaving] = useState(false);
+  const [showSyncPrice, setShowSyncPrice] = useState(false);
+  const [syncPriceValue, setSyncPriceValue] = useState(0);
   const baselineRef = useRef({
     name: product.name,
     barcode: product.barcode || "",
@@ -802,6 +805,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
 
   const doSave = async () => {
     setIsSaving(true);
+    const priceChangedBeforeSave = editPrice !== baselineRef.current.price;
     try {
       const body = {
         name: editName,
@@ -876,6 +880,11 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
 
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       toast({ title: "Сохранено", description: "Изменения сохранены в CRM" });
+
+      if (priceChangedBeforeSave) {
+        setSyncPriceValue(editPrice);
+        setShowSyncPrice(true);
+      }
     } catch (err: any) {
       toast({
         title: "Ошибка",
@@ -1139,6 +1148,12 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
         </DialogContent>
       </Dialog>
 
+      <SyncPriceDialog
+        open={showSyncPrice}
+        onClose={() => setShowSyncPrice(false)}
+        productId={product.id}
+        newPrice={syncPriceValue}
+      />
     </>
   );
 }
