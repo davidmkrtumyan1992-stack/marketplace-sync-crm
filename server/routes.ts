@@ -508,19 +508,32 @@ export async function registerRoutes(
         try {
           if (setting.marketplace === "ozon" && setting.apiKey && setting.clientId) {
             const offerId = product.sku;
-            const response = await fetch("https://api-seller.ozon.ru/v1/product/import/prices", {
+            console.log("[sync-price] === Попытка синхронизации ===");
+            console.log("[sync-price] product.sku:", offerId);
+            console.log("[sync-price] price:", priceStr);
+            console.log("[sync-price] store:", setting.storeName);
+            console.log("[sync-price] clientId:", setting.clientId);
+            console.log("[sync-price] apiKey первые 8 символов:", setting.apiKey?.substring(0, 8));
+            console.log("[sync-price] request body:", JSON.stringify({
+              prices: [{ offer_id: offerId, price: priceStr, old_price: "0", premium_price: "0", min_price: "0" }],
+            }));
+            const ozonRes = await fetch("https://api-seller.ozon.ru/v1/product/import/prices", {
               method: "POST",
               headers: { "Client-Id": setting.clientId, "Api-Key": setting.apiKey, "Content-Type": "application/json" },
               body: JSON.stringify({
                 prices: [{ offer_id: offerId, price: priceStr, old_price: "0", premium_price: "0", min_price: "0" }],
               }),
             });
-            const data = await response.json() as any;
+            console.log("[sync-price] HTTP статус:", ozonRes.status);
+            const responseText = await ozonRes.text();
+            console.log("[sync-price] Полный ответ Ozon:", responseText);
+            let data: any;
+            try { data = JSON.parse(responseText); } catch { data = null; }
             const item = data?.result?.items?.[0];
             if (item && (!item.errors || item.errors.length === 0)) {
               success = true;
             } else {
-              errorMsg = item?.errors?.[0]?.message || "Ozon вернул ошибку";
+              errorMsg = item?.errors?.[0]?.message || data?.message || "Ozon вернул ошибку";
             }
           } else if (setting.marketplace === "yandex" && setting.apiKey) {
             errorMsg = "Синхронизация цен Яндекс Маркет пока не реализована";
