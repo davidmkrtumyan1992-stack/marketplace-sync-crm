@@ -434,6 +434,9 @@ Body: { category_id: [Number(categoryId)], price: "1000" }
 - Экспорт Excel (товары, P&L)
 - Мини-KPI в списке товаров (прибыль/маржа)
 - Бейджи маржинальности на товарах
+- Кнопка ручной синхронизации заказов в разделе Заказы
+- Цены в order_items берутся из financial_data Ozon (реальные цены покупателя)
+- Заказы создаются даже если SKU не найден в CRM
 
 ### ⚡ В процессе (следующие задачи по порядку)
 1. Таблица product_marketplace_links в БД
@@ -453,12 +456,16 @@ Body: { category_id: [Number(categoryId)], price: "1000" }
 
 ## 7. ИЗВЕСТНЫЕ БАГИ
 
-| Баг | Файл | Приоритет |
-|-----|------|-----------|
-| P&L считает склад вместо продаж | server/routes.ts ~1742 | Высокий |
-| getDashboardKPI считает склад | server/storage.ts ~659 | Высокий |
-| sendStockToMarketplace — заглушка | server/inventory-sync.ts ~108 | Критический |
-| orderItems нет purchasePrice | shared/schema.ts | Средний |
+| Баг | Файл | Приоритет | Статус |
+|-----|------|-----------|--------|
+| P&L считает склад вместо продаж | server/routes.ts ~1742 | Высокий | В работе |
+| getDashboardKPI считает склад | server/storage.ts ~659 | Высокий | Открыт |
+| sendStockToMarketplace — заглушка | server/inventory-sync.ts ~108 | Критический | Открыт |
+| orderItems нет purchasePrice | shared/schema.ts | Средний | Открыт |
+| Конфликт статусов заказов (cancelled vs ozon_status) | server/routes.ts | Высокий | ✅ Исправлен |
+| Логика фильтрации в getSalesData (cancelled + активный ozonStatus) | server/storage.ts | Высокий | ✅ Исправлен |
+| Дублирование заказов при синхронизации | server/routes.ts | Высокий | ✅ Исправлен |
+| Маппинг sent_by_seller → shipped отсутствовал | server/routes.ts | Средний | ✅ Исправлен |
 
 ---
 
