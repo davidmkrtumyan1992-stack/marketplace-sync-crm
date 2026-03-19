@@ -1,0 +1,76 @@
+Прочитай CLAUDE.md для контекста.
+
+Нужно исправить две проблемы с заказами.
+
+ПРОБЛЕМА 1 — Конфликт статусов.
+Найди все заказы где ozon_status активный но status='cancelled':
+
+SELECT id, order_number, status, ozon_status, total_amount, store_id
+FROM orders 
+WHERE status = 'cancelled'
+AND ozon_status IN (
+  'awaiting_packaging', 'awaiting_deliver', 
+  'delivering', 'delivered', 'arbitration',
+  'client_arbitration', 'sent_by_seller'
+);
+
+Исправь их — обнови status в соответствии с ozon_status:
+UPDATE orders SET status = CASE
+  WHEN ozon_status IN ('awaiting_packaging', 'awaiting_deliver') THEN 'pending'
+  WHEN ozon_status IN ('delivering', 'sent_by_seller') THEN 'shipped'
+  WHEN ozon_status = 'delivered' THEN 'completed'
+  ELSE status
+END
+WHERE status = 'cancelled'
+AND ozon_status IN (
+  'awaiting_packaging', 'awaiting_deliver',
+  'delivering', 'delivered', 'arbitration',
+  'client_arbitration', 'sent_by_seller'
+);
+
+Покажи сколько записей обновлено.
+
+ПРОБЛЕМА 2 — Исправить логику sync-orders.
+В server/routes.ts в POST /api/marketplace/ozon/sync-orders найди 
+место где обновляется существующий заказ (existingOrder).
+
+Добавь логику: если existingOrder.status = 'cancelled' но новый 
+ozonStatus активный — принудительно обновить status:
+
+const newStatus = ozonStatus === 'delivered' ? 'completed' :
+  ozonStatus === 'cancelled' ? 'cancelled' :
+  ['delivering', 'sent_by_seller'].includes(ozonStatus) ? 'shipped' :
+  ['awaiting_packaging', 'awaiting_deliver', 
+   'arbitration'].includes(ozonStatus) ? 'pending' :
+  existingOrder.status;
+
+Обновлять status при каждой синхронизации — не только ozonStatus.
+
+ПРОБЛЕМА 3 — В getSalesData фильтр отменённых.
+В server/storage.ts найди getSalesData.
+Текущий фильтр исключает: status='cancelled' ИЛИ ozonStatus='cancelled'.
+Добавь проверку: если ozonStatus активный — не исключать заказ 
+даже если status='cancelled' (конфликт статусов).
+
+Изменить фильтр на:
+Исключать заказ только если:
+  (status='cancelled' AND (ozonStatus IS NULL OR ozonStatus='cancelled'))
+  OR ozonStatus='cancelled'
+  OR yandexStatus IN ('CANCELLED', 'RETURNED')
+
+После всех изменений перезапусти сервер и выполни SQL:
+SELECT 
+  s.name, s.client_id,
+  COUNT(DISTINCT o.id) as cnt,
+  ROUND(SUM(o.total_amount)::numeric, 0) as total
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+WHERE s.client_id IN ('3835567','3364383','2311038','2496152','4052691')
+AND DATE(o.created_at) = '2026-03-19'
+AND NOT (
+  (o.status = 'cancelled' AND (o.ozon_status IS NULL OR o.ozon_status = 'cancelled'))
+  OR o.ozon_status = 'cancelled'
+  OR o.yandex_status IN ('CANCELLED', 'RETURNED')
+)
+GROUP BY s.name, s.client_id
+ORDER BY s.client_id;
