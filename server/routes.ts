@@ -2560,7 +2560,7 @@ export async function registerRoutes(
         const displayName = resolvedStoreName || ozonSetting.storeName || `Client ${ozonSetting.clientId}`;
         let storeCreated = 0;
         let storeUpdated = 0;
-        let storeSkippedNoSku = 0;
+        let storeSkippedPartial = 0;
         let storeError: string | undefined;
         const headers = {
           "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
@@ -2662,7 +2662,7 @@ export async function registerRoutes(
               created++;
               storeCreated++;
             } else {
-              storeSkippedNoSku++;
+              storeSkippedPartial++;
             }
           }
         };
@@ -2702,7 +2702,7 @@ export async function registerRoutes(
           console.error(`[ozon-sync-orders] Store «${displayName}» FBO API error ${fboResponse.status}: ${errText}`);
         }
 
-        storeResults.push({ storeName: displayName, storeId: resolvedStoreId, created: storeCreated, updated: storeUpdated, skippedNoSku: storeSkippedNoSku, error: storeError });
+        storeResults.push({ storeName: displayName, storeId: resolvedStoreId, created: storeCreated, updated: storeUpdated, skippedNoSku: storeSkippedPartial, error: storeError });
       }
 
       console.log(`[ozon-sync-orders] Sync complete: created=${created}, updated=${updated}, skipped=${skipped}`);

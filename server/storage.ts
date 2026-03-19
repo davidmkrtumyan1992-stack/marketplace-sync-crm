@@ -354,7 +354,7 @@ export class DatabaseStorage implements IStorage {
       const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
       
       const itemsWithProducts = await Promise.all(items.map(async (item) => {
-        const product = await this.getProduct(item.productId);
+        const product = item.productId ? await this.getProduct(item.productId) : null;
         return { ...item, product: product || null };
       }));
 
@@ -375,7 +375,7 @@ export class DatabaseStorage implements IStorage {
     const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
     
     const itemsWithProducts = await Promise.all(items.map(async (item) => {
-      const product = await this.getProduct(item.productId);
+      const product = item.productId ? await this.getProduct(item.productId) : null;
       return { ...item, product: product || null };
     }));
 
@@ -396,7 +396,7 @@ export class DatabaseStorage implements IStorage {
       const customer = order.customerId ? await this.getCustomer(order.customerId) : null;
       const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
       const itemsWithProducts = await Promise.all(items.map(async (item) => {
-        const product = await this.getProduct(item.productId);
+        const product = item.productId ? await this.getProduct(item.productId) : null;
         return { ...item, product: product || null };
       }));
       detailedOrders.push({ ...order, customer: customer || null, items: itemsWithProducts });
@@ -793,6 +793,7 @@ export class DatabaseStorage implements IStorage {
     const revenueByProduct: Record<number, number> = {};
     for (const item of relevantItems) {
       const pid = item.productId;
+      if (!pid) continue;
       revenueByProduct[pid] = (revenueByProduct[pid] || 0) + item.quantity * Number(item.price);
     }
 
