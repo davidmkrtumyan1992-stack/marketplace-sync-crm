@@ -1,0 +1,72 @@
+Прочитай CLAUDE.md для контекста.
+
+Исправь три проблемы которые вызывают расхождение данных между CRM и Ozon кабинетом.
+
+ИСПРАВЛЕНИЕ 1 — КРИТИЧНОЕ: Старые заказы получают created_at = NOW()
+
+В POST /api/marketplace/ozon/sync-orders найди строку:
+const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : undefined;
+
+Замени на:
+const ozonCreatedAt = posting.created_at 
+  ? new Date(posting.created_at)
+  : posting.in_process_at 
+    ? new Date(posting.in_process_at)
+    : posting.shipment_date
+      ? new Date(posting.shipment_date)
+      : null;
+
+if (!ozonCreatedAt) {
+  console.warn(`[ozon-sync] posting ${posting.posting_number} has no date — skipping createdAt`);
+}
+
+При создании заказа передавать createdAt: ozonCreatedAt ?? new Date()
+
+То же самое исправить для FBO sync и Яндекс sync.
+
+ИСПРАВЛЕНИЕ 2 — ВЫСОКОЕ: Заказы с неизвестным SKU молча пропускаются
+
+Найди место где storeSkippedNoSku++ и заказ отбрасывается.
+
+Вместо полного пропуска — создавать заказ БЕЗ привязки к товару:
+
+// Вместо: storeSkippedNoSku++; continue;
+// Сделать:
+console.warn(`[ozon-sync] SKU not found: ${prod.offer_id} — creating order without product link`);
+
+// Создать order_item без productId:
+await storage.createOrderItemWithoutProduct({
+  orderId: order.id,
+  sku: prod.offer_id,
+  productName: prod.name || prod.offer_id,
+  quantity: prod.quantity || 1,
+  price: String(parseFloat(prod.price || "0")),
+});
+storeSkippedNoSku++;
+// НЕ делать continue — заказ создаётся
+
+Добавь в таблицу order_items поля:
+- sku text (артикул если товар не найден)
+- product_name text (название из Ozon)
+Измени схему в shared/schema.ts и запусти npm run db:push.
+
+ИСПРАВЛЕНИЕ 3 — СРЕДНЕЕ: FBO использовать financial_data для точной цены
+
+В FBO sync найди:
+with: { analytics_data: false, financial_data: false }
+
+Замени на:
+with: { analytics_data: false, financial_data: true }
+
+И при парсинге цены для FBO добавь:
+const financialProduct = posting.financial_data?.products?.find(
+  fp => fp.product_id === prod.sku_id
+);
+const price = financialProduct?.price 
+  ? parseFloat(financialProduct.price)
+  : parseFloat(prod.price || "0");
+
+После всех исправлений запусти принудительную синхронизацию всех 5 магазинов
+и проверь количество заказов за сегодня 19.03.2026.
+
+Не трогать: логику Яндекс sync заказов, систему аутентификации.
