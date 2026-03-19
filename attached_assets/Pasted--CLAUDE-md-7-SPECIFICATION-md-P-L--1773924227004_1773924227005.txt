@@ -1,0 +1,111 @@
+Прочитай CLAUDE.md и раздел 7 "Известные баги" из SPECIFICATION.md.
+
+Исправить критический баг: P&L и дашборд считают стоимость склада вместо реальных продаж.
+
+ШАГ 1 — Добавить purchasePrice в order_items
+
+В shared/schema.ts в таблице orderItems добавить поле:
+purchasePrice: decimal("purchase_price", { precision: 10, scale: 2 })
+
+Запустить npm run db:push
+
+ШАГ 2 — При создании заказа сохранять purchasePrice
+
+В server/routes.ts и server/storage.ts найти все места где создаются order_items.
+При создании каждого item добавить:
+purchasePrice: product.purchasePrice || "0"
+
+Брать значение из таблицы products по productId.
+
+ШАГ 3 — Исправить функцию getSalesData в server/storage.ts
+
+Текущий баг (строки ~800-860): функция считает выручку из orders.totalAmount — это правильно.
+Но getDashboardKPI (~строка 659) считает expectedProfit из centralStock × price — это неправильно.
+
+Исправить getDashboardKPI — считать реальную прибыль за последние 30 дней из orderItems:
+
+const thirtyDaysAgo = new Date();
+thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+// Получить реальные продажи за 30 дней
+const recentOrders = await db.select().from(orders)
+  .where(and(
+    eq(orders.organizationId, organizationId),
+    gte(orders.createdAt, thirtyDaysAgo),
+    not(eq(orders.status, "cancelled"))
+  ));
+
+const recentOrderIds = recentOrders.map(o => o.id);
+let realProfit = 0;
+
+if (recentOrderIds.length > 0) {
+  const items = await db.select().from(orderItems)
+    .where(inArray(orderItems.orderId, recentOrderIds));
+  
+  for (const item of items) {
+    const revenue = Number(item.price) * item.quantity;
+    const cost = Number(item.purchasePrice || 0) * item.quantity;
+    const commission = revenue * (defaultCommission);
+    const tax = revenue * taxRate;
+    realProfit += revenue - cost - commission - tax;
+  }
+}
+
+В KPI показывать realProfit вместо expectedProfit.
+Лейбл изменить с "Прогноз чистой прибыли" на "Чистая прибыль (30 дней)".
+
+ШАГ 4 — Исправить эндпоинт GET /api/export/pnl
+
+Текущий баг (~строка 1742): считает totalRevenue = stockQuantity × sellingPrice
+
+Исправить — считать из реальных продаж за выбранный период:
+
+const { from, to } = req.query;
+const fromDate = from ? new Date(from as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+const toDate = to ? new Date(to as string) : new Date();
+
+// Реальные заказы за период
+const periodOrders = await db.select().from(orders)
+  .where(and(
+    eq(orders.organizationId, orgId),
+    gte(orders.createdAt, fromDate),
+    lte(orders.createdAt, toDate),
+    not(eq(orders.status, "cancelled"))
+  ));
+
+const periodOrderIds = periodOrders.map(o => o.id);
+let totalRevenue = 0;
+let totalCost = 0;
+
+if (periodOrderIds.length > 0) {
+  const items = await db.select({
+    price: orderItems.price,
+    quantity: orderItems.quantity,
+    purchasePrice: orderItems.purchasePrice,
+    productId: orderItems.productId,
+  })
+  .from(orderItems)
+  .where(inArray(orderItems.orderId, periodOrderIds));
+
+  for (const item of items) {
+    totalRevenue += Number(item.price) * item.quantity;
+    totalCost += Number(item.purchasePrice || 0) * item.quantity;
+  }
+}
+
+const totalExpenses = expensesList.reduce((s, e) => s + Number(e.amount), 0);
+const tax = totalRevenue * taxRate;
+const totalCommission = totalRevenue * defaultCommission;
+const profit = totalRevenue - totalCost - totalExpenses - tax - totalCommission;
+
+P&L таблица должна содержать строки:
+- Выручка (реальные продажи)
+- Себестоимость проданных товаров  
+- Комиссии маркетплейсов (расчётно)
+- Налог
+- Прочие расходы
+- Чистая прибыль
+
+После всех изменений обнови CLAUDE.md — перенеси "Исправить P&L" из багов в сделанное.
+
+Не трогать: логику sync заказов, SyncPriceDialog, product_marketplace_links.
