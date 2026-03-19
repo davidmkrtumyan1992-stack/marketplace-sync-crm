@@ -2365,6 +2365,7 @@ export async function registerRoutes(
       case "awaiting_packaging": return "pending";
       case "awaiting_deliver": return "pending";
       case "delivering": return "shipped";
+      case "sent_by_seller": return "shipped";
       case "delivered": return "completed";
       case "cancelled": return "cancelled";
       case "not_accepted": return "cancelled";
