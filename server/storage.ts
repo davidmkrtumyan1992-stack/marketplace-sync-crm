@@ -76,7 +76,7 @@ export interface IStorage {
   getOrder(id: number): Promise<OrderWithDetails | undefined>;
   getOrdersByCustomerId(customerId: number, organizationId: string): Promise<OrderWithDetails[]>;
   getOrderByPostingNumber(postingNumber: string, organizationId: string, storeId?: number | null): Promise<Order | undefined>;
-  createOrder(order: InsertOrder & { createdAt?: Date }, items: { productId: number; quantity: number; price: number }[]): Promise<Order>;
+  createOrder(order: InsertOrder & { createdAt?: Date }, items: { productId?: number | null; sku?: string; productName?: string; quantity: number; price: number; originalPrice?: number; salePrice?: number }[]): Promise<Order>;
   updateOrderStatus(id: number, status: string): Promise<Order>;
   updateOrderOzonStatus(id: number, ozonStatus: string, status?: string, createdAt?: Date): Promise<Order>;
   updateOrderYandexStatus(id: number, yandexStatus: string, status?: string, createdAt?: Date): Promise<Order>;
@@ -404,7 +404,7 @@ export class DatabaseStorage implements IStorage {
     return detailedOrders;
   }
 
-  async createOrder(orderData: InsertOrder & { createdAt?: Date }, itemsData: { productId: number; quantity: number; price: number; originalPrice?: number; salePrice?: number }[]): Promise<Order> {
+  async createOrder(orderData: InsertOrder & { createdAt?: Date }, itemsData: { productId?: number | null; sku?: string; productName?: string; quantity: number; price: number; originalPrice?: number; salePrice?: number }[]): Promise<Order> {
     return await db.transaction(async (tx) => {
       const [order] = await tx.insert(orders)
         .values(orderData as typeof orders.$inferInsert)
@@ -430,13 +430,20 @@ export class DatabaseStorage implements IStorage {
       }
       
       for (const item of itemsData) {
-        const [product] = await tx.select().from(products)
-          .where(eq(products.id, item.productId))
-          .for("update");
+        let product: typeof products.$inferSelect | undefined;
+
+        if (item.productId) {
+          const [p] = await tx.select().from(products)
+            .where(eq(products.id, item.productId))
+            .for("update");
+          product = p;
+        }
 
         await tx.insert(orderItems).values({
           orderId: order.id,
-          productId: item.productId,
+          productId: item.productId ?? null,
+          sku: item.sku ?? null,
+          productName: item.productName ?? null,
           quantity: item.quantity,
           price: item.price.toString(),
           originalPrice: item.originalPrice?.toString() || null,
@@ -444,10 +451,9 @@ export class DatabaseStorage implements IStorage {
           purchasePrice: product?.purchasePrice?.toString() || null,
         });
 
-        if (product) {
+        if (product && item.productId) {
           const newCentralStock = Math.max(0, (product.centralStock || 0) - item.quantity);
-          
-          await tx.update(products).set({ 
+          await tx.update(products).set({
             centralStock: newCentralStock,
             stockQuantity: newCentralStock,
             stockLocal: newCentralStock,

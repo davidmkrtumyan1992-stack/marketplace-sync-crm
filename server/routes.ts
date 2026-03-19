@@ -2581,7 +2581,19 @@ export async function registerRoutes(
           for (const posting of postings) {
             const postingNumber = posting.posting_number;
             const ozonStatus = posting.status;
-            const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : undefined;
+
+            // Fix 1: date fallback chain — never default to NOW() for old postings
+            const ozonCreatedAt = posting.created_at
+              ? new Date(posting.created_at)
+              : posting.in_process_at
+                ? new Date(posting.in_process_at)
+                : posting.shipment_date
+                  ? new Date(posting.shipment_date)
+                  : null;
+            if (!ozonCreatedAt) {
+              console.warn(`[ozon-sync] posting ${postingNumber} has no date fields — using current time as fallback`);
+            }
+
             const existingOrder = await storage.getOrderByPostingNumber(postingNumber, orgId, resolvedStoreId);
 
             if (existingOrder) {
@@ -2599,23 +2611,35 @@ export async function registerRoutes(
               continue;
             }
 
-            const items: { productId: number; quantity: number; price: number }[] = [];
+            // Fix 2 + 3: build items — create even when SKU not in DB; use financial_data for FBO price
+            const items: { productId?: number | null; sku?: string; productName?: string; quantity: number; price: number }[] = [];
             let totalAmount = 0;
 
             for (const prod of posting.products || []) {
               const sku = prod.offer_id || "";
+              if (!sku) continue;
+
               const qty = prod.quantity || 1;
-              const price = parseFloat(prod.price || "0");
 
-              if (sku) {
-                const [dbProduct] = await db.select().from(productsTable)
-                  .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+              // Fix 3: for FBO use financial_data price when available
+              const financialProduct = fulfillmentType === "FBO"
+                ? (posting.financial_data?.products || []).find((fp: any) => fp.product_id === prod.sku_id)
+                : null;
+              const price = financialProduct?.price
+                ? parseFloat(String(financialProduct.price))
+                : parseFloat(prod.price || "0");
 
-                if (dbProduct) {
-                  items.push({ productId: dbProduct.id, quantity: qty, price });
-                  totalAmount += price * qty;
-                }
+              const [dbProduct] = await db.select().from(productsTable)
+                .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+
+              if (dbProduct) {
+                items.push({ productId: dbProduct.id, quantity: qty, price });
+              } else {
+                // Fix 2: don't skip — create item with SKU/name text fields
+                console.warn(`[ozon-sync] SKU not found: ${sku} for posting ${postingNumber} — creating item without product link`);
+                items.push({ productId: null, sku, productName: prod.name || sku, quantity: qty, price });
               }
+              totalAmount += price * qty;
             }
 
             if (items.length > 0) {
@@ -2633,7 +2657,7 @@ export async function registerRoutes(
                 sourceStoreName: resolvedStoreName,
                 companyId: resolvedCompanyId,
                 organizationId: orgId,
-                createdAt: ozonCreatedAt || undefined,
+                createdAt: ozonCreatedAt ?? new Date(),
               }, items);
               created++;
               storeCreated++;
@@ -2661,7 +2685,7 @@ export async function registerRoutes(
         }
 
         const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
-          method: "POST", headers, body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 50, offset: 0, with: { analytics_data: false, financial_data: false } }),
+          method: "POST", headers, body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 50, offset: 0, with: { analytics_data: false, financial_data: true } }),
         });
         if (fboResponse.ok) {
           const fboData = await fboResponse.json();
@@ -3542,7 +3566,18 @@ export async function registerRoutes(
             try {
               const pn = posting.posting_number;
               const newStatus = posting.status;
-              const ozonCreatedAt = posting.created_at ? new Date(posting.created_at) : undefined;
+
+              // Fix 1: date fallback chain — never default to NOW() for old postings
+              const ozonCreatedAt = posting.created_at
+                ? new Date(posting.created_at)
+                : posting.in_process_at
+                  ? new Date(posting.in_process_at)
+                  : posting.shipment_date
+                    ? new Date(posting.shipment_date)
+                    : null;
+              if (!ozonCreatedAt) {
+                console.warn(`[ozon-auto-sync] posting ${pn} has no date fields — using current time as fallback`);
+              }
 
               if (existingPostingNumbers.has(pn)) {
                 const existing = allStoreOrders.find(o => o.postingNumber === pn);
@@ -3554,20 +3589,33 @@ export async function registerRoutes(
                   updated++;
                 }
               } else {
-                const items: { productId: number; quantity: number; price: number }[] = [];
+                // Fix 2 + 3: build items — create even when SKU not in DB; use financial_data for FBO price
+                const items: { productId?: number | null; sku?: string; productName?: string; quantity: number; price: number }[] = [];
                 let totalAmount = 0;
                 for (const prod of posting.products || []) {
                   const sku = prod.offer_id || "";
+                  if (!sku) continue;
+
                   const qty = prod.quantity || 1;
-                  const price = parseFloat(prod.price || "0");
-                  if (sku) {
-                    const [dbProduct] = await db.select().from(productsTable)
-                      .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
-                    if (dbProduct) {
-                      items.push({ productId: dbProduct.id, quantity: qty, price });
-                      totalAmount += price * qty;
-                    }
+
+                  // Fix 3: for FBO use financial_data price when available
+                  const financialProduct = fulfillmentType === "FBO"
+                    ? (posting.financial_data?.products || []).find((fp: any) => fp.product_id === prod.sku_id)
+                    : null;
+                  const price = financialProduct?.price
+                    ? parseFloat(String(financialProduct.price))
+                    : parseFloat(prod.price || "0");
+
+                  const [dbProduct] = await db.select().from(productsTable)
+                    .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+                  if (dbProduct) {
+                    items.push({ productId: dbProduct.id, quantity: qty, price });
+                  } else {
+                    // Fix 2: don't skip — create item with SKU/name text fields
+                    console.warn(`[ozon-auto-sync] SKU not found: ${sku} for posting ${pn} — creating item without product link`);
+                    items.push({ productId: null, sku, productName: prod.name || sku, quantity: qty, price });
                   }
+                  totalAmount += price * qty;
                 }
                 if (items.length > 0) {
                   const internalStatus = ozonStatusToInternal(newStatus);
@@ -3584,12 +3632,12 @@ export async function registerRoutes(
                     sourceStoreName: resolvedStoreName ?? undefined,
                     companyId: resolvedCompanyId ?? undefined,
                     organizationId: orgId,
-                    createdAt: ozonCreatedAt || undefined,
+                    createdAt: ozonCreatedAt ?? new Date(),
                   }, items);
                   existingPostingNumbers.add(pn);
                   created++;
                 } else {
-                  console.log(`[ozon-auto-sync] Skipped posting ${pn}: no matching SKUs in DB`);
+                  console.log(`[ozon-auto-sync] Skipped posting ${pn}: no products with offer_id`);
                 }
               }
             } catch (err: any) {
@@ -3609,7 +3657,7 @@ export async function registerRoutes(
 
         const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
           method: "POST", headers,
-          body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 1000, offset: 0, with: { analytics_data: false, financial_data: false } }),
+          body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 1000, offset: 0, with: { analytics_data: false, financial_data: true } }),
         });
         if (fboResponse.ok) {
           const fboData = await fboResponse.json();

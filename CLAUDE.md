@@ -103,6 +103,7 @@ npm run build        # production сборка
 ✓ SyncPriceDialog — диалог выбора магазинов после сохранения
 ✓ P&L по реальным продажам — из order_items, 30 дней, realProfit в KPI
 ✓ Исправлено дублирование заказов — UNIQUE constraint (posting_number, store_id) + onConflictDoNothing в createOrder
+✓ Исправлено расхождение данных CRM vs Ozon — три исправления (Task #7)
 📋 WB sync-orders — после подключения WB
 📋 Синхронизация цены Яндекс Маркет — планируется
 
@@ -112,3 +113,6 @@ npm run build        # production сборка
 | ~~P&L считал склад вместо продаж~~ | server/routes.ts | Высокий | ✅ Исправлен (Task #5) |
 | ~~getDashboardKPI считал склад~~ | server/storage.ts | Высокий | ✅ Исправлен (Task #5) |
 | ~~Дублирование заказов при race condition~~ | server/storage.ts, shared/schema.ts | Критический | ✅ Исправлен (Task #6) |
+| ~~Старые заказы получают created_at=NOW()~~ | server/routes.ts | Критический | ✅ Исправлен (Task #7) |
+| ~~Заказы с неизвестным SKU молча пропускались~~ | server/routes.ts, shared/schema.ts | Высокий | ✅ Исправлен (Task #7) |
+| ~~FBO заказы используют каталожную цену вместо фактической~~ | server/routes.ts | Средний | ✅ Исправлен (Task #7) |
