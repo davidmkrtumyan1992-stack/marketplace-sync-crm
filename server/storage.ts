@@ -871,7 +871,9 @@ export class DatabaseStorage implements IStorage {
       if (!o.createdAt) return false;
       const createdDateStr = new Date(o.createdAt).toISOString().split("T")[0];
       if (createdDateStr < fromDateStr || createdDateStr > toDateStr) return false;
-      if (o.status === "cancelled" || o.ozonStatus === "cancelled") return false;
+      const isOzonCancelled = o.ozonStatus === "cancelled";
+      const isInternalCancelledWithNoActiveOzon = o.status === "cancelled" && (!o.ozonStatus || o.ozonStatus === "cancelled");
+      if (isOzonCancelled || isInternalCancelledWithNoActiveOzon) return false;
       if (o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED") return false;
       if (options.storeId && o.storeId !== options.storeId) return false;
       return true;

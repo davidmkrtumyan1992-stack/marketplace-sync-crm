@@ -2599,9 +2599,10 @@ export async function registerRoutes(
             if (existingOrder) {
               const internalStatus = ozonStatusToInternal(ozonStatus);
               const needsStatusUpdate = existingOrder.ozonStatus !== ozonStatus;
+              const needsStatusCorrection = existingOrder.status === 'cancelled' && internalStatus !== 'cancelled';
               const needsDateUpdate = ozonCreatedAt && existingOrder.createdAt &&
                 Math.abs(new Date(existingOrder.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
-              if (needsStatusUpdate || needsDateUpdate) {
+              if (needsStatusUpdate || needsDateUpdate || needsStatusCorrection) {
                 await storage.updateOrderOzonStatus(existingOrder.id, ozonStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
                 updated++;
                 storeUpdated++;
@@ -3212,10 +3213,11 @@ export async function registerRoutes(
           const internalStatus = ozonStatusToInternal(newOzonStatus);
 
           const needsStatusUpdate = order.ozonStatus !== newOzonStatus;
+          const needsStatusCorrection = order.status === 'cancelled' && internalStatus !== 'cancelled';
           const needsDateUpdate = ozonCreatedAt && order.createdAt &&
             Math.abs(new Date(order.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
 
-          if (needsStatusUpdate || needsDateUpdate) {
+          if (needsStatusUpdate || needsDateUpdate || needsStatusCorrection) {
             await storage.updateOrderOzonStatus(
               order.id,
               newOzonStatus,
@@ -3581,12 +3583,15 @@ export async function registerRoutes(
 
               if (existingPostingNumbers.has(pn)) {
                 const existing = allStoreOrders.find(o => o.postingNumber === pn);
-                if (existing && existing.ozonStatus !== newStatus) {
+                if (existing) {
                   const internalStatus = ozonStatusToInternal(newStatus);
+                  const needsStatusCorrection = existing.status === 'cancelled' && internalStatus !== 'cancelled';
                   const needsDateUpdate = ozonCreatedAt && existing.createdAt &&
                     Math.abs(new Date(existing.createdAt).getTime() - ozonCreatedAt.getTime()) > 60000;
-                  await storage.updateOrderOzonStatus(existing.id, newStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
-                  updated++;
+                  if (existing.ozonStatus !== newStatus || needsStatusCorrection || needsDateUpdate) {
+                    await storage.updateOrderOzonStatus(existing.id, newStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
+                    updated++;
+                  }
                 }
               } else {
                 // Fix 2 + 3: build items — create even when SKU not in DB; use financial_data for FBO price
