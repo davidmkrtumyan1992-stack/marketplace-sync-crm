@@ -536,7 +536,7 @@ export async function registerRoutes(
             let data: any;
             try { data = JSON.parse(responseText); } catch { data = null; }
             const item = data?.result?.[0];
-            if (item?.updated === true && (!item.errors || item.errors.length === 0)) {
+            if (item?.updated === true) {
               success = true;
             } else {
               const ozonError = item?.errors?.[0]?.message || data?.message || "Ozon вернул ошибку";
