@@ -1,5 +1,5 @@
 import { pgTable, text, serial, integer, boolean, timestamp, jsonb, decimal, uniqueIndex } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { users } from "./models/auth";
@@ -112,7 +112,11 @@ export const orders = pgTable("orders", {
   sourceStoreName: text("source_store_name"),
   organizationId: text("organization_id").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => ({
+  uniqPostingStore: uniqueIndex("orders_posting_store_unique")
+    .on(table.postingNumber, table.storeId)
+    .where(sql`posting_number IS NOT NULL`),
+}));
 
 export const orderItems = pgTable("order_items", {
   id: serial("id").primaryKey(),
