@@ -102,5 +102,13 @@ npm run build        # production сборка
 ✓ POST /api/admin/migrate-product-links — миграция ozonId
 ✓ SyncPriceDialog — диалог выбора магазинов после сохранения
 ✓ P&L по реальным продажам — из order_items, 30 дней, realProfit в KPI
+✓ Исправлено дублирование заказов — UNIQUE constraint (posting_number, store_id) + onConflictDoNothing в createOrder
 📋 WB sync-orders — после подключения WB
 📋 Синхронизация цены Яндекс Маркет — планируется
+
+## Известные баги
+| Баг | Файл | Приоритет | Статус |
+|---|---|---|---|
+| ~~P&L считал склад вместо продаж~~ | server/routes.ts | Высокий | ✅ Исправлен (Task #5) |
+| ~~getDashboardKPI считал склад~~ | server/storage.ts | Высокий | ✅ Исправлен (Task #5) |
+| ~~Дублирование заказов при race condition~~ | server/storage.ts, shared/schema.ts | Критический | ✅ Исправлен (Task #6) |
