@@ -418,7 +418,8 @@ export class DatabaseStorage implements IStorage {
         const [existing] = await tx.select().from(orders).where(
           and(
             eq(orders.postingNumber, orderData.postingNumber),
-            eq(orders.storeId, orderData.storeId)
+            eq(orders.storeId, orderData.storeId),
+            eq(orders.organizationId, orderData.organizationId)
           )
         );
         if (!existing) {
