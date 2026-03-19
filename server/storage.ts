@@ -407,16 +407,24 @@ export class DatabaseStorage implements IStorage {
   async createOrder(orderData: InsertOrder & { createdAt?: Date }, itemsData: { productId: number; quantity: number; price: number; originalPrice?: number; salePrice?: number }[]): Promise<Order> {
     return await db.transaction(async (tx) => {
       const [order] = await tx.insert(orders)
-        .values(orderData as any)
+        .values(orderData as typeof orders.$inferInsert)
         .onConflictDoNothing()
         .returning();
 
       if (!order) {
-        const conditions = [eq(orders.organizationId, orderData.organizationId)];
-        if (orderData.postingNumber) conditions.push(eq(orders.postingNumber, orderData.postingNumber));
-        if (orderData.storeId) conditions.push(eq(orders.storeId, orderData.storeId));
-        const [existing] = await tx.select().from(orders).where(and(...conditions));
-        console.log(`[createOrder] Conflict on posting ${orderData.postingNumber} storeId ${orderData.storeId} — returning existing order #${existing?.id}`);
+        if (!orderData.postingNumber || !orderData.storeId) {
+          throw new Error(`[createOrder] Unexpected conflict on order without postingNumber or storeId`);
+        }
+        const [existing] = await tx.select().from(orders).where(
+          and(
+            eq(orders.postingNumber, orderData.postingNumber),
+            eq(orders.storeId, orderData.storeId)
+          )
+        );
+        if (!existing) {
+          throw new Error(`[createOrder] Conflict on posting ${orderData.postingNumber} storeId ${orderData.storeId} but no existing row found`);
+        }
+        console.log(`[createOrder] Conflict on posting ${orderData.postingNumber} storeId ${orderData.storeId} — returning existing order #${existing.id}`);
         return existing;
       }
       
