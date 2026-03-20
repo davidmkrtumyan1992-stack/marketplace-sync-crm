@@ -12,5 +12,6 @@ export function useKPI() {
     },
     staleTime: 0,
     refetchOnMount: "always",
+    refetchInterval: 300000,
   });
 }

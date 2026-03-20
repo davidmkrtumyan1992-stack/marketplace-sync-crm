@@ -57,6 +57,7 @@ export default function Dashboard() {
 
   const { data: lowStockProducts } = useQuery<LowStockProduct[]>({
     queryKey: ["/api/analytics/low-stock"],
+    refetchInterval: 300000,
   });
 
   const { data: storesList } = useQuery<any[]>({
@@ -65,7 +66,7 @@ export default function Dashboard() {
 
   const { data: syncStatus } = useQuery<SyncStatusSummary>({
     queryKey: ["/api/inventory-sync/status"],
-    refetchInterval: 60000,
+    refetchInterval: 300000,
   });
 
   const today = useMemo(() => new Date(), []);
@@ -115,6 +116,7 @@ export default function Dashboard() {
       return res.json();
     },
     staleTime: 0,
+    refetchInterval: 300000,
   });
 
   const chartData = useMemo(() => {
