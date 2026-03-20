@@ -1,0 +1,69 @@
+Прочитай CLAUDE.md для контекста.
+
+В БД есть все 14 заказов Texnicol (совпадает с Ozon API), 
+но дашборд показывает 13 штук и меньшую сумму.
+Нужно найти где данные отсеиваются.
+
+ШАГ 1 — Проверка данных в БД (Texnicol за сегодня):
+
+SELECT 
+  o.order_number, 
+  o.total_amount, 
+  o.status, 
+  o.ozon_status,
+  o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow' as msk_time,
+  SUM(oi.quantity) as items_qty
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+LEFT JOIN order_items oi ON o.id = oi.order_id
+WHERE s.client_id = '2496152'
+AND DATE(o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') = '2026-03-20'
+GROUP BY o.order_number, o.total_amount, o.status, o.ozon_status, o.created_at
+ORDER BY o.created_at DESC;
+
+ШАГ 2 — Анализ логики подсчёта на бэкенде:
+
+Найди в server/storage.ts метод getSalesData.
+Найди также эндпоинт /api/analytics/sales в server/routes.ts.
+
+Покажи:
+1. Точный WHERE фильтр который считает KPI для дашборда
+2. Не отсекаются ли заказы созданные после 21:00 МСК 
+   (когда наступает новый день в UTC)?
+3. Как именно фильтруются отменённые заказы?
+4. Что именно считается — количество заказов или SUM(quantity)?
+
+ШАГ 3 — Анализ фронтенда Dashboard.tsx:
+
+Найди код который рендерит карточки KPI и графики продаж.
+Покажи:
+1. Код агрегации — использует ли orders.total_amount 
+   или SUM(order_items.price * quantity)?
+2. Есть ли в коде фронтенда ручная фильтрация типа 
+   .filter(o => o.status !== 'cancelled') или похожая?
+3. Как считается "количество штук" — это orders.count 
+   или SUM(order_items.quantity)?
+
+ШАГ 4 — Главная гипотеза (Штуки vs Заказы):
+
+Личный кабинет Ozon показывает ШТУКИ ТОВАРОВ (SUM quantity).
+Если в одном заказе 2 товара — Ozon считает 2, а мы можем считать 1.
+
+Проверь эту гипотезу:
+Возьми заказы Texnicol за сегодня из ШАГ 1.
+Есть ли среди них заказ где items_qty > 1?
+Если да — это и есть причина расхождения.
+
+ШАГ 5 — Исправление:
+
+После выявления причины исправить код дашборда так чтобы:
+1. Количество отображалось как SUM(order_items.quantity) 
+   — штуки товаров, а не количество заказов
+2. Выручка считалась как SUM(order_items.price * quantity)
+   для всех не отменённых заказов
+3. Фильтр отменённых: исключать только если 
+   status='cancelled' И ozon_status='cancelled'
+   (не исключать если ozon_status активный)
+
+Цель: дашборд должен показывать ровно те же цифры 
+что и личный кабинет Ozon — штуки товаров и сумму продаж.
