@@ -919,10 +919,6 @@ export class DatabaseStorage implements IStorage {
         orderRevenue += Number(item.price || 0) * item.quantity;
         orderQty += item.quantity;
       }
-      if (items.length === 0) {
-        orderRevenue = Number(order.totalAmount || 0);
-        orderQty = 1;
-      }
       dataByDateCompany[key].revenue += orderRevenue;
       totalItemsQty += orderQty;
 
