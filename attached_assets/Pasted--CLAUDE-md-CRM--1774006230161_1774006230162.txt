@@ -1,0 +1,72 @@
+Прочитай CLAUDE.md для контекста.
+
+Критическая диагностика: почему CRM теряет заказы по сравнению с Ozon кабинетом.
+
+Эталонные данные из Ozon кабинета:
+- Alo (3364383): 19.03 → 87шт/87140₽ | 20.03 → 2шт/3168₽
+- Agapa (3835567): 19.03 → 11шт/3911₽ | 20.03 → 2шт/534₽
+- Sunshine (2311038): 19.03 → 9шт/47849₽ | 20.03 → 4шт/16652₽ ← ЭТАЛОН (совпадает)
+- Texnicol (2496152): 19.03 → 7шт/1330₽ | 20.03 → 7шт/1330₽
+- Сакура (4052691): 19.03 → 12шт/43898₽ | 20.03 → 4шт/30200₽
+
+ШАГ 1 — Что есть в CRM сейчас:
+SELECT 
+  s.name, s.client_id,
+  DATE(o.created_at) as date,
+  COUNT(DISTINCT o.id) as orders,
+  SUM(oi.quantity) as qty,
+  ROUND(SUM(oi.price * oi.quantity)::numeric, 0) as total
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+LEFT JOIN order_items oi ON o.id = oi.order_id
+WHERE s.client_id IN ('3364383','3835567','2311038','2496152','4052691')
+AND DATE(o.created_at) IN ('2026-03-19','2026-03-20')
+AND o.status != 'cancelled'
+AND (o.ozon_status IS NULL OR o.ozon_status != 'cancelled')
+GROUP BY s.name, s.client_id, DATE(o.created_at)
+ORDER BY s.client_id, date;
+
+ШАГ 2 — Ключевой вопрос: что отличает Sunshine от остальных?
+SELECT 
+  s.name, s.client_id,
+  COUNT(DISTINCT o.fulfillment_type) as fulfillment_types,
+  STRING_AGG(DISTINCT o.fulfillment_type, ', ') as types
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+WHERE s.client_id IN ('3364383','3835567','2311038','2496152','4052691')
+GROUP BY s.name, s.client_id;
+
+ШАГ 3 — Проверь какие статусы FBO запрашиваются в sync-orders:
+Найди в server/routes.ts в POST /api/marketplace/ozon/sync-orders
+блок где делается запрос FBO постингов к Ozon API.
+Покажи ТОЧНЫЙ массив статусов в filter.status для FBO запроса.
+
+Также найди в autoSyncOzonStatuses (фоновый воркер)
+массив FBO статусов которые отслеживаются.
+
+ШАГ 4 — Сравни с FBS статусами:
+Покажи такой же массив статусов для FBS запроса.
+
+ШАГ 5 — Проверь Ozon API документацию в коде:
+Найди все места где упоминается статус "awaiting_packaging" для FBO.
+FBO заказы в статусе awaiting_packaging — они вообще запрашиваются?
+
+ШАГ 6 — Проверь реальный запрос к Ozon FBO API:
+Сделай прямой запрос к Ozon для магазина Alo Cosmetics (3364383):
+POST https://api-seller.ozon.ru/v2/posting/fbo/list
+{
+  "dir": "desc",
+  "filter": {
+    "since": "2026-03-19T00:00:00Z",
+    "to": "2026-03-20T23:59:59Z",
+    "status": ""
+  },
+  "limit": 100,
+  "offset": 0,
+  "with": {
+    "financial_data": true,
+    "analytics_data": true
+  }
+}
+Покажи сколько постингов вернул Ozon и их статусы.
+Сравни с тем что есть в нашей БД.

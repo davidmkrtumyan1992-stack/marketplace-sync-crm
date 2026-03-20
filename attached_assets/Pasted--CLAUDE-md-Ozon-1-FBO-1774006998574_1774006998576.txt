@@ -1,0 +1,68 @@
+Прочитай CLAUDE.md для контекста.
+
+Исправить два бага в синхронизации заказов Ozon.
+
+БАГ 1 — FBO limit: 50 → 1000 при ручной синхронизации.
+В server/routes.ts найди POST /api/marketplace/ozon/sync-orders.
+В блоке FBO запроса замени limit: 50 на limit: 1000.
+Это критично для крупных магазинов (Alo 85+ заказов).
+
+БАГ 2 — Смещение временной зоны (UTC vs МСК).
+Ozon кабинет считает сутки по Москве (UTC+3).
+Чтобы данные совпадали один в один:
+
+since для даты X = X-1 день 21:00:00 UTC (= 00:00:00 МСК текущего дня)
+to для даты X = X день 21:00:00 UTC (= 00:00:00 МСК следующего дня)
+
+Применить в ТРЁХ местах:
+1. POST /api/marketplace/ozon/sync-orders — FBO since/to
+2. POST /api/marketplace/ozon/sync-orders — FBS since/to
+3. autoSyncOzonStatuses (фоновый воркер) — since/to для FBO и FBS
+
+Пример правильного кода:
+// Для запроса заказов за московский день D:
+const since = new Date(targetDate);
+since.setUTCHours(21, 0, 0, 0);
+since.setUTCDate(since.getUTCDate() - 1); // предыдущий день 21:00 UTC
+
+const to = new Date(targetDate);
+to.setUTCHours(21, 0, 0, 0); // текущий день 21:00 UTC
+
+Важно перед синхронизацией:
+Удали существующие заказы за 18, 19 и 20 марта для этих магазинов
+чтобы избежать дублей из-за сдвига часовых поясов:
+
+DELETE FROM orders
+WHERE store_id IN (
+  SELECT id FROM stores 
+  WHERE client_id IN ('3364383','3835567','2311038','2496152','4052691')
+)
+AND DATE(created_at) IN ('2026-03-18','2026-03-19','2026-03-20');
+
+После удаления запусти синхронизацию для всех 5 магазинов за период 18-20 марта.
+
+Затем выполни SQL и сравни с эталоном:
+
+SELECT 
+  s.name, s.client_id,
+  DATE(o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') as date_msk,
+  COUNT(DISTINCT o.id) as orders,
+  SUM(oi.quantity) as qty,
+  ROUND(SUM(oi.price * oi.quantity)::numeric, 0) as total
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+LEFT JOIN order_items oi ON o.id = oi.order_id
+WHERE s.client_id IN ('3364383','3835567','2311038','2496152','4052691')
+AND DATE(o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') 
+    IN ('2026-03-19','2026-03-20')
+AND o.status != 'cancelled'
+AND (o.ozon_status IS NULL OR o.ozon_status != 'cancelled')
+GROUP BY s.name, s.client_id, date_msk
+ORDER BY s.client_id, date_msk;
+
+Эталон:
+- Alo (3364383): 19.03→87140₽ | 20.03→3168₽
+- Agapa (3835567): 19.03→3911₽ | 20.03→534₽
+- Sunshine (2311038): 19.03→47849₽ | 20.03→16652₽
+- Texnicol (2496152): 19.03→1330₽ | 20.03→1330₽
+- Сакура (4052691): 19.03→43898₽ | 20.03→30200₽
