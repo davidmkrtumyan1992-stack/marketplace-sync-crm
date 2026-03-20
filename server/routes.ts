@@ -3239,6 +3239,7 @@ export async function registerRoutes(
           const LIMIT = 1000;
           const MAX_PAGES = 10;
           let fbsOffset = 0;
+          let fbsTotal = 0;
           for (let page = 0; page < MAX_PAGES; page++) {
             const fbsResponse = await fetchWithRetry(`${BASE}/v3/posting/fbs/list`, {
               method: "POST", headers, body: JSON.stringify({ ...body, limit: LIMIT, offset: fbsOffset }),
@@ -3247,7 +3248,8 @@ export async function registerRoutes(
             const fbsData = await fbsResponse.json();
             const pagePostings: any[] = fbsData?.result?.postings || [];
             for (const p of pagePostings) allPostings.set(p.posting_number, p);
-            console.log(`[ozon-resync] Store ${ozonSetting.clientId} FBS page ${page + 1}: ${pagePostings.length} postings`);
+            fbsTotal += pagePostings.length;
+            console.log(`[ozon-resync] Store ${ozonSetting.clientId} FBS page ${page + 1}: ${pagePostings.length} postings (итого: ${fbsTotal})`);
             if (pagePostings.length < LIMIT) break;
             if (page === MAX_PAGES - 1) console.warn(`[ozon-resync] Достигнут лимит пагинации (10 страниц) для магазина: ${ozonSetting.clientId}`);
             fbsOffset += LIMIT;
@@ -3258,6 +3260,7 @@ export async function registerRoutes(
           const LIMIT = 1000;
           const MAX_PAGES = 10;
           let fboOffset = 0;
+          let fboTotal = 0;
           for (let page = 0; page < MAX_PAGES; page++) {
             const fboResponse = await fetchWithRetry(`${BASE}/v2/posting/fbo/list`, {
               method: "POST", headers,
@@ -3267,7 +3270,8 @@ export async function registerRoutes(
             const fboData = await fboResponse.json();
             const pagePostings: any[] = fboData?.result || [];
             for (const p of pagePostings) allPostings.set(p.posting_number, p);
-            console.log(`[ozon-resync] Store ${ozonSetting.clientId} FBO page ${page + 1}: ${pagePostings.length} postings`);
+            fboTotal += pagePostings.length;
+            console.log(`[ozon-resync] Store ${ozonSetting.clientId} FBO page ${page + 1}: ${pagePostings.length} postings (итого: ${fboTotal})`);
             if (pagePostings.length < LIMIT) break;
             if (page === MAX_PAGES - 1) console.warn(`[ozon-resync] Достигнут лимит пагинации (10 страниц) для магазина: ${ozonSetting.clientId}`);
             fboOffset += LIMIT;
