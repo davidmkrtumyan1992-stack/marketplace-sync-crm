@@ -104,6 +104,10 @@ npm run build        # production сборка
 ✓ P&L по реальным продажам — из order_items, 30 дней, realProfit в KPI
 ✓ Исправлено дублирование заказов — UNIQUE constraint (posting_number, store_id) + onConflictDoNothing в createOrder
 ✓ Исправлено расхождение данных CRM vs Ozon — три исправления (Task #7)
+✓ Исправлен критический баг FBO limit (50 → 1000) в sync-orders
+✓ Исправлено смещение часовых поясов UTC vs МСК: синхронизация теперь строго с 00:00 МСК (21:00 UTC предыдущего дня)
+✓ Данные в CRM приведены в полное соответствие с личным кабинетом Ozon (проверено на 5 магазинах)
+✓ Внедрено автообновление Dashboard каждые 5 минут (refetchInterval: 300000)
 📋 WB sync-orders — после подключения WB
 📋 Синхронизация цены Яндекс Маркет — планируется
 

@@ -25,6 +25,8 @@ Key capabilities include:
 - Custom tax rate: three options in Settings — УСН 6%, УСН 15%, "Своя ставка" (custom rate 0-100%). taxRate field in DB stores effective rate.
 - Excel export functionality for products and P&L reports. P&L export (`/api/export/pnl`) uses real sales from `order_items` for the selected period (default 30 days, supports `from`/`to` query params). Formula: revenue − cost − commission − logistics − expenses − tax = net profit.
 - Real profit KPI on dashboard: «Чистая прибыль (30 дней)» card shows actual 30-day net profit from order_items (non-cancelled orders). `order_items` table now stores `purchase_price` at time of sale. DashboardKPI type: `realProfit` field (replaces old `expectedProfit` stock-based estimate).
+- Ozon order sync timezone accuracy: Fixed critical bug where FBO limit was 50 (now 1000) and UTC/MSK timezone mismatch caused orders from 00:00–03:00 MSK to be incorrectly filtered. All sync requests now align to Moscow midnight: `since = previous day 21:00 UTC = 00:00 MSK`, ensuring orders are captured accurately across all 5 Ozon stores.
+- Dashboard automatic refresh: All dashboard queries (`/api/kpi`, `/api/analytics/sales`, `/api/analytics/low-stock`, `/api/inventory-sync/status`) now auto-refresh every 5 minutes (`refetchInterval: 300000`) for real-time KPI and sales data.
 The UI is fully localized in Russian.
 
 ## User Preferences
