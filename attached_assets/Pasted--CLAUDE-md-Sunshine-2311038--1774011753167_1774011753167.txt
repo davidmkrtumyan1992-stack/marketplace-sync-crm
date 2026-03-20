@@ -1,0 +1,64 @@
+Прочитай CLAUDE.md для контекста.
+
+Нужно понять почему магазин Sunshine (2311038) синхронизируется точно,
+а остальные 4 магазина теряют заказы.
+
+ШАГ 1 — Сравни технические параметры магазинов:
+SELECT 
+  s.id, s.name, s.client_id, s.marketplace,
+  s.last_sync,
+  ms.warehouse_id,
+  (SELECT COUNT(*) FROM orders o WHERE o.store_id = s.id 
+   AND DATE(o.created_at) = '2026-03-20') as orders_today
+FROM stores s
+LEFT JOIN marketplace_settings ms ON ms.store_id = s.id
+WHERE s.client_id IN ('3364383','3835567','2311038','2496152','4052691')
+ORDER BY s.client_id;
+
+ШАГ 2 — Проверь FBO vs FBS для каждого магазина за 20 марта:
+SELECT 
+  s.name, s.client_id,
+  o.fulfillment_type,
+  COUNT(*) as cnt,
+  SUM(oi.quantity) as qty,
+  ROUND(SUM(o.total_amount)::numeric, 0) as total
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+LEFT JOIN order_items oi ON o.id = oi.order_id
+WHERE s.client_id IN ('3364383','3835567','2311038','2496152','4052691')
+AND DATE(o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') = '2026-03-20'
+AND o.status != 'cancelled'
+AND (o.ozon_status IS NULL OR o.ozon_status != 'cancelled')
+GROUP BY s.name, s.client_id, o.fulfillment_type
+ORDER BY s.client_id;
+
+ШАГ 3 — Ключевой вопрос: посмотри в коде autoSyncOzonStatuses
+в server/routes.ts.
+Какие магазины и как отбираются для автосинка?
+Есть ли какой-то фильтр который может исключать некоторые магазины?
+Покажи точный код который определяет список магазинов для синка.
+
+ШАГ 4 — Проверь время последнего синка для каждого магазина:
+SELECT 
+  s.name, s.client_id, s.last_sync,
+  NOW() - s.last_sync as time_since_sync
+FROM stores s
+WHERE s.client_id IN ('3364383','3835567','2311038','2496152','4052691')
+ORDER BY s.last_sync DESC;
+
+ШАГ 5 — Сделай прямой API запрос к Ozon для магазина Texnicol (2496152)
+за сегодня 20 марта (MSK):
+POST https://api-seller.ozon.ru/v2/posting/fbo/list
+{
+  "dir": "desc",
+  "filter": {
+    "since": "2026-03-19T21:00:00Z",
+    "to": "2026-03-20T21:00:00Z",
+    "status": ""
+  },
+  "limit": 1000,
+  "offset": 0,
+  "with": { "financial_data": true }
+}
+Покажи сколько постингов вернул Ozon и их статусы.
+Сравни с тем что есть в нашей БД для этого магазина.
