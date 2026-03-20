@@ -1,0 +1,125 @@
+Прочитай CLAUDE.md для контекста.
+
+На дашборде стабильно не хватает по 1 заказу у 4 магазинов после синхронизации.
+Sunshine совпадает точно. Нужно найти причину и исправить.
+
+ШАГ 1 — Технические улучшения стабильности синхронизации:
+
+В server/routes.ts:
+
+1. Создай вспомогательную функцию fetchWithRetry в начале файла:
+
+async function fetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url, options);
+      if ((res.status === 429 || res.status === 502 || res.status === 504) && i < retries - 1) {
+        console.log(`[fetchWithRetry] Ozon вернул ${res.status}, попытка ${i + 1}/${retries}, жду 3 сек...`);
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+      return res;
+    } catch (e: any) {
+      console.log(`[fetchWithRetry] Ошибка сети: ${e.message}, попытка ${i + 1}/${retries}`);
+      if (i < retries - 1) await new Promise(r => setTimeout(r, 3000));
+      else throw e;
+    }
+  }
+  throw new Error('fetchWithRetry: все попытки исчерпаны');
+}
+
+2. Добавь пагинацию для FBO и FBS запросов:
+   Если первый запрос вернул 1000 постингов (максимум) —
+   делать следующий запрос с offset: 1000, потом offset: 2000 и т.д.
+   Пока количество возвращённых постингов < limit.
+
+   ВАЖНО — предохранитель: максимум 10 итераций пагинации
+   на один магазин чтобы избежать бесконечного цикла при баге Ozon API.
+   Если достигнут лимит 10 итераций — залогировать:
+   console.warn('[sync] Достигнут лимит пагинации (10 страниц) для магазина:', storeName)
+
+   ВАЖНО — структуры ответа:
+   - FBO: ответ в поле result.postings[]
+   - FBS: ответ в поле result.postings[] (но другие поля внутри)
+   Убедись что пагинация работает корректно для обоих типов
+   и правильно считает количество возвращённых записей.
+
+3. Замени все обычные fetch к api-seller.ozon.ru на fetchWithRetry
+   во всём файле routes.ts (sync-orders, auto-sync, и другие места).
+
+ШАГ 2 — Найти недостающий заказ:
+
+Выполни SQL для всех магазинов за сегодня 20.03.2026:
+
+SELECT 
+  s.name, s.client_id,
+  o.order_number, o.total_amount,
+  o.status, o.ozon_status, o.fulfillment_type,
+  o.created_at,
+  SUM(oi.quantity) as qty
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+LEFT JOIN order_items oi ON o.id = oi.order_id
+WHERE s.client_id IN ('3364383','3835567','2496152','4052691')
+AND DATE(o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') = '2026-03-20'
+AND o.status != 'cancelled'
+AND (o.ozon_status IS NULL OR o.ozon_status != 'cancelled')
+GROUP BY s.name, s.client_id, o.order_number,
+  o.total_amount, o.status, o.ozon_status,
+  o.fulfillment_type, o.created_at
+ORDER BY s.client_id, o.created_at DESC;
+
+Затем сделай прямой API запрос к Ozon для Texnicol (2496152):
+POST https://api-seller.ozon.ru/v2/posting/fbo/list
+{
+  "dir": "desc",
+  "filter": {
+    "since": "2026-03-19T21:00:00Z",
+    "to": "2026-03-20T21:00:00Z",
+    "status": ""
+  },
+  "limit": 1000,
+  "offset": 0,
+  "with": { "financial_data": true }
+}
+
+Сравни posting_number из API со списком из БД.
+Найди недостающий заказ которого нет в CRM.
+Почему он не попал? (статус, SKU не найден, ошибка парсинга?)
+
+При сравнении дополнительно проверь:
+- Не попал ли недостающий заказ в соседнюю дату из-за границы
+  часового пояса (например created_at = 2026-03-19 20:59:XX UTC
+  = 2026-03-19 23:59 МСК — это ещё 19 марта МСК, не 20-е)
+- Проверь заказы за 19.03 МСК для этих магазинов —
+  возможно недостающий заказ там
+
+SELECT order_number, total_amount, created_at,
+  created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow' as msk_time
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+WHERE s.client_id = '2496152'
+AND created_at >= '2026-03-19 18:00:00'
+AND created_at <= '2026-03-20 21:00:00'
+ORDER BY created_at DESC;
+
+ШАГ 3 — Проверь логику дашборда:
+
+Найди в client/src/pages/Dashboard.tsx как считается
+выручка и количество штук для графика по магазинам.
+Покажи точный код агрегации.
+Использует ли он orders.total_amount или
+SUM(order_items.price * order_items.quantity)?
+Если дашборд использует orders.total_amount но total_amount
+не совпадает с суммой order_items — исправить на
+SUM(order_items.price * order_items.quantity).
+
+ШАГ 4 — После исправлений:
+
+Перезапусти сервер.
+Принудительно синхронизируй данные за 20.03 для всех магазинов.
+Подтверди что:
+- Texnicol показывает 13 шт / 2470 руб
+- Сакура показывает 4 шт / 30200 руб
+- Agapa показывает 3 шт / 793 руб
+- Alo Cosmetics показывает 3 шт / 4768 руб
