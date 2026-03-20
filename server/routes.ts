@@ -2550,6 +2550,8 @@ export async function registerRoutes(
       const BASE = "https://api-seller.ozon.ru";
       const since = new Date();
       since.setDate(since.getDate() - 30);
+      since.setUTCHours(21, 0, 0, 0);
+      since.setUTCDate(since.getUTCDate() - 1);
 
       let created = 0;
       let updated = 0;
@@ -2687,7 +2689,7 @@ export async function registerRoutes(
         }
 
         const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
-          method: "POST", headers, body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 50, offset: 0, with: { analytics_data: false, financial_data: true } }),
+          method: "POST", headers, body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 1000, offset: 0, with: { analytics_data: false, financial_data: true } }),
         });
         if (fboResponse.ok) {
           const fboData = await fboResponse.json();
@@ -3554,6 +3556,8 @@ export async function registerRoutes(
 
         const since = new Date();
         since.setDate(since.getDate() - 30);
+        since.setUTCHours(21, 0, 0, 0);
+        since.setUTCDate(since.getUTCDate() - 1);
         const body = {
           dir: "ASC",
           filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" },
