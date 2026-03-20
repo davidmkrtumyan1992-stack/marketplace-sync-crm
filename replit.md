@@ -27,6 +27,7 @@ Key capabilities include:
 - Real profit KPI on dashboard: «Чистая прибыль (30 дней)» card shows actual 30-day net profit from order_items (non-cancelled orders). `order_items` table now stores `purchase_price` at time of sale. DashboardKPI type: `realProfit` field (replaces old `expectedProfit` stock-based estimate).
 - Ozon order sync timezone accuracy: Fixed critical bug where FBO limit was 50 (now 1000) and UTC/MSK timezone mismatch caused orders from 00:00–03:00 MSK to be incorrectly filtered. All sync requests now align to Moscow midnight: `since = previous day 21:00 UTC = 00:00 MSK`, ensuring orders are captured accurately across all 5 Ozon stores.
 - Dashboard automatic refresh: All dashboard queries (`/api/kpi`, `/api/analytics/sales`, `/api/analytics/low-stock`, `/api/inventory-sync/status`) now auto-refresh every 5 minutes (`refetchInterval: 300000`) for real-time KPI and sales data.
+- Ozon API reliability: `fetchWithRetry` helper (3 retries, 3s wait on 429/502/504) replaces all plain `fetch` calls to `api-seller.ozon.ru` (26 call sites). Pagination added to FBO/FBS list requests in manual sync, auto-sync, and resync — each endpoint now iterates pages (offset 0, 1000, 2000…) until all postings are fetched, with a 10-page safety limit per store per call.
 The UI is fully localized in Russian.
 
 ## User Preferences

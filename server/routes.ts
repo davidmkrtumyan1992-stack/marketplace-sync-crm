@@ -18,6 +18,25 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 
+async function fetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url, options);
+      if ((res.status === 429 || res.status === 502 || res.status === 504) && i < retries - 1) {
+        console.log(`[fetchWithRetry] Ozon вернул ${res.status}, попытка ${i + 1}/${retries}, жду 3 сек...`);
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+      return res;
+    } catch (e: any) {
+      console.log(`[fetchWithRetry] Ошибка сети: ${e.message}, попытка ${i + 1}/${retries}`);
+      if (i < retries - 1) await new Promise(r => setTimeout(r, 3000));
+      else throw e;
+    }
+  }
+  throw new Error('fetchWithRetry: все попытки исчерпаны');
+}
+
 const imageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(process.cwd(), "uploads/images");
@@ -241,7 +260,7 @@ export async function registerRoutes(
             "Api-Key": apiKey,
             "Content-Type": "application/json",
           };
-          const testRes = await fetch("https://api-seller.ozon.ru/v3/product/list", {
+          const testRes = await fetchWithRetry("https://api-seller.ozon.ru/v3/product/list", {
             method: "POST",
             headers,
             body: JSON.stringify({ filter: { visibility: "ALL" }, limit: 1 }),
@@ -523,7 +542,7 @@ export async function registerRoutes(
             console.log("[sync-price] request body:", JSON.stringify({
               prices: [{ offer_id: offerId, price: priceStr, old_price: "0", premium_price: "0", min_price: "0" }],
             }));
-            const ozonRes = await fetch("https://api-seller.ozon.ru/v1/product/import/prices", {
+            const ozonRes = await fetchWithRetry("https://api-seller.ozon.ru/v1/product/import/prices", {
               method: "POST",
               headers: { "Client-Id": setting.clientId, "Api-Key": setting.apiKey, "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -645,7 +664,7 @@ export async function registerRoutes(
         }
 
         try {
-          const ozonRes = await fetch("https://api-seller.ozon.ru/v3/product/info", {
+          const ozonRes = await fetchWithRetry("https://api-seller.ozon.ru/v3/product/info", {
             method: "POST",
             headers: {
               "Client-Id": setting.clientId!,
@@ -1562,7 +1581,7 @@ export async function registerRoutes(
 
       console.log("[enrich-from-ozon] product_id:", product.ozonId);
 
-      const infoRes = await fetch("https://api-seller.ozon.ru/v3/product/info", {
+      const infoRes = await fetchWithRetry("https://api-seller.ozon.ru/v3/product/info", {
         method: "POST",
         headers: {
           "Client-Id": ozonSetting.clientId!,
@@ -1597,7 +1616,7 @@ export async function registerRoutes(
       
       const categoryId = item.description_category_id || item.category_id;
       if (categoryId) {
-        const commRes = await fetch("https://api-seller.ozon.ru/v1/category/commission", {
+        const commRes = await fetchWithRetry("https://api-seller.ozon.ru/v1/category/commission", {
           method: "POST",
           headers: {
             "Client-Id": ozonSetting.clientId!,
@@ -2671,39 +2690,72 @@ export async function registerRoutes(
           }
         };
 
-        const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
-          method: "POST", headers, body: JSON.stringify(body),
-        });
-        if (fbsResponse.ok) {
-          const fbsData = await fbsResponse.json();
-          const fbsPostings = fbsData?.result?.postings || [];
-          console.log(`[ozon-sync-orders] Store «${displayName}» FBS: ${fbsPostings.length} postings`);
-          await syncPostings(fbsPostings, "FBS");
-        } else {
-          const errText = await fbsResponse.text().catch(() => "");
-          const errMsg = fbsResponse.status === 401 || fbsResponse.status === 403
-            ? `Ошибка авторизации для магазина «${displayName}» (код ${fbsResponse.status})`
-            : `Ошибка API для магазина «${displayName}» (код ${fbsResponse.status})`;
-          console.error(`[ozon-sync-orders] Store «${displayName}» FBS API error ${fbsResponse.status}: ${errText}`);
-          storeError = errMsg;
+        {
+          const LIMIT = 1000;
+          const MAX_PAGES = 10;
+          const allFbsPostings: any[] = [];
+          let fbsOffset = 0;
+          let fbsError = false;
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const fbsResponse = await fetchWithRetry(`${BASE}/v3/posting/fbs/list`, {
+              method: "POST", headers, body: JSON.stringify({ ...body, limit: LIMIT, offset: fbsOffset }),
+            });
+            if (!fbsResponse.ok) {
+              const errText = await fbsResponse.text().catch(() => "");
+              const errMsg = fbsResponse.status === 401 || fbsResponse.status === 403
+                ? `Ошибка авторизации для магазина «${displayName}» (код ${fbsResponse.status})`
+                : `Ошибка API для магазина «${displayName}» (код ${fbsResponse.status})`;
+              console.error(`[ozon-sync-orders] Store «${displayName}» FBS API error ${fbsResponse.status}: ${errText}`);
+              storeError = errMsg;
+              fbsError = true;
+              break;
+            }
+            const fbsData = await fbsResponse.json();
+            const pagePostings: any[] = fbsData?.result?.postings || [];
+            allFbsPostings.push(...pagePostings);
+            console.log(`[ozon-sync-orders] Store «${displayName}» FBS page ${page + 1}: ${pagePostings.length} postings (итого: ${allFbsPostings.length})`);
+            if (pagePostings.length < LIMIT) break;
+            if (page === MAX_PAGES - 1) {
+              console.warn(`[ozon-sync-orders] Достигнут лимит пагинации (10 страниц) для магазина: ${displayName}`);
+            }
+            fbsOffset += LIMIT;
+          }
+          if (!fbsError) {
+            await syncPostings(allFbsPostings, "FBS");
+          }
         }
 
-        const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
-          method: "POST", headers, body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 1000, offset: 0, with: { analytics_data: false, financial_data: true } }),
-        });
-        if (fboResponse.ok) {
-          const fboData = await fboResponse.json();
-          const fboPostings = fboData?.result || [];
-          console.log(`[ozon-sync-orders] Store «${displayName}» FBO: ${fboPostings.length} postings`);
-          await syncPostings(fboPostings, "FBO");
-        } else {
-          const errText = await fboResponse.text().catch(() => "");
-          if (!storeError) {
-            storeError = fboResponse.status === 401 || fboResponse.status === 403
-              ? `Ошибка авторизации для магазина «${displayName}» (код ${fboResponse.status})`
-              : `Ошибка API для магазина «${displayName}» (код ${fboResponse.status})`;
+        {
+          const LIMIT = 1000;
+          const MAX_PAGES = 10;
+          const allFboPostings: any[] = [];
+          let fboOffset = 0;
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const fboResponse = await fetchWithRetry(`${BASE}/v2/posting/fbo/list`, {
+              method: "POST", headers,
+              body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: LIMIT, offset: fboOffset, with: { analytics_data: false, financial_data: true } }),
+            });
+            if (!fboResponse.ok) {
+              const errText = await fboResponse.text().catch(() => "");
+              if (!storeError) {
+                storeError = fboResponse.status === 401 || fboResponse.status === 403
+                  ? `Ошибка авторизации для магазина «${displayName}» (код ${fboResponse.status})`
+                  : `Ошибка API для магазина «${displayName}» (код ${fboResponse.status})`;
+              }
+              console.error(`[ozon-sync-orders] Store «${displayName}» FBO API error ${fboResponse.status}: ${errText}`);
+              break;
+            }
+            const fboData = await fboResponse.json();
+            const pagePostings: any[] = fboData?.result || [];
+            allFboPostings.push(...pagePostings);
+            console.log(`[ozon-sync-orders] Store «${displayName}» FBO page ${page + 1}: ${pagePostings.length} postings (итого: ${allFboPostings.length})`);
+            if (pagePostings.length < LIMIT) break;
+            if (page === MAX_PAGES - 1) {
+              console.warn(`[ozon-sync-orders] Достигнут лимит пагинации (10 страниц) для магазина: ${displayName}`);
+            }
+            fboOffset += LIMIT;
           }
-          console.error(`[ozon-sync-orders] Store «${displayName}» FBO API error ${fboResponse.status}: ${errText}`);
+          await syncPostings(allFboPostings, "FBO");
         }
 
         storeResults.push({ storeName: displayName, storeId: resolvedStoreId, created: storeCreated, updated: storeUpdated, skippedNoSku: storeSkippedPartial, error: storeError });
@@ -2745,7 +2797,7 @@ export async function registerRoutes(
       const BASE = "https://api-seller.ozon.ru";
 
       console.log(`[ozon-ship] Fetching posting details for ${order.postingNumber}`);
-      const getPostingRes = await fetch(`${BASE}/v3/posting/fbs/get`, {
+      const getPostingRes = await fetchWithRetry(`${BASE}/v3/posting/fbs/get`, {
         method: "POST",
         headers,
         body: JSON.stringify({ posting_number: order.postingNumber, with: { product_exemplars: false } }),
@@ -2784,7 +2836,7 @@ export async function registerRoutes(
 
       console.log(`[ozon-ship] Shipping posting ${order.postingNumber}, payload:`, JSON.stringify(shipBody).slice(0, 500));
 
-      const response = await fetch(`${BASE}/v3/posting/fbs/ship`, {
+      const response = await fetchWithRetry(`${BASE}/v3/posting/fbs/ship`, {
         method: "POST",
         headers,
         body: JSON.stringify(shipBody),
@@ -2845,7 +2897,7 @@ export async function registerRoutes(
 
       console.log(`[ozon-cancel] Cancelling posting ${order.postingNumber}, reason: ${cancelReason}`);
 
-      const response = await fetch(`${BASE}/v2/posting/fbs/cancel`, {
+      const response = await fetchWithRetry(`${BASE}/v2/posting/fbs/cancel`, {
         method: "POST",
         headers,
         body: JSON.stringify(cancelBody),
@@ -2915,7 +2967,7 @@ export async function registerRoutes(
 
       console.log(`[ozon-label] Creating 58x40 label for posting ${order.postingNumber}`);
 
-      const createRes = await fetch(`${BASE}/v2/posting/fbs/package-label/create`, {
+      const createRes = await fetchWithRetry(`${BASE}/v2/posting/fbs/package-label/create`, {
         method: "POST",
         headers,
         body: JSON.stringify({ posting_number: [order.postingNumber] }),
@@ -2924,7 +2976,7 @@ export async function registerRoutes(
       if (!createRes.ok) {
         const errText = await createRes.text().catch(() => "");
         console.error(`[ozon-label] Create API error ${createRes.status}:`, errText.slice(0, 500));
-        const fallbackRes = await fetch(`${BASE}/v2/posting/fbs/package-label`, {
+        const fallbackRes = await fetchWithRetry(`${BASE}/v2/posting/fbs/package-label`, {
           method: "POST",
           headers,
           body: JSON.stringify({ posting_number: [order.postingNumber] }),
@@ -2947,7 +2999,7 @@ export async function registerRoutes(
 
       if (!taskId) {
         console.log(`[ozon-label] No task_id, trying direct download`);
-        const directRes = await fetch(`${BASE}/v2/posting/fbs/package-label`, {
+        const directRes = await fetchWithRetry(`${BASE}/v2/posting/fbs/package-label`, {
           method: "POST",
           headers,
           body: JSON.stringify({ posting_number: [order.postingNumber] }),
@@ -2967,7 +3019,7 @@ export async function registerRoutes(
       await new Promise(resolve => setTimeout(resolve, 2000));
 
       for (let attempt = 0; attempt < 5; attempt++) {
-        const getRes = await fetch(`${BASE}/v1/posting/fbs/package-label/get`, {
+        const getRes = await fetchWithRetry(`${BASE}/v1/posting/fbs/package-label/get`, {
           method: "POST",
           headers,
           body: JSON.stringify({ task_id: taskId }),
@@ -3036,14 +3088,14 @@ export async function registerRoutes(
 
       const BASE = "https://api-seller.ozon.ru";
 
-      const createRes = await fetch(`${BASE}/v2/posting/fbs/package-label/create`, {
+      const createRes = await fetchWithRetry(`${BASE}/v2/posting/fbs/package-label/create`, {
         method: "POST",
         headers,
         body: JSON.stringify({ posting_number: postingNumbers }),
       });
 
       if (!createRes.ok) {
-        const fallbackRes = await fetch(`${BASE}/v2/posting/fbs/package-label`, {
+        const fallbackRes = await fetchWithRetry(`${BASE}/v2/posting/fbs/package-label`, {
           method: "POST",
           headers,
           body: JSON.stringify({ posting_number: postingNumbers }),
@@ -3065,7 +3117,7 @@ export async function registerRoutes(
       const taskId = createData?.result?.task_id;
 
       if (!taskId) {
-        const directRes = await fetch(`${BASE}/v2/posting/fbs/package-label`, {
+        const directRes = await fetchWithRetry(`${BASE}/v2/posting/fbs/package-label`, {
           method: "POST",
           headers,
           body: JSON.stringify({ posting_number: postingNumbers }),
@@ -3085,7 +3137,7 @@ export async function registerRoutes(
       await new Promise(resolve => setTimeout(resolve, 3000));
 
       for (let attempt = 0; attempt < 8; attempt++) {
-        const getRes = await fetch(`${BASE}/v1/posting/fbs/package-label/get`, {
+        const getRes = await fetchWithRetry(`${BASE}/v1/posting/fbs/package-label/get`, {
           method: "POST",
           headers,
           body: JSON.stringify({ task_id: taskId }),
@@ -3183,24 +3235,42 @@ export async function registerRoutes(
 
         const allPostings = new Map<string, any>();
 
-        const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
-          method: "POST", headers, body: JSON.stringify(body),
-        });
-        if (fbsResponse.ok) {
-          const fbsData = await fbsResponse.json();
-          for (const p of (fbsData?.result?.postings || [])) {
-            allPostings.set(p.posting_number, p);
+        {
+          const LIMIT = 1000;
+          const MAX_PAGES = 10;
+          let fbsOffset = 0;
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const fbsResponse = await fetchWithRetry(`${BASE}/v3/posting/fbs/list`, {
+              method: "POST", headers, body: JSON.stringify({ ...body, limit: LIMIT, offset: fbsOffset }),
+            });
+            if (!fbsResponse.ok) break;
+            const fbsData = await fbsResponse.json();
+            const pagePostings: any[] = fbsData?.result?.postings || [];
+            for (const p of pagePostings) allPostings.set(p.posting_number, p);
+            console.log(`[ozon-resync] Store ${ozonSetting.clientId} FBS page ${page + 1}: ${pagePostings.length} postings`);
+            if (pagePostings.length < LIMIT) break;
+            if (page === MAX_PAGES - 1) console.warn(`[ozon-resync] Достигнут лимит пагинации (10 страниц) для магазина: ${ozonSetting.clientId}`);
+            fbsOffset += LIMIT;
           }
         }
 
-        const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
-          method: "POST", headers,
-          body: JSON.stringify({ ...body, with: { analytics_data: false, financial_data: false } }),
-        });
-        if (fboResponse.ok) {
-          const fboData = await fboResponse.json();
-          for (const p of (fboData?.result || [])) {
-            allPostings.set(p.posting_number, p);
+        {
+          const LIMIT = 1000;
+          const MAX_PAGES = 10;
+          let fboOffset = 0;
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const fboResponse = await fetchWithRetry(`${BASE}/v2/posting/fbo/list`, {
+              method: "POST", headers,
+              body: JSON.stringify({ ...body, limit: LIMIT, offset: fboOffset, with: { analytics_data: false, financial_data: false } }),
+            });
+            if (!fboResponse.ok) break;
+            const fboData = await fboResponse.json();
+            const pagePostings: any[] = fboData?.result || [];
+            for (const p of pagePostings) allPostings.set(p.posting_number, p);
+            console.log(`[ozon-resync] Store ${ozonSetting.clientId} FBO page ${page + 1}: ${pagePostings.length} postings`);
+            if (pagePostings.length < LIMIT) break;
+            if (page === MAX_PAGES - 1) console.warn(`[ozon-resync] Достигнут лимит пагинации (10 страниц) для магазина: ${ozonSetting.clientId}`);
+            fboOffset += LIMIT;
           }
         }
 
@@ -3656,23 +3726,47 @@ export async function registerRoutes(
           }
         };
 
-        const fbsResponse = await fetch(`${BASE}/v3/posting/fbs/list`, {
-          method: "POST", headers, body: JSON.stringify(body),
-        });
-        if (fbsResponse.ok) {
-          const fbsData = await fbsResponse.json();
-          const fbsPostings = fbsData?.result?.postings || [];
-          await syncAutoPostings(fbsPostings, "FBS");
+        {
+          const LIMIT = 1000;
+          const MAX_PAGES = 10;
+          const allFbsPostings: any[] = [];
+          let fbsOffset = 0;
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const fbsResponse = await fetchWithRetry(`${BASE}/v3/posting/fbs/list`, {
+              method: "POST", headers, body: JSON.stringify({ ...body, limit: LIMIT, offset: fbsOffset }),
+            });
+            if (!fbsResponse.ok) break;
+            const fbsData = await fbsResponse.json();
+            const pagePostings: any[] = fbsData?.result?.postings || [];
+            allFbsPostings.push(...pagePostings);
+            console.log(`[ozon-auto-sync] FBS page ${page + 1}: ${pagePostings.length} postings (итого: ${allFbsPostings.length})`);
+            if (pagePostings.length < LIMIT) break;
+            if (page === MAX_PAGES - 1) console.warn(`[ozon-auto-sync] Достигнут лимит пагинации (10 страниц) для магазина: ${setting.clientId}`);
+            fbsOffset += LIMIT;
+          }
+          await syncAutoPostings(allFbsPostings, "FBS");
         }
 
-        const fboResponse = await fetch(`${BASE}/v2/posting/fbo/list`, {
-          method: "POST", headers,
-          body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: 1000, offset: 0, with: { analytics_data: false, financial_data: true } }),
-        });
-        if (fboResponse.ok) {
-          const fboData = await fboResponse.json();
-          const fboPostings = fboData?.result || [];
-          await syncAutoPostings(fboPostings, "FBO");
+        {
+          const LIMIT = 1000;
+          const MAX_PAGES = 10;
+          const allFboPostings: any[] = [];
+          let fboOffset = 0;
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const fboResponse = await fetchWithRetry(`${BASE}/v2/posting/fbo/list`, {
+              method: "POST", headers,
+              body: JSON.stringify({ dir: "ASC", filter: { since: since.toISOString(), to: new Date().toISOString(), status: "" }, limit: LIMIT, offset: fboOffset, with: { analytics_data: false, financial_data: true } }),
+            });
+            if (!fboResponse.ok) break;
+            const fboData = await fboResponse.json();
+            const pagePostings: any[] = fboData?.result || [];
+            allFboPostings.push(...pagePostings);
+            console.log(`[ozon-auto-sync] FBO page ${page + 1}: ${pagePostings.length} postings (итого: ${allFboPostings.length})`);
+            if (pagePostings.length < LIMIT) break;
+            if (page === MAX_PAGES - 1) console.warn(`[ozon-auto-sync] Достигнут лимит пагинации (10 страниц) для магазина: ${setting.clientId}`);
+            fboOffset += LIMIT;
+          }
+          await syncAutoPostings(allFboPostings, "FBO");
         }
 
         if (updated > 0 || created > 0) {
