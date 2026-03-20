@@ -313,6 +313,12 @@ Body: { category_id: [Number(categoryId)], price: "1000" }
     FBO limit: 1000 (не 50!)
     FBS limit: 1000
   
+  Надёжность API:
+    - Все запросы к Ozon API используют fetchWithRetry (3 попытки, 3 сек пауза)
+    - Retry срабатывает на HTTP 429, 502, 504 и сетевые ошибки
+    - Пагинация: максимум 10 страниц × 1000 постингов = 10 000 заказов на магазин
+    - Пагинация применяется к FBO и FBS в ручном синке, фоновом синке и ресинке
+  
   Применяется в:
     POST /api/marketplace/ozon/sync-orders (ручной синк)
     autoSyncOzonStatuses() (фоновый воркер каждые 5 минут)
