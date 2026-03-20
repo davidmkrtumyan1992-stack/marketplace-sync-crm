@@ -852,6 +852,8 @@ export class DatabaseStorage implements IStorage {
     const ordersList = await db.select().from(orders)
       .where(eq(orders.organizationId, organizationId));
 
+    const toMskDateStr = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "Europe/Moscow" });
+
     let fromDateStr: string;
     let toDateStr: string;
 
@@ -861,29 +863,45 @@ export class DatabaseStorage implements IStorage {
     } else {
       const days = options.days || 30;
       const now = new Date();
-      toDateStr = now.toISOString().split("T")[0];
+      toDateStr = toMskDateStr(now);
       const fromD = new Date(now);
       fromD.setDate(fromD.getDate() - days + 1);
-      fromDateStr = fromD.toISOString().split("T")[0];
+      fromDateStr = toMskDateStr(fromD);
     }
 
     const filtered = ordersList.filter(o => {
       if (!o.createdAt) return false;
-      const createdDateStr = new Date(o.createdAt).toISOString().split("T")[0];
+      const createdDateStr = toMskDateStr(new Date(o.createdAt));
       if (createdDateStr < fromDateStr || createdDateStr > toDateStr) return false;
-      const isOzonCancelled = o.ozonStatus === "cancelled";
-      const isInternalCancelledWithNoActiveOzon = o.status === "cancelled" && (!o.ozonStatus || o.ozonStatus === "cancelled");
-      if (isOzonCancelled || isInternalCancelledWithNoActiveOzon) return false;
+      const isCancelled = o.status === "cancelled" && (!o.ozonStatus || o.ozonStatus === "cancelled");
+      if (isCancelled) return false;
       if (o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED") return false;
       if (options.storeId && o.storeId !== options.storeId) return false;
       return true;
     });
 
+    const filteredIds = filtered.map(o => o.id);
+    let allItems: { orderId: number; price: string | null; quantity: number; }[] = [];
+    if (filteredIds.length > 0) {
+      allItems = await db.select({
+        orderId: orderItems.orderId,
+        price: orderItems.price,
+        quantity: orderItems.quantity,
+      }).from(orderItems).where(inArray(orderItems.orderId, filteredIds));
+    }
+
+    const itemsByOrder = new Map<number, typeof allItems>();
+    for (const item of allItems) {
+      if (!itemsByOrder.has(item.orderId)) itemsByOrder.set(item.orderId, []);
+      itemsByOrder.get(item.orderId)!.push(item);
+    }
+
     const dataByDateCompany: Record<string, SalesDataPoint> = {};
     const marketplaceBreakdown = { ozon: 0, yandex: 0, wildberries: 0, other: 0 };
+    let totalItemsQty = 0;
 
     for (const order of filtered) {
-      const dateStr = order.createdAt ? new Date(order.createdAt).toISOString().split("T")[0] : "unknown";
+      const dateStr = order.createdAt ? toMskDateStr(new Date(order.createdAt)) : "unknown";
       const key = `${dateStr}_${order.companyId || 0}`;
       if (!dataByDateCompany[key]) {
         dataByDateCompany[key] = {
@@ -893,20 +911,32 @@ export class DatabaseStorage implements IStorage {
           companyName: companyMap.get(order.companyId || 0) || "—",
         };
       }
-      const amount = Number(order.totalAmount || 0);
-      dataByDateCompany[key].revenue += amount;
+
+      const items = itemsByOrder.get(order.id) || [];
+      let orderRevenue = 0;
+      let orderQty = 0;
+      for (const item of items) {
+        orderRevenue += Number(item.price || 0) * item.quantity;
+        orderQty += item.quantity;
+      }
+      if (items.length === 0) {
+        orderRevenue = Number(order.totalAmount || 0);
+        orderQty = 1;
+      }
+      dataByDateCompany[key].revenue += orderRevenue;
+      totalItemsQty += orderQty;
 
       const src = (order.source || "").toLowerCase();
-      if (src === "ozon") marketplaceBreakdown.ozon += amount;
-      else if (src === "yandex") marketplaceBreakdown.yandex += amount;
-      else if (src === "wildberries" || src === "wb") marketplaceBreakdown.wildberries += amount;
-      else marketplaceBreakdown.other += amount;
+      if (src === "ozon") marketplaceBreakdown.ozon += orderRevenue;
+      else if (src === "yandex") marketplaceBreakdown.yandex += orderRevenue;
+      else if (src === "wildberries" || src === "wb") marketplaceBreakdown.wildberries += orderRevenue;
+      else marketplaceBreakdown.other += orderRevenue;
     }
 
     const data = Object.values(dataByDateCompany).sort((a, b) => a.date.localeCompare(b.date));
     const totalRevenue = data.reduce((sum, d) => sum + d.revenue, 0);
 
-    return { data, totalOrders: filtered.length, totalRevenue, marketplaceBreakdown };
+    return { data, totalOrders: totalItemsQty, totalRevenue, marketplaceBreakdown };
   }
 
   // Stock Sync Log
