@@ -2817,6 +2817,8 @@ export async function registerRoutes(
         if (resolvedStoreId !== null) {
           const countRes = await db.select({ cnt: sql<number>`COUNT(*)` }).from(ordersTable).where(
             and(
+              eq(ordersTable.organizationId, orgId),
+              eq(ordersTable.source, "ozon"),
               eq(ordersTable.storeId, resolvedStoreId),
               gte(ordersTable.createdAt, sinceDate),
               lt(ordersTable.createdAt, toDate)
@@ -2825,6 +2827,8 @@ export async function registerRoutes(
           storeDeleted = Number(countRes[0]?.cnt || 0);
           await db.delete(ordersTable).where(
             and(
+              eq(ordersTable.organizationId, orgId),
+              eq(ordersTable.source, "ozon"),
               eq(ordersTable.storeId, resolvedStoreId),
               gte(ordersTable.createdAt, sinceDate),
               lt(ordersTable.createdAt, toDate)
