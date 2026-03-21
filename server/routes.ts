@@ -7,7 +7,7 @@ import { api } from "@shared/routes";
 import { marketplaceSettings as marketplaceSettingsTable, products as productsTable, orders as ordersTable, orderItems as orderItemsTable, productMarketplaceLinks } from "@shared/schema";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import { db } from "./db";
-import { eq, and, sql, inArray, gte, lte } from "drizzle-orm";
+import { eq, and, sql, inArray, gte, lte, lt } from "drizzle-orm";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -2765,6 +2765,264 @@ export async function registerRoutes(
       res.json({ success: true, created, updated, skipped, storeResults });
     } catch (error: any) {
       console.error("[ozon-sync-orders] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Ozon: Historical resync for a custom date range (delete + re-fetch from API)
+  app.post("/api/admin/ozon/historical-resync", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { since: sinceParam, to: toParam } = req.body;
+
+      if (!sinceParam || !toParam) {
+        return res.status(400).json({ message: "Укажите since и to (ISO UTC строки)" });
+      }
+      const sinceDate = new Date(sinceParam);
+      const toDate = new Date(toParam);
+      if (isNaN(sinceDate.getTime()) || isNaN(toDate.getTime())) {
+        return res.status(400).json({ message: "Неверный формат дат since/to" });
+      }
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ozonSettings = allSettings.filter(s => s.marketplace === "ozon" && s.apiKey && s.clientId);
+      if (ozonSettings.length === 0) {
+        return res.status(400).json({ message: "Настройки Ozon не найдены" });
+      }
+
+      const BASE = "https://api-seller.ozon.ru";
+      let totalCreated = 0;
+      let totalDeleted = 0;
+      let totalSkippedNoSku = 0;
+      const storeResults: { storeName: string; storeId: number | null; deleted: number; created: number; skippedNoSku: number; error?: string }[] = [];
+
+      for (const ozonSetting of ozonSettings) {
+        const { storeId: resolvedStoreId, companyId: resolvedCompanyId, storeName: resolvedStoreName } = await resolveStoreForSetting(ozonSetting);
+        const displayName = resolvedStoreName || ozonSetting.storeName || `Client ${ozonSetting.clientId}`;
+        let storeCreated = 0;
+        let storeDeleted = 0;
+        let storeSkippedPartial = 0;
+        let storeError: string | undefined;
+
+        const headers = {
+          "Client-Id": String(parseInt(ozonSetting.clientId!.trim(), 10)),
+          "Api-Key": ozonSetting.apiKey!.trim(),
+          "Content-Type": "application/json",
+        };
+
+        // Step 1: Delete existing orders for this store in the period
+        if (resolvedStoreId !== null) {
+          const countRes = await db.select({ cnt: sql<number>`COUNT(*)` }).from(ordersTable).where(
+            and(
+              eq(ordersTable.storeId, resolvedStoreId),
+              gte(ordersTable.createdAt, sinceDate),
+              lt(ordersTable.createdAt, toDate)
+            )
+          );
+          storeDeleted = Number(countRes[0]?.cnt || 0);
+          await db.delete(ordersTable).where(
+            and(
+              eq(ordersTable.storeId, resolvedStoreId),
+              gte(ordersTable.createdAt, sinceDate),
+              lt(ordersTable.createdAt, toDate)
+            )
+          );
+          totalDeleted += storeDeleted;
+          console.log(`[ozon-historical-resync] Deleted ${storeDeleted} orders for store «${displayName}» (storeId=${resolvedStoreId})`);
+        } else {
+          console.warn(`[ozon-historical-resync] No storeId resolved for «${displayName}» — skipping delete`);
+        }
+
+        // syncPostings: identical to sync-orders logic — create orders from Ozon postings
+        const historicSyncPostings = async (postings: any[], fulfillmentType: string) => {
+          for (const posting of postings) {
+            const postingNumber = posting.posting_number;
+            const ozonStatus = posting.status;
+
+            const ozonCreatedAt = posting.created_at
+              ? new Date(posting.created_at)
+              : posting.in_process_at
+                ? new Date(posting.in_process_at)
+                : posting.shipment_date
+                  ? new Date(posting.shipment_date)
+                  : null;
+            if (!ozonCreatedAt) {
+              console.warn(`[ozon-historical-resync] posting ${postingNumber} has no date fields — using current time as fallback`);
+            }
+
+            const existingOrder = await storage.getOrderByPostingNumber(postingNumber, orgId, resolvedStoreId);
+            if (existingOrder) {
+              // Already exists (e.g. appears in both FBS and FBO response) — skip
+              continue;
+            }
+
+            const items: { productId?: number | null; sku?: string; productName?: string; quantity: number; price: number }[] = [];
+            let totalAmount = 0;
+
+            for (const prod of posting.products || []) {
+              const sku = prod.offer_id || "";
+              if (!sku) continue;
+              const qty = prod.quantity || 1;
+
+              const financialProduct = fulfillmentType === "FBO"
+                ? (posting.financial_data?.products || []).find((fp: any) => fp.product_id === prod.sku_id)
+                : null;
+              const price = financialProduct?.price
+                ? parseFloat(String(financialProduct.price))
+                : parseFloat(prod.price || "0");
+
+              const [dbProduct] = await db.select().from(productsTable)
+                .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+
+              if (dbProduct) {
+                items.push({ productId: dbProduct.id, quantity: qty, price });
+              } else {
+                console.warn(`[ozon-historical-resync] SKU not found: ${sku} for posting ${postingNumber} — creating item without product link`);
+                items.push({ productId: null, sku, productName: prod.name || sku, quantity: qty, price });
+              }
+              totalAmount += price * qty;
+            }
+
+            if (items.length > 0) {
+              const internalStatus = ozonStatusToInternal(ozonStatus);
+              await storage.createOrder({
+                orderNumber: postingNumber,
+                status: internalStatus,
+                totalAmount: totalAmount.toFixed(2),
+                source: "ozon",
+                externalId: posting.order_id?.toString() || postingNumber,
+                postingNumber,
+                ozonStatus,
+                fulfillmentType,
+                storeId: resolvedStoreId,
+                sourceStoreName: resolvedStoreName,
+                companyId: resolvedCompanyId,
+                organizationId: orgId,
+                createdAt: ozonCreatedAt ?? new Date(),
+              }, items);
+              storeCreated++;
+              totalCreated++;
+            } else {
+              storeSkippedPartial++;
+              totalSkippedNoSku++;
+            }
+          }
+        };
+
+        // Step 2: Fetch FBS with pagination (max 20 pages)
+        {
+          const LIMIT = 1000;
+          const MAX_PAGES = 20;
+          const allFbsPostings: any[] = [];
+          let fbsOffset = 0;
+          let fbsError = false;
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const fbsResponse = await fetchWithRetry(`${BASE}/v3/posting/fbs/list`, {
+              method: "POST", headers,
+              body: JSON.stringify({
+                dir: "ASC",
+                filter: { since: sinceDate.toISOString(), to: toDate.toISOString(), status: "" },
+                limit: LIMIT,
+                offset: fbsOffset,
+              }),
+            });
+            if (!fbsResponse.ok) {
+              const errText = await fbsResponse.text().catch(() => "");
+              storeError = fbsResponse.status === 401 || fbsResponse.status === 403
+                ? `Ошибка авторизации для магазина «${displayName}» (код ${fbsResponse.status})`
+                : `Ошибка API для магазина «${displayName}» FBS (код ${fbsResponse.status})`;
+              console.error(`[ozon-historical-resync] Store «${displayName}» FBS API error ${fbsResponse.status}: ${errText}`);
+              fbsError = true;
+              break;
+            }
+            const fbsData = await fbsResponse.json();
+            const pagePostings: any[] = fbsData?.result?.postings || [];
+            allFbsPostings.push(...pagePostings);
+            console.log(`[ozon-historical-resync] Store «${displayName}» FBS page ${page + 1}: ${pagePostings.length} postings (итого: ${allFbsPostings.length})`);
+            if (pagePostings.length < LIMIT) break;
+            if (page === MAX_PAGES - 1) {
+              console.warn(`[ozon-historical-resync] Достигнут лимит пагинации (20 страниц) FBS для магазина: ${displayName}`);
+            }
+            fbsOffset += LIMIT;
+          }
+          if (!fbsError) {
+            await historicSyncPostings(allFbsPostings, "FBS");
+          }
+        }
+
+        // Step 3: Fetch FBO with financial_data and pagination (max 20 pages)
+        {
+          const LIMIT = 1000;
+          const MAX_PAGES = 20;
+          const allFboPostings: any[] = [];
+          let fboOffset = 0;
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const fboResponse = await fetchWithRetry(`${BASE}/v2/posting/fbo/list`, {
+              method: "POST", headers,
+              body: JSON.stringify({
+                dir: "ASC",
+                filter: { since: sinceDate.toISOString(), to: toDate.toISOString(), status: "" },
+                limit: LIMIT,
+                offset: fboOffset,
+                with: { analytics_data: false, financial_data: true },
+              }),
+            });
+            if (!fboResponse.ok) {
+              const errText = await fboResponse.text().catch(() => "");
+              if (!storeError) {
+                storeError = fboResponse.status === 401 || fboResponse.status === 403
+                  ? `Ошибка авторизации для магазина «${displayName}» (код ${fboResponse.status})`
+                  : `Ошибка API для магазина «${displayName}» FBO (код ${fboResponse.status})`;
+              }
+              console.error(`[ozon-historical-resync] Store «${displayName}» FBO API error ${fboResponse.status}: ${errText}`);
+              break;
+            }
+            const fboData = await fboResponse.json();
+            const pagePostings: any[] = fboData?.result || [];
+            allFboPostings.push(...pagePostings);
+            console.log(`[ozon-historical-resync] Store «${displayName}» FBO page ${page + 1}: ${pagePostings.length} postings (итого: ${allFboPostings.length})`);
+            if (pagePostings.length < LIMIT) break;
+            if (page === MAX_PAGES - 1) {
+              console.warn(`[ozon-historical-resync] Достигнут лимит пагинации (20 страниц) FBO для магазина: ${displayName}`);
+            }
+            fboOffset += LIMIT;
+          }
+          await historicSyncPostings(allFboPostings, "FBO");
+        }
+
+        storeResults.push({ storeName: displayName, storeId: resolvedStoreId, deleted: storeDeleted, created: storeCreated, skippedNoSku: storeSkippedPartial, error: storeError });
+      }
+
+      // Step 4: Summary SQL — orders per day per store after resync
+      const summaryRows = await db.execute(sql`
+        SELECT
+          DATE(o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') as date_msk,
+          s.name as store_name,
+          COUNT(DISTINCT o.id)::int as orders,
+          COALESCE(SUM(oi.quantity), 0)::int as qty,
+          ROUND(COALESCE(SUM(oi.price * oi.quantity), 0)::numeric, 0)::bigint as revenue
+        FROM orders o
+        JOIN stores s ON o.store_id = s.id
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        WHERE s.client_id IN ('3364383','3835567','2311038','2496152','4052691')
+          AND o.created_at >= ${sinceDate}
+          AND o.created_at < ${toDate}
+        GROUP BY DATE(o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow'), s.name
+        ORDER BY date_msk, s.name
+      `);
+
+      console.log(`[ozon-historical-resync] Complete: totalDeleted=${totalDeleted}, totalCreated=${totalCreated}, totalSkippedNoSku=${totalSkippedNoSku}`);
+      res.json({
+        success: true,
+        period: { since: sinceDate.toISOString(), to: toDate.toISOString() },
+        totalDeleted,
+        totalCreated,
+        totalSkippedNoSku,
+        storeResults,
+        summary: summaryRows.rows,
+      });
+    } catch (error: any) {
+      console.error("[ozon-historical-resync] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });
