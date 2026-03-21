@@ -1,0 +1,139 @@
+Прочитай CLAUDE.md и SPECIFICATION.md для контекста.
+
+Внедрить систему двойных показателей выручки на дашборде.
+Цель: CRM должна показывать те же цифры что и Ozon кабинет
+плюс дополнительную аналитику по отменам.
+
+ШАГ 1 — Обновить getSalesData в server/storage.ts:
+
+Изменить метод чтобы возвращал три показателя вместо одного:
+
+// Добавить новые поля в SalesResponse:
+{
+  data: SalesDataPoint[],
+  totalOrders: number,
+  totalRevenue: number,         // оставить = net (обратная совместимость)
+  marketplaceBreakdown: {...},
+
+  // НОВЫЕ ПОЛЯ:
+  grossRevenue: number,         // ВСЕ заказы включая отменённые
+  netRevenue: number,           // только не отменённые
+  cancelledRevenue: number,     // сумма отменённых
+  cancelledCount: number,       // количество отменённых заказов
+  cancellationRate: number,     // % отмен от gross
+}
+
+// В каждой точке графика SalesDataPoint добавить:
+{
+  date: string,
+  revenue: number,              // net (существующее — не трогать)
+  grossRevenue: number,         // НОВОЕ — включая отменённые
+  cancelledRevenue: number,     // НОВОЕ
+  companyId: number | null,
+  companyName: string,
+}
+
+Логика расчёта:
+- grossRevenue = SUM(order_items.price * quantity) для ВСЕХ заказов
+  в диапазоне дат (включая cancelled)
+- netRevenue = SUM только для не отменённых
+- cancelledRevenue = grossRevenue - netRevenue
+- cancellationRate = cancelledRevenue / grossRevenue * 100
+
+Важно для grossRevenue:
+Включать ВСЕ статусы без исключения:
+- status = 'cancelled' ✓ включать
+- ozon_status = 'cancelled' ✓ включать
+- ozon_status = 'returned' ✓ включать
+- моментально отменённые заказы ✓ включать
+Исключать только явные дубликаты (одинаковый posting_number + store_id).
+Именно так считает Ozon кабинет в метрике «Заказано».
+
+ШАГ 2 — Обновить эндпоинт /api/analytics/sales в server/routes.ts:
+
+Убедись что все новые поля передаются в ответе клиенту.
+
+ШАГ 3 — Обновить Dashboard.tsx:
+
+3.1 — Три KPI карточки под графиком:
+┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+│ Заказано        │ │ К получению     │ │ Отменено        │
+│ 190 929 ₽       │ │ 163 229 ₽       │ │ 27 700 ₽        │
+│ Как в Ozon  ℹ️  │ │ Чистая выручка  │ │ 14.5% отмен     │
+└─────────────────┘ └─────────────────┘ └─────────────────┘
+
+Tooltip для "Заказано":
+"Все заказы включая отменённые. Совпадает с метрикой «Заказано» в кабинете Ozon"
+
+Tooltip для "К получению":
+"Только выполненные и активные заказы без отмен. Реальная выручка которую получите"
+
+Tooltip для "Отменено":
+"Сумма отменённых заказов. Высокий % отмен сигнализирует о проблемах с логистикой или качеством"
+
+3.2 — На графике продаж — два чекбокса над графиком:
+☑ Заказано (синий)     ☑ К получению (зелёный)
+
+По умолчанию — оба включены одновременно.
+
+Показывать две линии на одном графике:
+- Синяя линия = grossRevenue («Заказано» как в Ozon)
+- Зелёная линия = netRevenue («К получению» — реальная выручка)
+
+Визуальный эффект: расстояние между синей и зелёной линиями
+наглядно показывает объём отмен за каждый день.
+Чем больше разрыв — тем больше отмен в этот день.
+
+Пользователь может:
+- Видеть обе линии одновременно (по умолчанию)
+- Отключить одну из линий кликом по чекбоксу
+- При hover на точке графика показывать tooltip:
+  "Заказано: X ₽ | К получению: Y ₽ | Отменено: Z ₽ (N%)"
+
+3.3 — Обновить donut chart (разбивка по маркетплейсам):
+Donut chart тоже переключается между gross и net
+в зависимости от активного режима на графике.
+
+ШАГ 4 — Проверка после реализации:
+
+Выполни SQL для Сакуры за 18.03:
+SELECT 
+  ROUND(SUM(CASE WHEN o.status != 'cancelled' 
+    AND (o.ozon_status IS NULL OR o.ozon_status != 'cancelled')
+    THEN oi.price * oi.quantity ELSE 0 END)::numeric, 0) as net_revenue,
+  ROUND(SUM(oi.price * oi.quantity)::numeric, 0) as gross_revenue,
+  ROUND(SUM(CASE WHEN o.status = 'cancelled' 
+    OR o.ozon_status = 'cancelled'
+    THEN oi.price * oi.quantity ELSE 0 END)::numeric, 0) as cancelled_revenue
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+JOIN order_items oi ON o.id = oi.order_id
+WHERE s.client_id = '4052691'
+AND DATE(o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') = '2026-03-18';
+
+Ожидаемый результат:
+- gross_revenue = 190 929 ₽ ✓
+- net_revenue = 163 229 ₽ ✓
+- cancelled_revenue = 27 700 ₽ ✓
+
+ШАГ 5 — Обновить документацию:
+
+В CLAUDE.md добавь в "Статус разработки":
+✓ Двойные показатели выручки: Заказано (gross) + К получению (net)
+✓ График с двумя линиями — визуальный разрыв показывает отмены
+✓ Три KPI карточки: Заказано / К получению / Отменено + % отмен
+
+В SPECIFICATION.md раздел 3 добавь подраздел 3.8:
+
+### 3.8 Двойные показатели выручки
+- grossRevenue = все заказы включая отменённые (= "Заказано" в Ozon)
+- netRevenue = только активные и выполненные заказы
+- cancelledRevenue = grossRevenue - netRevenue
+- cancellationRate = cancelledRevenue / grossRevenue × 100%
+- На дашборде показывать оба показателя одновременно
+- По умолчанию график показывает обе линии (синяя + зелёная)
+- Tooltip на hover: Заказано / К получению / Отменено / %
+- grossRevenue включает ВСЕ статусы включая cancelled и returned
+- Исключение только явных дублей (posting_number + store_id)
+
+Не трогать: логику sync заказов, аутентификацию, RBAC.
