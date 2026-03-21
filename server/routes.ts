@@ -2776,12 +2776,15 @@ export async function registerRoutes(
       const { since: sinceParam, to: toParam } = req.body;
 
       if (!sinceParam || !toParam) {
-        return res.status(400).json({ message: "Укажите since и to (ISO UTC строки)" });
+        return res.status(400).json({ message: "Укажите since и to (ISO UTC строки, напр. '2026-02-28T21:00:00Z')" });
       }
       const sinceDate = new Date(sinceParam);
       const toDate = new Date(toParam);
       if (isNaN(sinceDate.getTime()) || isNaN(toDate.getTime())) {
         return res.status(400).json({ message: "Неверный формат дат since/to" });
+      }
+      if (sinceDate >= toDate) {
+        return res.status(400).json({ message: "since должен быть строго меньше to" });
       }
 
       const allSettings = await storage.getMarketplaceSettings(orgId);
@@ -3004,7 +3007,8 @@ export async function registerRoutes(
         FROM orders o
         JOIN stores s ON o.store_id = s.id
         LEFT JOIN order_items oi ON o.id = oi.order_id
-        WHERE s.client_id IN ('3364383','3835567','2311038','2496152','4052691')
+        WHERE o.organization_id = ${orgId}
+          AND o.source = 'ozon'
           AND o.created_at >= ${sinceDate}
           AND o.created_at < ${toDate}
         GROUP BY DATE(o.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow'), s.name
