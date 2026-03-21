@@ -413,6 +413,8 @@ export type LowStockProduct = Product & {
 export type SalesDataPoint = {
   date: string;
   revenue: number;
+  grossRevenue: number;
+  cancelledRevenue: number;
   companyId: number | null;
   companyName: string;
 };
@@ -429,6 +431,12 @@ export type SalesResponse = {
   totalOrders: number;
   totalRevenue: number;
   marketplaceBreakdown: MarketplaceBreakdown;
+  grossRevenue: number;
+  netRevenue: number;
+  cancelledRevenue: number;
+  cancelledCount: number;
+  cancellationRate: number;
+  grossMarketplaceBreakdown: MarketplaceBreakdown;
 };
 
 // Sync Status

@@ -396,7 +396,36 @@ Body: { category_id: [Number(categoryId)], price: "1000" }
 
 **Поведение:** данные обновляются в фоне каждые 5 минут, даже если вкладка не активна (если `refetchOnWindowFocus: "always"` установлен в глобальном конфиге)
 
-### 4.5 Список товаров (страница Products)
+### 4.5 Dashboard — двойные показатели выручки (Gross/Net)
+**Раздел «Анализ продаж»** показывает два типа выручки:
+
+| Показатель | Описание | Цвет |
+|---|---|---|
+| Заказано (Gross) | Все заказы за период, включая отменённые. Совпадает с «Заказано» в кабинете Ozon | Синий #3b82f6 |
+| К получению (Net) | Только неотменённые заказы | Зелёный #22c55e |
+| Отменено | Выручка по отменённым заказам | Красный #ef4444 |
+
+**График:** LineChart с двумя линиями (Gross + Net). Два чекбокса над графиком управляют видимостью линий. Tooltip показывает все три значения.
+
+**Donut chart:** переключается на `grossMarketplaceBreakdown` если активен только «Заказано» (чекбокс Gross on, Net off), иначе использует `marketplaceBreakdown` (только net).
+
+**KPI-карточки под графиком** (3 штуки в ряд):
+- **Заказано** — badge «как в Ozon», синий. Значение: `grossRevenue` из SalesResponse
+- **К получению** — зелёный. Значение: `netRevenue`
+- **Отменено** — красный, с процентом отмен под суммой. Значение: `cancelledRevenue`, `cancellationRate`%
+
+**Определение отменённого заказа:**
+```
+(status='cancelled' AND (ozonStatus IS NULL OR ozonStatus='cancelled'))
+OR yandexStatus IN ('CANCELLED','RETURNED')
+```
+
+**API:** `/api/analytics/sales` теперь возвращает доп. поля:
+- `grossRevenue`, `netRevenue`, `cancelledRevenue`, `cancelledCount`, `cancellationRate`
+- `grossMarketplaceBreakdown` — breakdown по gross
+- Каждая точка `SalesDataPoint`: `grossRevenue`, `cancelledRevenue` (+ старый `revenue` = net)
+
+### 4.6 Список товаров (страница Products)
 **Колонки таблицы:**
 - Фото, Название, SKU, Штрихкод
 - Цена продажи

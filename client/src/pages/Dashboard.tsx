@@ -23,7 +23,7 @@ import { formatCurrency, formatQuantity, formatNumber } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
 import type { DashboardKPI, LowStockProduct, SalesDataPoint, SalesResponse, SyncStatusSummary, MarketplaceBreakdown } from "@shared/schema";
 import { Link } from "wouter";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -79,6 +79,8 @@ export default function Dashboard() {
   const [lowStockOpen, setLowStockOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [activeBarIndex, setActiveBarIndex] = useState<number | null>(null);
+  const [showGross, setShowGross] = useState(true);
+  const [showNet, setShowNet] = useState(true);
 
   const applyPreset = useCallback((preset: string) => {
     setDatePreset(preset);
@@ -121,20 +123,26 @@ export default function Dashboard() {
 
   const chartData = useMemo(() => {
     if (!salesResponse?.data) return [];
-    const grouped: Record<string, number> = {};
+    const grouped: Record<string, { revenue: number; grossRevenue: number; cancelledRevenue: number }> = {};
     salesResponse.data.forEach((p) => {
-      grouped[p.date] = (grouped[p.date] || 0) + p.revenue;
+      if (!grouped[p.date]) grouped[p.date] = { revenue: 0, grossRevenue: 0, cancelledRevenue: 0 };
+      grouped[p.date].revenue += p.revenue;
+      grouped[p.date].grossRevenue += p.grossRevenue ?? p.revenue;
+      grouped[p.date].cancelledRevenue += p.cancelledRevenue ?? 0;
     });
     return Object.entries(grouped)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, revenue]) => ({ date, revenue }));
+      .map(([date, vals]) => ({ date, ...vals }));
   }, [salesResponse]);
 
   const totalRevenue = salesResponse?.totalRevenue ?? 0;
   const totalOrders = salesResponse?.totalOrders ?? 0;
 
   const donutData = useMemo(() => {
-    const breakdown = salesResponse?.marketplaceBreakdown;
+    const useGross = showGross && !showNet;
+    const breakdown = useGross
+      ? salesResponse?.grossMarketplaceBreakdown
+      : salesResponse?.marketplaceBreakdown;
     if (!breakdown) return [];
     return (["ozon", "yandex", "wildberries", "other"] as const)
       .filter(key => breakdown[key] > 0)
@@ -144,7 +152,7 @@ export default function Dashboard() {
         color: MARKETPLACE_COLORS[key],
         key,
       }));
-  }, [salesResponse]);
+  }, [salesResponse, showGross, showNet]);
 
   const dateRangeLabel = useMemo(() => {
     if (!dateRange?.from) return "Выберите период";
@@ -755,30 +763,32 @@ export default function Dashboard() {
                   </div>
                 </div>
 
+                <div className="flex items-center gap-4 mb-3">
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none text-sm" data-testid="checkbox-show-gross">
+                    <input
+                      type="checkbox"
+                      checked={showGross}
+                      onChange={e => setShowGross(e.target.checked)}
+                      className="accent-blue-500 w-4 h-4"
+                    />
+                    <span className="font-medium" style={{ color: "#3b82f6" }}>Заказано</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none text-sm" data-testid="checkbox-show-net">
+                    <input
+                      type="checkbox"
+                      checked={showNet}
+                      onChange={e => setShowNet(e.target.checked)}
+                      className="accent-green-500 w-4 h-4"
+                    />
+                    <span className="font-medium" style={{ color: "#22c55e" }}>К получению</span>
+                  </label>
+                </div>
+
                 <div className="grid grid-cols-1 lg:grid-cols-5 gap-6" style={{ minHeight: 280 }}>
                   <div className="lg:col-span-3 w-full">
                     {chartData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={280}>
-                        <BarChart
-                          data={chartData}
-                          barCategoryGap="20%"
-                          onMouseMove={(state: any) => {
-                            if (state?.activeTooltipIndex !== undefined) {
-                              setActiveBarIndex(state.activeTooltipIndex);
-                            }
-                          }}
-                          onMouseLeave={() => setActiveBarIndex(null)}
-                        >
-                          <defs>
-                            <linearGradient id="barGradientActive" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="#ec4899" stopOpacity={0.95} />
-                              <stop offset="100%" stopColor="#a855f7" stopOpacity={0.85} />
-                            </linearGradient>
-                            <linearGradient id="barGradientInactive" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.15} />
-                              <stop offset="100%" stopColor="hsl(var(--muted-foreground))" stopOpacity={0.08} />
-                            </linearGradient>
-                          </defs>
+                        <LineChart data={chartData}>
                           <XAxis
                             dataKey="date"
                             axisLine={false}
@@ -797,11 +807,15 @@ export default function Dashboard() {
                             width={45}
                           />
                           <Tooltip
-                            cursor={false}
-                            formatter={(value: number) => [formatCurrency(value), "Выручка"]}
                             labelFormatter={(label: string) => {
                               const parts = label.split("-");
                               return parts.length >= 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : label;
+                            }}
+                            formatter={(value: number, name: string) => {
+                              if (name === "grossRevenue") return [formatCurrency(value), "Заказано"];
+                              if (name === "revenue") return [formatCurrency(value), "К получению"];
+                              if (name === "cancelledRevenue") return [formatCurrency(value), "Отменено"];
+                              return [formatCurrency(value), name];
                             }}
                             contentStyle={{
                               borderRadius: "12px",
@@ -812,16 +826,27 @@ export default function Dashboard() {
                               color: "hsl(var(--popover-foreground))",
                             }}
                           />
-                          <Bar dataKey="revenue" radius={[8, 8, 4, 4]} maxBarSize={48}>
-                            {chartData.map((_, index) => (
-                              <Cell
-                                key={`cell-${index}`}
-                                fill={activeBarIndex === index ? "url(#barGradientActive)" : "url(#barGradientInactive)"}
-                                style={{ transition: "fill 0.2s ease", cursor: "pointer" }}
-                              />
-                            ))}
-                          </Bar>
-                        </BarChart>
+                          {showGross && (
+                            <Line
+                              type="monotone"
+                              dataKey="grossRevenue"
+                              stroke="#3b82f6"
+                              strokeWidth={2}
+                              dot={false}
+                              activeDot={{ r: 4 }}
+                            />
+                          )}
+                          {showNet && (
+                            <Line
+                              type="monotone"
+                              dataKey="revenue"
+                              stroke="#22c55e"
+                              strokeWidth={2}
+                              dot={false}
+                              activeDot={{ r: 4 }}
+                            />
+                          )}
+                        </LineChart>
                       </ResponsiveContainer>
                     ) : (
                       <div className="flex items-center justify-center h-[280px] text-muted-foreground text-sm">
@@ -883,6 +908,38 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
+
+                {salesResponse && (
+                  <div className="grid grid-cols-3 gap-4 mt-5" data-testid="section-revenue-kpi">
+                    <div className="rounded-xl border p-4 flex flex-col gap-1" data-testid="kpi-gross-revenue">
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wide">
+                        <span style={{ color: "#3b82f6" }}>●</span>
+                        <span>Заказано</span>
+                        <span className="ml-auto text-[10px] bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded font-normal" title="Все заказы включая отменённые. Совпадает с метрикой «Заказано» в кабинете Ozon">
+                          как в Ozon
+                        </span>
+                      </div>
+                      <div className="text-xl font-bold tabular-nums">{formatCurrency(salesResponse.grossRevenue ?? salesResponse.totalRevenue)}</div>
+                    </div>
+                    <div className="rounded-xl border p-4 flex flex-col gap-1" data-testid="kpi-net-revenue">
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wide">
+                        <span style={{ color: "#22c55e" }}>●</span>
+                        <span>К получению</span>
+                      </div>
+                      <div className="text-xl font-bold tabular-nums">{formatCurrency(salesResponse.netRevenue ?? salesResponse.totalRevenue)}</div>
+                    </div>
+                    <div className="rounded-xl border p-4 flex flex-col gap-1" data-testid="kpi-cancelled-revenue">
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wide">
+                        <span style={{ color: "#ef4444" }}>●</span>
+                        <span>Отменено</span>
+                      </div>
+                      <div className="text-xl font-bold tabular-nums text-red-500">{formatCurrency(salesResponse.cancelledRevenue ?? 0)}</div>
+                      {(salesResponse.cancellationRate ?? 0) > 0 && (
+                        <div className="text-xs text-muted-foreground">{salesResponse.cancellationRate}% отмен</div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
