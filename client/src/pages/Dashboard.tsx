@@ -807,23 +807,26 @@ export default function Dashboard() {
                             width={45}
                           />
                           <Tooltip
-                            labelFormatter={(label: string) => {
-                              const parts = label.split("-");
-                              return parts.length >= 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : label;
-                            }}
-                            formatter={(value: number, name: string) => {
-                              if (name === "grossRevenue") return [formatCurrency(value), "Заказано"];
-                              if (name === "revenue") return [formatCurrency(value), "К получению"];
-                              if (name === "cancelledRevenue") return [formatCurrency(value), "Отменено"];
-                              return [formatCurrency(value), name];
-                            }}
-                            contentStyle={{
-                              borderRadius: "12px",
-                              border: "none",
-                              boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-                              padding: "10px 14px",
-                              background: "hsl(var(--popover))",
-                              color: "hsl(var(--popover-foreground))",
+                            content={(props: any) => {
+                              if (!props.active || !props.payload?.length) return null;
+                              const d = props.payload[0]?.payload;
+                              if (!d) return null;
+                              const label = (() => {
+                                const parts = (props.label || "").split("-");
+                                return parts.length >= 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : props.label;
+                              })();
+                              const gross = d.grossRevenue ?? 0;
+                              const net = d.revenue ?? 0;
+                              const cancelled = d.cancelledRevenue ?? 0;
+                              const cancelPct = gross > 0 ? Math.round((cancelled / gross) * 100) : 0;
+                              return (
+                                <div style={{ borderRadius: "12px", border: "none", boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "10px 14px", background: "hsl(var(--popover))", color: "hsl(var(--popover-foreground))", fontSize: 13 }}>
+                                  <div className="font-semibold mb-1.5">{label}</div>
+                                  <div className="flex items-center gap-2"><span style={{ color: "#3b82f6" }}>●</span><span>Заказано:</span><span className="font-semibold ml-auto pl-4">{formatCurrency(gross)}</span></div>
+                                  <div className="flex items-center gap-2"><span style={{ color: "#22c55e" }}>●</span><span>К получению:</span><span className="font-semibold ml-auto pl-4">{formatCurrency(net)}</span></div>
+                                  <div className="flex items-center gap-2"><span style={{ color: "#ef4444" }}>●</span><span>Отменено:</span><span className="font-semibold ml-auto pl-4">{formatCurrency(cancelled)}{cancelPct > 0 ? ` (${cancelPct}%)` : ""}</span></div>
+                                </div>
+                              );
                             }}
                           />
                           {showGross && (
@@ -922,14 +925,14 @@ export default function Dashboard() {
                       <div className="text-xl font-bold tabular-nums">{formatCurrency(salesResponse.grossRevenue ?? salesResponse.totalRevenue)}</div>
                     </div>
                     <div className="rounded-xl border p-4 flex flex-col gap-1" data-testid="kpi-net-revenue">
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wide">
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wide" title="Реальная выручка: заказы без учёта отменённых и возвратов">
                         <span style={{ color: "#22c55e" }}>●</span>
                         <span>К получению</span>
                       </div>
                       <div className="text-xl font-bold tabular-nums">{formatCurrency(salesResponse.netRevenue ?? salesResponse.totalRevenue)}</div>
                     </div>
                     <div className="rounded-xl border p-4 flex flex-col gap-1" data-testid="kpi-cancelled-revenue">
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wide">
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wide" title="Выручка по отменённым заказам и возвратам за выбранный период">
                         <span style={{ color: "#ef4444" }}>●</span>
                         <span>Отменено</span>
                       </div>
