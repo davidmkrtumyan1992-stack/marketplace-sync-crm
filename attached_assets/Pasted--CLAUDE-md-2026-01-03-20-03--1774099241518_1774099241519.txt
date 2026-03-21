@@ -1,0 +1,100 @@
+Прочитай CLAUDE.md для контекста.
+
+Нужно пересинхронизировать данные за март 2026 (01.03 - 20.03)
+чтобы исправить исторические неточности из-за старых багов:
+- FBO limit был 50 (теряли заказы крупных магазинов)
+- Даты были в UTC вместо МСК
+- Цены брались не из financial_data
+
+ВАЖНО — делать осторожно, не удалять данные за 21 марта и позже!
+
+ШАГ 1 — Сначала посмотри масштаб:
+
+SELECT 
+  DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') as date_msk,
+  COUNT(DISTINCT o.id) as orders,
+  SUM(oi.quantity) as qty,
+  ROUND(SUM(oi.price * oi.quantity)::numeric, 0) as revenue
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+LEFT JOIN order_items oi ON o.id = oi.order_id
+WHERE s.client_id IN ('3364383','3835567','2311038','2496152','4052691')
+AND created_at >= '2026-02-28 21:00:00'
+AND created_at < '2026-03-20 21:00:00'
+GROUP BY DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow')
+ORDER BY date_msk;
+
+ШАГ 2 — Удали заказы за 01-20 марта (только для 5 магазинов Ozon):
+
+DELETE FROM orders
+WHERE store_id IN (
+  SELECT id FROM stores 
+  WHERE client_id IN ('3364383','3835567','2311038','2496152','4052691')
+)
+AND created_at >= '2026-02-28 21:00:00'
+AND created_at < '2026-03-20 21:00:00';
+
+Покажи сколько строк удалено.
+
+ШАГ 3 — Запусти пересинхронизацию через Ozon API.
+
+Для каждого из 5 магазинов сделай запрос FBO и FBS
+за период с 28 февраля 21:00 UTC до 20 марта 21:00 UTC
+(= с 1 марта 00:00 МСК до 20 марта 23:59 МСК).
+
+ВАЖНО — используй пагинацию с offset:
+За 20 дней у крупных магазинов может быть больше 1000 заказов.
+Если API вернул ровно 1000 постингов — делай следующий запрос
+с offset: 1000, потом offset: 2000 и т.д.
+Пока количество возвращённых постингов < 1000.
+Максимум 20 итераций на магазин (предохранитель от бесконечного цикла).
+
+FBO запрос:
+POST https://api-seller.ozon.ru/v2/posting/fbo/list
+{
+  "dir": "asc",
+  "filter": {
+    "since": "2026-02-28T21:00:00Z",
+    "to": "2026-03-20T21:00:00Z",
+    "status": ""
+  },
+  "limit": 1000,
+  "offset": 0,
+  "with": { "financial_data": true }
+}
+
+FBS запрос:
+POST https://api-seller.ozon.ru/v3/posting/fbs/list
+{
+  "dir": "asc",
+  "filter": {
+    "since": "2026-02-28T21:00:00Z",
+    "to": "2026-03-20T21:00:00Z"
+  },
+  "limit": 1000,
+  "offset": 0
+}
+
+Для каждого магазина используй его credentials из marketplace_settings.
+Сохрани все заказы в БД с правильными датами и ценами из financial_data.
+Используй onConflictDoNothing чтобы не создавать дубликаты.
+Логируй прогресс: сколько постингов получено на каждой странице.
+
+ШАГ 4 — После пересинхронизации покажи итог:
+
+SELECT 
+  DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') as date_msk,
+  s.name,
+  COUNT(DISTINCT o.id) as orders,
+  SUM(oi.quantity) as qty,
+  ROUND(SUM(oi.price * oi.quantity)::numeric, 0) as revenue
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+LEFT JOIN order_items oi ON o.id = oi.order_id
+WHERE s.client_id IN ('3364383','3835567','2311038','2496152','4052691')
+AND created_at >= '2026-02-28 21:00:00'
+AND created_at < '2026-03-20 21:00:00'
+GROUP BY DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow'), s.name
+ORDER BY date_msk, s.name;
+
+Не трогать: заказы за 21 марта и позже, заказы Яндекс и WB.
