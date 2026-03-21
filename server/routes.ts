@@ -2778,6 +2778,10 @@ export async function registerRoutes(
       if (!sinceParam || !toParam) {
         return res.status(400).json({ message: "Укажите since и to (ISO UTC строки, напр. '2026-02-28T21:00:00Z')" });
       }
+      const isoUtcRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+      if (!isoUtcRe.test(sinceParam) || !isoUtcRe.test(toParam)) {
+        return res.status(400).json({ message: "since и to должны быть в формате ISO UTC, напр. '2026-02-28T21:00:00Z'" });
+      }
       const sinceDate = new Date(sinceParam);
       const toDate = new Date(toParam);
       if (isNaN(sinceDate.getTime()) || isNaN(toDate.getTime())) {
