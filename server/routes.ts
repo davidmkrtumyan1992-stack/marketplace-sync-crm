@@ -2555,6 +2555,15 @@ export async function registerRoutes(
     }
   });
 
+  /**
+   * ЗОЛОТОЙ СТАНДАРТ OZON СИНХРОНИЗАЦИИ — НЕ ИЗМЕНЯТЬ БЕЗ ВЕСКОЙ ПРИЧИНЫ
+   *
+   * Временная зона: since = предыдущий день 21:00 UTC = 00:00 МСК
+   * FBO limit: 1000 (было 50 — не возвращать!)
+   * FBO цены: из financial_data (не из каталога)
+   * Retry: fetchWithRetry (3 попытки при 429/502/504)
+   * Пагинация: макс 10 страниц × 1000 = 10 000 заказов на магазин
+   */
   // Pull Ozon FBS orders (polling fallback)
   app.post("/api/marketplace/ozon/sync-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {

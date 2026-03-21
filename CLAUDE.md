@@ -78,6 +78,28 @@ organizations → companies → stores → marketplace_settings
 - Систему аутентификации и сессий
 - RBAC middleware (isAuthenticated, requireRole)
 
+### Синхронизация заказов Ozon — Золотой стандарт:
+- since = предыдущий день 21:00:00 UTC (= 00:00:00 МСК текущего дня)
+- to = текущий день 21:00:00 UTC (= 00:00:00 МСК следующего дня)
+- FBO limit: 1000 (НЕ 50!)
+- FBS limit: 1000
+- FBO цены берутся из financial_data (НЕ из каталога товара)
+- Все fetch к api-seller.ozon.ru через fetchWithRetry (3 попытки)
+- Пагинация максимум 10 страниц на магазин
+
+### Логика дашборда — Двойные показатели:
+- grossRevenue = ВСЕ заказы включая cancelled (= "Заказано" в Ozon)
+- netRevenue = только не отменённые (= реальная выручка)
+- getSalesData в storage.ts возвращает ОБА показателя
+- График показывает две линии: синяя (gross) + зелёная (net)
+- Логика универсальна для ВСЕХ маркетплейсов — не переписывать!
+
+### Даты в БД:
+- created_at хранится в UTC
+- Для отображения всегда конвертировать:
+  DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow')
+- НЕ использовать DATE(created_at) без конвертации!
+
 ## Команды
 ```bash
 npm run dev          # запуск dev сервера

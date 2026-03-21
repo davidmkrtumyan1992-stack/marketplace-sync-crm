@@ -845,6 +845,19 @@ export class DatabaseStorage implements IStorage {
       .sort((a, b) => (a.centralStock || 0) - (b.centralStock || 0));
   }
 
+  /**
+   * ЗОЛОТОЙ СТАНДАРТ — НЕ ИЗМЕНЯТЬ БЕЗ ВЕСКОЙ ПРИЧИНЫ
+   *
+   * grossRevenue = ВСЕ заказы включая отменённые (= "Заказано" в Ozon)
+   * netRevenue = только активные заказы (= реальная выручка продавца)
+   *
+   * Логика универсальна для всех МП (Ozon, WB, Яндекс).
+   * При добавлении нового МП — добавить его статус отмены в фильтр ниже.
+   * Текущие статусы отмены:
+   * - Ozon: status='cancelled' OR ozon_status='cancelled'
+   * - Яндекс: yandex_status='CANCELLED' OR yandex_status='RETURNED'
+   * - WB: добавить когда подключат
+   */
   async getSalesData(organizationId: string, options: { days?: number; from?: string; to?: string; storeId?: number } = {}): Promise<SalesResponse> {
     const companyList = await this.getCompanies(organizationId);
     const companyMap = new Map(companyList.map(c => [c.id, c.name]));
