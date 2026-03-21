@@ -1,11 +1,28 @@
 # CloudERP - Inventory & Sales Management System
 
 ## Overview
+CloudERP is a production-ready multi-company cloud ERP/CRM system designed for e-commerce businesses operating on Russian marketplaces (Ozon, Wildberries, Yandex Market). It functions as a "Single Source of Truth" for inventory management, order processing, and financial analytics across various sales channels.
 
-CloudERP is a production-ready multi-company cloud ERP/CRM system designed for e-commerce businesses operating on Russian marketplaces (Ozon, Wildberries, Yandex Market). It functions as a "Single Source of Truth" for inventory management, order processing, and financial analytics across various sales channels. The system supports multi-company and multi-level Role-Based Access Control (RBAC). Key features include a centralized `centralStock` model, smart barcode intake, a Russian tax calculation engine, comprehensive expense tracking, and dynamic dashboards with KPIs, sales charts, and low-stock alerts. It also provides advanced analytics like ABC analysis, CRM for customer management, and full audit logging. The platform is designed for robust marketplace synchronization, offering detailed history logging for Ozon, Wildberries, and Yandex Market, alongside performance optimizations for data loading and refreshing. The system handles Yandex Market FBS order integration, Ozon dual-mode FBS/FBO order management with multi-account support, and global marketplace partitioning in the Orders UI. Additional functionalities include an Ozon profit calculator, product analytics with price simulation, and Excel export for products and P&L reports with real profit KPI tracking.
+Key capabilities include:
+- Multi-company architecture with multi-level Role-Based Access Control (RBAC).
+- Centralized `centralStock` warehouse model with virtual mirroring to storefronts and per-product store exclusions.
+- Smart barcode intake system.
+- Russian tax calculation engine and comprehensive expense tracking.
+- Dynamic dashboard with KPIs, low-stock alerts, sales charts, marketplace revenue breakdown, and pending order indicators.
+- Advanced analytics including ABC analysis for product categorization.
+- CRM for customer management and full audit logging for inventory changes.
+- Robust marketplace synchronization infrastructure with detailed history logging for Ozon, Wildberries, and Yandex Market.
+- Performance optimizations including PostgreSQL indexing, global data prefetching, and debounced search.
+- Yandex Market FBS order integration with polling-based sync, status mapping, and multi-store support.
+- Ozon dual-mode FBS/FBO order management with webhook/polling sync, label printing, and multi-account integration.
+- Global marketplace partitioning in the Orders UI with independent views and filters per marketplace.
+- Ozon Calculator for FBO/FBS profit analysis, including product analytics, cost breakdowns, and price simulation.
+- Custom tax rate settings.
+- Excel export functionality for products and P&L reports, with real profit calculation based on `order_items`.
+- Enhanced Ozon API reliability with retry mechanisms and pagination for order syncing.
+- UI is fully localized in Russian.
 
 ## User Preferences
-
 Preferred communication style: Simple, everyday language.
 
 ## System Architecture
@@ -15,43 +32,43 @@ Preferred communication style: Simple, everyday language.
 - **Routing**: Wouter.
 - **State Management**: TanStack React Query.
 - **UI Components**: shadcn/ui built on Radix UI, styled with Tailwind CSS.
-- **Charts**: Recharts for data visualization.
+- **Charts**: Recharts.
 - **Forms**: React Hook Form with Zod validation.
 - **Build Tool**: Vite.
-- **Localization**: Fully localized in Russian with custom utilities for number and currency formatting.
-- **UI/UX**: Branded splash screen, distinct color schemes for marketplaces (Ozon blue, Yandex Market yellow, Wildberries purple), and clear UI for order management.
 
 ### Backend Architecture
 - **Framework**: Express.js with TypeScript.
-- **API Design**: RESTful endpoints defined in `shared/routes.ts` with Zod validation.
+- **API Design**: RESTful endpoints defined with Zod validation.
 - **Authentication**: Replit Auth (OpenID Connect) via Passport.js, with PostgreSQL-backed sessions.
 - **Database ORM**: Drizzle ORM with PostgreSQL dialect.
 
 ### Data Storage
 - **Database**: PostgreSQL.
-- **Schema**: Defined in `shared/schema.ts`, including tables for companies, stores, products (with `centralStock` and barcode), orders, customers, stock inflow, expenses, user roles, tax settings, marketplace settings, sync history, and audit logs.
+- **Schema**: Includes tables for companies, stores, products (with `centralStock` and barcode), orders, customers, stock inflow, expenses, user roles, tax settings, marketplace settings, sync history, and audit logs.
 
 ### Authentication Flow
 - Leverages Replit's OpenID Connect.
 - Sessions stored in a PostgreSQL `sessions` table.
 - User data synchronized to a `users` table.
-- Role-Based Access Control (RBAC) enforced via middleware, with roles: Owner, Accountant, and Administrator.
-- Data isolation is achieved through an `organizationId` field, tying data to the user's organization.
+- Role-Based Access Control (RBAC) enforced via middleware (Owner, Accountant, Administrator roles).
+- Data isolation achieved through an `organizationId` field for multi-tenancy.
 
 ### Key Design Decisions
-- **Shared Type Safety**: API contracts defined with Zod in `shared/routes.ts` ensure type safety across frontend and backend.
-- **Multi-tenant by User**: Each user is treated as an independent organization, ensuring data isolation.
-- **Centralized Warehouse Model**: A single `centralStock` field manages inventory, simplifying stock tracking.
-- **Marketplace Abstraction**: Generic settings and sync infrastructure are in place for easy integration with marketplace APIs.
-- **Robust Marketplace Sync**: Includes product import, enrichment, and two-way synchronization with marketplaces, where changes are pushed to the marketplace first and local save is conditional on marketplace acceptance, ensuring data integrity. `fetchWithRetry` helper for Ozon API calls and pagination for large data sets.
-- **Performance Optimizations**: PostgreSQL indexes, global data prefetching with TanStack Query, background sync intervals, and automatic data refresh on window focus/reconnect.
-- **Timezone Accuracy**: All date and time operations, especially for marketplace sync and sales data computation, are aligned to Moscow time (MSK) to ensure accuracy.
+- **Shared Type Safety**: API contracts defined with Zod ensure type safety across frontend and backend.
+- **Multi-tenant by User**: Each user operates as an independent organization for data isolation.
+- **Centralized Warehouse Model**: A single `centralStock` field for simplified inventory tracking.
+- **Russian Localization**: Custom utilities for proper Russian formatting.
+- **Marketplace Abstraction**: Generic settings and sync infrastructure support easy integration with various marketplace APIs.
+- **Robust Marketplace Sync**: Includes product import, enrichment, and two-way synchronization with marketplaces, prioritizing marketplace acceptance for data integrity.
+- **Dashboard Sales Analysis**: 60/40 split layout with dual-line LineChart (Gross/Net revenue) and donut chart (marketplace revenue breakdown).
+- **Performance Optimizations**: Global data prefetching with TanStack Query for instant page rendering, aggressive refetching, and background sync intervals.
+- **Golden Standard Store Connection**: Automated marketplace_settings provisioning, ON DELETE CASCADE for data integrity, and real-time credential validation.
+- **Ozon Order Sync Timezone Accuracy**: All sync requests aligned to Moscow midnight to prevent data loss.
 
 ## External Dependencies
 
 ### Database
 - **PostgreSQL**: Primary data store.
-- **Drizzle Kit**: Schema management.
 
 ### Authentication
 - **Replit Auth**: OpenID Connect provider for user authentication.
@@ -59,18 +76,16 @@ Preferred communication style: Simple, everyday language.
 ### Frontend Libraries
 - **@tanstack/react-query**: Server state management.
 - **@tanstack/react-table**: Data tables.
-- **recharts**: Dashboard visualizations.
+- **recharts**: Data visualizations.
 - **date-fns**: Date formatting and localization.
-- **react-hook-form**: Form handling.
-- **@hookform/resolvers**: Validation for forms.
+- **react-hook-form** and **@hookform/resolvers**: Form handling and validation.
 
 ### UI Framework
 - **shadcn/ui**: Component library.
 - **Radix UI**: Underlying UI primitives.
 - **Tailwind CSS**: Styling.
-- **class-variance-authority**: Component variants.
 
 ### Core Integrations
-- **Ozon API (V3)**: Product import, enrichment, two-way inventory/price synchronization, order management (FBS/FBO), label printing, and status display.
+- **Ozon API (V3)**: Marketplace product import, enrichment, and synchronization.
 - **Wildberries API**: Planned integration for marketplace sync.
-- **Yandex Market API**: Integration for FBS order sync, product import, and status management.
+- **Yandex Market API**: Planned integration for marketplace sync.

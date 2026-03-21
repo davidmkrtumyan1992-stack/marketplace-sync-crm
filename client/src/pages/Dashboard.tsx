@@ -24,6 +24,7 @@ import { getMarketplaceStyle } from "@/lib/marketplace";
 import type { DashboardKPI, LowStockProduct, SalesDataPoint, SalesResponse, SyncStatusSummary, MarketplaceBreakdown } from "@shared/schema";
 import { Link } from "wouter";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import type { TooltipProps } from "recharts";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -807,9 +808,9 @@ export default function Dashboard() {
                             width={45}
                           />
                           <Tooltip
-                            content={(props: any) => {
+                            content={(props: TooltipProps<number, string>) => {
                               if (!props.active || !props.payload?.length) return null;
-                              const d = props.payload[0]?.payload;
+                              const d = (props.payload[0] as { payload?: Record<string, number> })?.payload;
                               if (!d) return null;
                               const label = (() => {
                                 const parts = (props.label || "").split("-");
