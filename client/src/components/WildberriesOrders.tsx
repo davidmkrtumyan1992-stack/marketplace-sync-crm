@@ -18,7 +18,7 @@ import {
 import {
   Loader2, Package, PackageSearch, Printer, FileText, FileSpreadsheet,
   XCircle, Truck, CheckCircle, MoreHorizontal, AlertTriangle,
-  RefreshCw, QrCode,
+  QrCode,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
@@ -776,28 +776,6 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
     },
   });
 
-  const syncSuppliesMutation = useMutation({
-    mutationFn: async () => {
-      const body: any = {};
-      if (storeId) body.storeId = storeId;
-      const res = await apiRequest("POST", "/api/wb/supplies/sync", body);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: "Ошибка синхронизации поставок" }));
-        throw new Error(err.message);
-      }
-      return res.json();
-    },
-    onSuccess: (data: any) => {
-      toast({ title: `✓ Синхронизировано ${data.synced} поставок` });
-      queryClient.invalidateQueries({ queryKey: ["/api/wb/supplies"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/wb/orders"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/wb/counts"] });
-    },
-    onError: (e: any) => {
-      toast({ title: "Ошибка синхронизации", description: e.message, variant: "destructive" });
-    },
-  });
-
   const isOrdersTab = activeTab === "new" || activeTab === "archive" || activeTab === "cancelled";
   const isSuppliesTab = activeTab === "assembly" || activeTab === "delivery";
 
@@ -1083,20 +1061,6 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
       {/* ===== ВКЛАДКА НА СБОРКЕ ===== */}
       {activeTab === "assembly" && (
         <div className="space-y-3" data-testid="wb-assembly-supplies">
-          <div className="flex justify-end">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => syncSuppliesMutation.mutate()}
-              disabled={syncSuppliesMutation.isPending}
-              data-testid="button-sync-assembly-supplies"
-            >
-              {syncSuppliesMutation.isPending
-                ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
-                : <RefreshCw className="w-4 h-4 mr-1.5" />}
-              Синхронизировать поставки
-            </Button>
-          </div>
           {supplies.length === 0 ? (
             <EmptyState text="У вас пока нет активных поставок" />
           ) : (
@@ -1161,20 +1125,6 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
       {/* ===== ВКЛАДКА В ДОСТАВКЕ ===== */}
       {activeTab === "delivery" && (
         <div className="space-y-3" data-testid="wb-delivery-supplies">
-          <div className="flex justify-end">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => syncSuppliesMutation.mutate()}
-              disabled={syncSuppliesMutation.isPending}
-              data-testid="button-sync-delivery-supplies"
-            >
-              {syncSuppliesMutation.isPending
-                ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
-                : <RefreshCw className="w-4 h-4 mr-1.5" />}
-              Синхронизировать поставки
-            </Button>
-          </div>
           {supplies.length === 0 ? (
             <EmptyState text="У вас пока нет поставок в доставке" />
           ) : (

@@ -4582,25 +4582,32 @@ export async function registerRoutes(
       const cleanKey = wbSetting.apiKey!.trim();
       const authHeaders = { "Authorization": cleanKey, "Content-Type": "application/json" };
       const resolvedStoreId = wbSetting.storeId ?? null;
+      const displayName = resolvedStoreId ? `store ${resolvedStoreId}` : `org ${orgId}`;
 
-      for (const supplyStatus of ["ACTIVE", "CLOSED"]) {
-        try {
-          const supplyRes = await fetch(
-            `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=${supplyStatus}`,
-            { headers: authHeaders }
-          );
-          if (!supplyRes.ok) {
-            const errText = await supplyRes.text().catch(() => "");
-            errors.push(`[${supplyStatus}] WB API ${supplyRes.status}: ${errText.slice(0, 100)}`);
-            continue;
-          }
-          const supplyData = await supplyRes.json();
+      // ── ACTIVE supplies ─────────────────────────────────────────────────────
+      // Collect returned IDs for mirror cleanup (only if API returns 200 OK)
+      let activeSupplyIds: Set<string> | null = null;
+
+      try {
+        const activeRes = await fetch(
+          `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=ACTIVE`,
+          { headers: authHeaders }
+        );
+        if (!activeRes.ok) {
+          const errText = await activeRes.text().catch(() => "");
+          errors.push(`[ACTIVE] WB API ${activeRes.status}: ${errText.slice(0, 100)}`);
+          console.warn(`[wb-supply-sync] API error for ${displayName} (${activeRes.status}), skipping cleanup`);
+        } else {
+          const supplyData = await activeRes.json();
           const supplies: any[] = supplyData.supplies || supplyData.list || [];
+          activeSupplyIds = new Set<string>();
 
           for (const supply of supplies) {
             const rawId = supply.id || supply.supplyId || supply.supply_id || "";
             const supplyId = String(rawId);
             if (!supplyId || supplyId === "undefined" || supplyId === "null") continue;
+
+            activeSupplyIds.add(supplyId);
 
             const existingRows = await db.execute(sql`
               SELECT id FROM wb_supplies WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
@@ -4608,18 +4615,15 @@ export async function registerRoutes(
             const existing = ((existingRows as any).rows || existingRows)[0];
 
             const supplyName = supply.name || null;
-            const dbStatus = supplyStatus === "ACTIVE" ? "open" : "closed";
             const createdAtRaw = supply.createdAt || supply.created_at;
             const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
-            const closedAtRaw = supply.closedAt || supply.closed_at;
-            const closedAtTs = closedAtRaw ? new Date(closedAtRaw) : null;
 
             if (existing) {
               await db.execute(sql`
                 UPDATE wb_supplies SET
                   name = ${supplyName},
-                  status = ${dbStatus},
-                  closed_at = ${closedAtTs}
+                  status = 'open',
+                  closed_at = NULL
                 WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
               `);
             } else {
@@ -4628,13 +4632,13 @@ export async function registerRoutes(
                 storeId: resolvedStoreId ?? undefined,
                 organizationId: orgId,
                 name: supplyName,
-                status: dbStatus,
+                status: "open",
                 createdAt: createdAtTs,
-                closedAt: closedAtTs ?? undefined,
               } as any);
             }
             totalSynced++;
 
+            // Attach orders to this supply
             try {
               const ordersRes = await fetch(
                 `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`,
@@ -4658,10 +4662,96 @@ export async function registerRoutes(
               console.warn(`[wb-supplies-sync] Orders fetch for supply ${supplyId}:`, e.message);
             }
           }
-        } catch (e: any) {
-          errors.push(`[${supplyStatus}] Error: ${e.message}`);
-          console.error(`[wb-supplies-sync] ${supplyStatus} error:`, e.message);
+
+          // ── MIRROR CLEANUP: close stale open supplies not present in WB ─────
+          // Only runs when ACTIVE fetch succeeded (200 OK) and store is known
+          let closedCount = 0;
+          if (resolvedStoreId !== null) {
+            const openRows = await db.execute(sql`
+              SELECT supply_id FROM wb_supplies
+              WHERE status = 'open'
+                AND store_id = ${resolvedStoreId}
+                AND organization_id = ${orgId}
+            `);
+            const openSupplies: any[] = (openRows as any).rows || openRows;
+            const toClose = openSupplies
+              .map((r: any) => String(r.supply_id))
+              .filter((id: string) => !activeSupplyIds!.has(id));
+
+            for (const sid of toClose) {
+              await db.execute(sql`
+                UPDATE wb_supplies
+                SET status = 'closed', closed_at = NOW()
+                WHERE supply_id = ${sid}
+                  AND status = 'open'
+                  AND store_id = ${resolvedStoreId}
+                  AND organization_id = ${orgId}
+              `);
+            }
+            closedCount = toClose.length;
+          }
+
+          console.log(`[wb-supply-sync] ${displayName}: ${activeSupplyIds.size} активных в WB, закрыто устаревших: ${closedCount}`);
         }
+      } catch (e: any) {
+        errors.push(`[ACTIVE] Error: ${e.message}`);
+        console.error(`[wb-supplies-sync] ACTIVE error:`, e.message);
+      }
+
+      // ── CLOSED supplies ──────────────────────────────────────────────────────
+      try {
+        const closedRes = await fetch(
+          `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=CLOSED`,
+          { headers: authHeaders }
+        );
+        if (!closedRes.ok) {
+          const errText = await closedRes.text().catch(() => "");
+          errors.push(`[CLOSED] WB API ${closedRes.status}: ${errText.slice(0, 100)}`);
+        } else {
+          const supplyData = await closedRes.json();
+          const supplies: any[] = supplyData.supplies || supplyData.list || [];
+
+          for (const supply of supplies) {
+            const rawId = supply.id || supply.supplyId || supply.supply_id || "";
+            const supplyId = String(rawId);
+            if (!supplyId || supplyId === "undefined" || supplyId === "null") continue;
+
+            const existingRows = await db.execute(sql`
+              SELECT id FROM wb_supplies WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+            `);
+            const existing = ((existingRows as any).rows || existingRows)[0];
+
+            const supplyName = supply.name || null;
+            const createdAtRaw = supply.createdAt || supply.created_at;
+            const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
+            const closedAtRaw = supply.closedAt || supply.closed_at;
+            const closedAtTs = closedAtRaw ? new Date(closedAtRaw) : null;
+
+            if (existing) {
+              await db.execute(sql`
+                UPDATE wb_supplies SET
+                  name = ${supplyName},
+                  status = 'closed',
+                  closed_at = ${closedAtTs}
+                WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+              `);
+            } else {
+              await db.insert(wbSuppliesTable).values({
+                supplyId,
+                storeId: resolvedStoreId ?? undefined,
+                organizationId: orgId,
+                name: supplyName,
+                status: "closed",
+                createdAt: createdAtTs,
+                closedAt: closedAtTs ?? undefined,
+              } as any);
+            }
+            totalSynced++;
+          }
+        }
+      } catch (e: any) {
+        errors.push(`[CLOSED] Error: ${e.message}`);
+        console.error(`[wb-supplies-sync] CLOSED error:`, e.message);
       }
     }
 
