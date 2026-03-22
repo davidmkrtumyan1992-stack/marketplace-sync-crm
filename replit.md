@@ -20,7 +20,7 @@ Key capabilities include:
 - Custom tax rate settings.
 - Excel export functionality for products and P&L reports, with real profit calculation based on `order_items`.
 - Enhanced Ozon API reliability with retry mechanisms and pagination for order syncing.
-- Wildberries FBS supply management: tabbed UI (New/Assembly/Delivery/Archive/Cancelled), bulk order selection, supply creation, sticker printing (58×40mm), picking-list generation, and supply closing.
+- Wildberries FBS supply management: fully redesigned «Mirror» UI matching WB Seller Cabinet — tabbed interface (New/Assembly/Delivery/Archive/Cancelled), rich order/supply columns, time-ago badges, 48px product photos, dropdown ··· menus, supply rename, picking-list export (PDF/Excel/Screen), sticker printing (58×40mm), 72h filter for new orders, archive auto-sync from WB API, and supply closing.
 - UI is fully localized in Russian.
 
 ## User Preferences

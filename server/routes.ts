@@ -4584,6 +4584,7 @@ export async function registerRoutes(
         WHERE o.source = 'wildberries'
           AND o.organization_id = ${orgId}
           ${storeId ? sql`AND o.store_id = ${storeId}` : sql``}
+          ${status === "new" ? sql`AND o.created_at >= NOW() - INTERVAL '72 hours'` : sql``}
         ORDER BY o.id, o.created_at DESC
       `);
 
@@ -4596,11 +4597,11 @@ export async function registerRoutes(
           case "new":
             return ["new", "waiting"].includes(ws) && !supplyId;
           case "assembly":
-            return supplyId && !["complete", "indelivery", "delivering", "delivered", "cancel", "user_cancel", "declined"].includes(ws);
+            return supplyId && !["complete", "indelivery", "delivering", "delivered", "sold", "cancel", "user_cancel", "declined"].includes(ws);
           case "delivery":
             return ["complete", "indelivery", "delivering"].includes(ws);
           case "archive":
-            return ws === "delivered";
+            return ["delivered", "sold"].includes(ws);
           case "cancelled":
             return ["cancel", "user_cancel", "declined"].includes(ws);
           default:
@@ -4608,9 +4609,150 @@ export async function registerRoutes(
         }
       });
 
+      // Архив: если < 100 записей — фоновая синхронизация с WB API (последние 30 дней, статус sold)
+      if (status === "archive" && filtered.length < 100) {
+        setImmediate(async () => {
+          try {
+            const allSettings = await storage.getMarketplaceSettings(orgId);
+            const wbSettings = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
+            const dateFrom = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
+            for (const wbSetting of wbSettings) {
+              const cleanKey = wbSetting.apiKey!.trim();
+              const authHeaders = { "Authorization": cleanKey, "Content-Type": "application/json" };
+              const resolvedStoreId = wbSetting.storeId ?? null;
+              const resolvedCompanyId = wbSetting.companyId ?? null;
+              let resolvedStoreName: string | null = null;
+              if (resolvedStoreId) {
+                const store = await storage.getStore(resolvedStoreId);
+                if (store) resolvedStoreName = store.name;
+              }
+              try {
+                const url = `${WB_MARKETPLACE_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom}`;
+                const r = await fetch(url, { headers: authHeaders });
+                if (!r.ok) continue;
+                const data = await r.json();
+                const soldOrders = (data?.orders || []).filter((o: any) => (o.wbStatus || o.status) === "sold");
+                for (const wbOrder of soldOrders) {
+                  try {
+                    const wbOrderId = String(wbOrder.id);
+                    const existing = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
+                    if (existing) continue;
+                    const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
+                    const article = wbOrder.article || wbOrder.supplierArticle || "";
+                    const qty = wbOrder.quantity || 1;
+                    let productId: number | null = null;
+                    if (article) {
+                      const [dbProduct] = await db.select().from(productsTable)
+                        .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
+                      if (dbProduct) productId = dbProduct.id;
+                    }
+                    const createdAtRaw = wbOrder.createdAt;
+                    const createdAtTs = createdAtRaw
+                      ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+                      : new Date();
+                    await storage.createOrder({
+                      orderNumber: `WB-${wbOrderId}`,
+                      status: "delivered",
+                      totalAmount: totalAmount.toFixed(2),
+                      source: "wildberries",
+                      externalId: wbOrderId,
+                      postingNumber: null, ozonStatus: null, yandexStatus: null,
+                      wbOrderId, wbStatus: "sold",
+                      wbRid: wbOrder.rid ? String(wbOrder.rid) : null,
+                      wbSupplyId: wbOrder.supplyId ? String(wbOrder.supplyId) : null,
+                      fulfillmentType: "FBS",
+                      storeId: resolvedStoreId ?? undefined,
+                      sourceStoreName: resolvedStoreName ?? undefined,
+                      companyId: resolvedCompanyId ?? undefined,
+                      organizationId: orgId,
+                      createdAt: createdAtTs,
+                    } as any, productId
+                      ? [{ productId, quantity: qty, price: totalAmount }]
+                      : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: wbOrder.subject || "WB товар", quantity: qty, price: totalAmount }]);
+                  } catch (e: any) {
+                    console.error(`[wb-archive-sync] Order ${wbOrder.id} error:`, e.message);
+                  }
+                }
+              } catch (e: any) {
+                console.error(`[wb-archive-sync] Store error:`, e.message);
+              }
+            }
+          } catch (e: any) {
+            console.error("[wb-archive-sync] Error:", e.message);
+          }
+        });
+      }
+
       res.json(filtered);
     } catch (error: any) {
       console.error("[wb-orders] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // GET /api/wb/supplies — список поставок из таблицы wb_supplies с количеством заказов
+  app.get("/api/wb/supplies", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const status = req.query.status as string || "open";
+      const storeId = req.query.storeId ? Number(req.query.storeId) : null;
+
+      const rows = await db.execute(sql`
+        SELECT
+          ws.id, ws.supply_id, ws.name, ws.status, ws.store_id,
+          ws.created_at, ws.closed_at,
+          s.name as store_name,
+          COUNT(o.id) as orders_count
+        FROM wb_supplies ws
+        LEFT JOIN stores s ON ws.store_id = s.id
+        LEFT JOIN orders o ON o.wb_supply_id = ws.supply_id AND o.organization_id = ws.organization_id
+        WHERE ws.organization_id = ${orgId}
+          ${status !== "all" ? sql`AND ws.status = ${status}` : sql``}
+          ${storeId ? sql`AND ws.store_id = ${storeId}` : sql``}
+        GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
+        ORDER BY ws.created_at DESC
+      `);
+
+      res.json((rows as any).rows || rows);
+    } catch (error: any) {
+      console.error("[wb-supplies-list] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // PATCH /api/wb/supplies/:supplyId/rename — переименовать поставку
+  app.patch("/api/wb/supplies/:supplyId/rename", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const supplyId = String(req.params.supplyId);
+      const { name, storeId } = req.body;
+
+      if (!name?.trim()) {
+        return res.status(400).json({ message: "Название не может быть пустым" });
+      }
+
+      // Попытка переименования через WB API (PATCH /api/v3/supplies/{id})
+      const cleanApiKey = await getWbApiKeyForStore(orgId, storeId ? Number(storeId) : null);
+      if (cleanApiKey) {
+        try {
+          await fetch(`${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}`, {
+            method: "PATCH",
+            headers: { "Authorization": cleanApiKey, "Content-Type": "application/json" },
+            body: JSON.stringify({ name: name.trim() }),
+          });
+        } catch (e: any) {
+          console.warn(`[wb-rename-supply] WB API rename failed (non-critical):`, e.message);
+        }
+      }
+
+      // Обновить название в локальной БД
+      await db.update(wbSuppliesTable)
+        .set({ name: name.trim() })
+        .where(and(eq(wbSuppliesTable.supplyId, supplyId), eq(wbSuppliesTable.organizationId, orgId)));
+
+      res.json({ success: true, supplyId, name: name.trim() });
+    } catch (error: any) {
+      console.error("[wb-rename-supply] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });

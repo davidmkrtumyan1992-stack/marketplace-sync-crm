@@ -430,44 +430,68 @@ OR yandexStatus IN ('CANCELLED','RETURNED')
 **Цвет:** WB_COLOR = `#7631ff` (фиолетовый) — используется для всех WB-элементов: вкладки, кнопки, sticky-панель, цвет таба Wildberries в MARKETPLACE_TABS.
 
 **Вкладки (5 штук):**
-| Ключ | Условие фильтрации |
-|---|---|
-| new | wb_status IN ('new','waiting') AND wb_supply_id IS NULL |
-| assembly | wb_supply_id IS NOT NULL AND wb_status NOT IN ('complete','indelivery','delivering','delivered','cancel','user_cancel','declined') |
-| delivery | wb_status IN ('complete','indelivery','delivering') |
-| archive | wb_status = 'delivered' |
-| cancelled | wb_status IN ('cancel','user_cancel','declined') |
+| Ключ | Источник данных | Условие |
+|---|---|---|
+| new | GET /api/wb/orders?status=new | wb_status IN (new,waiting) AND supply_id IS NULL AND created_at >= NOW()-72h |
+| assembly | GET /api/wb/supplies?status=open | wb_supplies.status = 'open' |
+| delivery | GET /api/wb/supplies?status=closed | wb_supplies.status = 'closed' |
+| archive | GET /api/wb/orders?status=archive | wb_status IN (delivered, sold) |
+| cancelled | GET /api/wb/orders?status=cancelled | wb_status IN (cancel, user_cancel, declined) |
 
 **Вкладка «Новые»:**
-- Таблица с чекбоксами (Фото/Артикул/Название/Сумма/Дата/Магазин)
-- Sticky-панель снизу при выборе заказов: «Создать поставку»
+- Таблица с чекбоксами
+- Колонки: Заказ (номер + «X ч Y мин назад» бейдж + МГТ), Товар (48px фото + название + артикул), Стоимость, Склад (Мой склад / store_name), ··· меню
+- Sticky-панель снизу при выборе: «Создать поставку» (фиолетовая кнопка)
 - CreateSupplyDialog — подтверждение с перечнем заказов
 
 **Вкладка «На сборке»:**
-- Карточки SupplyCard, сгруппированные по wb_supply_id
-- Кнопки: «Печать стикеров» / «Лист подбора» / «Закрыть поставку»
-- Accordion (разворот списка заказов поставки)
+- Таблица поставок из GET /api/wb/supplies?status=open
+- Колонки: Поставка (название + ID + МГТ), QR-код (supply_id), Заказы/Грузоместа, Этап (оранжевый «Ждёт передачи»), Склад, ··· меню
+- Меню ···: Печать стикеров / Лист подбора → PDF|Excel|Экран / Переименовать / Закрыть поставку
+
+**Вкладка «В доставке»:**
+- Таблица поставок из GET /api/wb/supplies?status=closed
+- Колонки: Поставка, QR-код, Статус (синий «Поставка в обработке»), Время сканирования (closed_at), Заказы/Грузоместа, Склад
+
+**Вкладка «Архив»:**
+- Таблица заказов wb_status IN (delivered, sold)
+- Колонки: Заказ, Товар, Стоимость, Склад, Статус (синий «Отсортировано ›»), Номер стикера (wb_rid), Время доставки
+
+**Вкладка «Отменённые»:**
+- Жёлтая плашка-предупреждение с кнопкой «Управление остатками» → /inventory
+- Колонки: Заказ, Товар, Стоимость, Склад, Баркод, Причина отмены
+
+**Пустые состояния:** PackageSearch (Lucide) + «У вас пока нет заказов в этом статусе»
 
 **API-эндпоинты WB FBS:**
 ```
-GET  /api/wb/orders?status=new|assembly|delivery|archive|cancelled&storeId=N
-POST /api/wb/supplies          body: {storeId, orderIds[]}
-POST /api/wb/stickers          body: {storeId, wbOrderIds[]}  → stickers[{orderId, file (base64 PNG 58×40)}]
-GET  /api/wb/supplies/:id/picking-list → {supplyId, items[{productName, sku, barcode, imageUrl, quantity}]}
-POST /api/wb/supplies/:id/close        body: {storeId}
+GET   /api/wb/orders?status=new|archive|cancelled&storeId=N
+GET   /api/wb/supplies?status=open|closed&storeId=N  → [{supply_id, name, status, store_id, store_name, orders_count, created_at, closed_at}]
+POST  /api/wb/supplies          body: {storeId, orderIds[]}
+PATCH /api/wb/supplies/:id/rename  body: {name, storeId}
+POST  /api/wb/stickers          body: {storeId, wbOrderIds[]}  → stickers[{orderId, file (base64 PNG 58×40)}]
+GET   /api/wb/supplies/:id/picking-list → {supplyId, items[{productName, sku, barcode, imageUrl, quantity, orderId}]}
+POST  /api/wb/supplies/:id/close        body: {storeId}
 ```
 
+**Логика archive auto-sync:** Если GET /api/wb/orders?status=archive возвращает < 100 строк, запускается фоновый процесс (setImmediate): запрос к WB API /api/v3/orders за последние 30 дней, фильтрация по status=sold, сохранение новых заказов в БД.
+
 **Создание поставки (POST /api/wb/supplies):**
-1. `POST /api/v3/supplies` → supplyId
-2. Для каждого заказа: `PATCH /api/v3/supplies/{supplyId}/orders/{wbOrderId}`
-3. Обновить `wb_supply_id` в БД
-4. Вставить запись в `wb_supplies`
+1. Валидация: все orderIds принадлежат storeId, не в поставке
+2. `POST /api/v3/supplies` → supplyId
+3. Для каждого заказа: `PATCH /api/v3/supplies/{supplyId}/orders/{wbOrderId}`
+4. Обновить `wb_supply_id` в БД
+5. Вставить запись в `wb_supplies`
 
-**Печать стикеров:** POST /api/v3/orders/stickers?type=png&width=58&height=40 → base64 PNG → window.print() в новой вкладке, @page {size: 58mm 40mm}
+**Переименование поставки:** PATCH /api/v3/supplies/{supplyId} (WB API, non-critical) + UPDATE wb_supplies SET name = ... WHERE supply_id = ...
 
-**Лист подбора:** SELECT из БД orders+order_items+products по wb_supply_id → HTML-таблица → window.print()
+**Печать стикеров:** POST /api/v3/orders/stickers?type=png&width=58&height=40 → base64 PNG → window.print(), @page {size: 58mm 40mm}
 
-**Закрытие поставки:** `PATCH /api/v3/supplies/{supplyId}/deliver` + обновить status='closed' в wb_supplies (409 = уже закрыта, не ошибка)
+**Лист подбора PDF/Экран:** SELECT из БД по wb_supply_id → HTML A4 → window.print()
+
+**Лист подбора Excel:** import("xlsx") → aoa_to_sheet → writeFile(`supply_{id}.xlsx`)
+
+**Закрытие поставки:** `PATCH /api/v3/supplies/{supplyId}/deliver` + UPDATE wb_supplies SET status='closed', closed_at=NOW() (409 = уже закрыта, не ошибка)
 
 ### 4.6 Список товаров (страница Products)
 **Колонки таблицы:**
