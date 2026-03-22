@@ -176,8 +176,15 @@ function RenameSupplyDialog({
       }
       return res.json();
     },
-    onSuccess: () => {
-      toast({ title: "Поставка переименована" });
+    onSuccess: (data: any) => {
+      if (data.wbApiWarning) {
+        toast({
+          title: "Переименовано локально",
+          description: `Название обновлено в системе. Примечание: ${data.wbApiWarning}`,
+        });
+      } else {
+        toast({ title: "Поставка переименована" });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/wb/supplies"] });
       onSuccess();
       onClose();

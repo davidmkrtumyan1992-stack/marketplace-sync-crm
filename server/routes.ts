@@ -4611,10 +4611,15 @@ export async function registerRoutes(
 
       // Архив: если < 100 записей — фоновая синхронизация с WB API (последние 30 дней, статус sold)
       if (status === "archive" && filtered.length < 100) {
+        const requestedStoreId = storeId ? Number(storeId) : null;
         setImmediate(async () => {
           try {
             const allSettings = await storage.getMarketplaceSettings(orgId);
-            const wbSettings = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
+            // Если в запросе указан storeId — синхронизируем только этот магазин
+            const wbSettings = allSettings.filter(s =>
+              s.marketplace === "wildberries" && s.isActive && s.apiKey &&
+              (requestedStoreId === null || s.storeId === requestedStoreId)
+            );
             const dateFrom = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
             for (const wbSetting of wbSettings) {
               const cleanKey = wbSetting.apiKey!.trim();
@@ -4732,25 +4737,32 @@ export async function registerRoutes(
       }
 
       // Попытка переименования через WB API (PATCH /api/v3/supplies/{id})
+      let wbApiWarning: string | null = null;
       const cleanApiKey = await getWbApiKeyForStore(orgId, storeId ? Number(storeId) : null);
       if (cleanApiKey) {
         try {
-          await fetch(`${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}`, {
+          const wbRes = await fetch(`${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}`, {
             method: "PATCH",
             headers: { "Authorization": cleanApiKey, "Content-Type": "application/json" },
             body: JSON.stringify({ name: name.trim() }),
           });
+          if (!wbRes.ok) {
+            const errBody = await wbRes.text().catch(() => "");
+            wbApiWarning = `WB API вернул ${wbRes.status}: ${errBody.slice(0, 120)}`;
+            console.warn(`[wb-rename-supply] WB API rename partial failure (${wbRes.status}):`, errBody.slice(0, 200));
+          }
         } catch (e: any) {
-          console.warn(`[wb-rename-supply] WB API rename failed (non-critical):`, e.message);
+          wbApiWarning = `WB API недоступен: ${e.message}`;
+          console.warn(`[wb-rename-supply] WB API rename network error:`, e.message);
         }
       }
 
-      // Обновить название в локальной БД
+      // Обновить название в локальной БД (всегда, независимо от WB API)
       await db.update(wbSuppliesTable)
         .set({ name: name.trim() })
         .where(and(eq(wbSuppliesTable.supplyId, supplyId), eq(wbSuppliesTable.organizationId, orgId)));
 
-      res.json({ success: true, supplyId, name: name.trim() });
+      res.json({ success: true, supplyId, name: name.trim(), wbApiWarning });
     } catch (error: any) {
       console.error("[wb-rename-supply] Error:", error);
       res.status(500).json({ message: error.message });
