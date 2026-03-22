@@ -4593,7 +4593,7 @@ export async function registerRoutes(
           `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=ACTIVE`,
           { headers: authHeaders }
         );
-        if (!activeRes.ok) {
+        if (activeRes.status !== 200) {
           const errText = await activeRes.text().catch(() => "");
           errors.push(`[ACTIVE] WB API ${activeRes.status}: ${errText.slice(0, 100)}`);
           console.warn(`[wb-supply-sync] API error for ${displayName} (${activeRes.status}), skipping cleanup`);
