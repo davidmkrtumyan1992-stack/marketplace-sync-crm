@@ -20,6 +20,7 @@ Key capabilities include:
 - Custom tax rate settings.
 - Excel export functionality for products and P&L reports, with real profit calculation based on `order_items`.
 - Enhanced Ozon API reliability with retry mechanisms and pagination for order syncing.
+- Wildberries FBS supply management: tabbed UI (New/Assembly/Delivery/Archive/Cancelled), bulk order selection, supply creation, sticker printing (58×40mm), picking-list generation, and supply closing.
 - UI is fully localized in Russian.
 
 ## User Preferences

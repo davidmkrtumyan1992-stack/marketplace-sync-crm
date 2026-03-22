@@ -134,6 +134,7 @@ npm run build        # production сборка
 ✓ Пагинация с предохранителем 10 страниц для FBO/FBS sync
 ✓ Двойные показатели выручки на дашборде: Gross (Заказано) / Net (К получению) / Отменено — LineChart с двумя линиями, чекбоксы, 3 KPI-карточки, доnut переключается между gross/net breakdown
 ✓ WB FBS синхронизация заказов — autoSyncWbOrders каждые 5 мин, POST /api/marketplace/wildberries/sync-orders, wbStatus → internal status mapping, isCancelledOrder включает WB cancel/user_cancel/declined
+✓ WB FBS интерфейс управления поставками — WildberriesOrders.tsx: вкладки (Новые/На сборке/В доставке/Архив/Отменённые), чекбоксы выбора заказов, создание поставки (POST /api/wb/supplies), печать стикеров 58×40мм (POST /api/wb/stickers), лист подбора (GET /api/wb/supplies/:id/picking-list), закрытие поставки (POST /api/wb/supplies/:id/close); WB_COLOR=#7631ff
 📋 Синхронизация цены Яндекс Маркет — планируется
 
 ## Известные баги

@@ -32,6 +32,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useState, useMemo } from "react";
 import type { Product } from "@shared/schema";
 import { useLocation } from "wouter";
+import WildberriesOrders from "@/components/WildberriesOrders";
 
 interface DirectSaleItem {
   productId: number;
@@ -659,25 +660,7 @@ export default function Orders() {
                 ))}
               </div>
             )}
-
-            <div className="flex flex-wrap items-center gap-2" data-testid="wb-sub-filter-tabs">
-              {WB_SUB_FILTERS.map((sub) => {
-                const Icon = sub.icon;
-                return (
-                  <Button
-                    key={sub.key}
-                    variant={wbSubFilter === sub.key ? "default" : "ghost"}
-                    size="sm"
-                    className={wbSubFilter === sub.key ? "" : "text-muted-foreground"}
-                    onClick={() => setWbSubFilter(sub.key)}
-                    data-testid={`button-wb-sub-${sub.key}`}
-                  >
-                    <Icon className="w-3.5 h-3.5 mr-1.5" />
-                    {sub.label}
-                  </Button>
-                );
-              })}
-            </div>
+            <WildberriesOrders storeId={storeFilter !== "all" ? storeFilter : null} />
           </>
         )}
 
