@@ -4570,7 +4570,7 @@ export async function registerRoutes(
       const storeId = req.query.storeId ? Number(req.query.storeId) : null;
 
       const allOrders = await db.execute(sql`
-        SELECT 
+        SELECT DISTINCT ON (o.id)
           o.id, o.order_number, o.wb_order_id, o.wb_status,
           o.wb_supply_id, o.wb_rid, o.total_amount, o.created_at,
           o.store_id, o.source_store_name,
@@ -4584,7 +4584,7 @@ export async function registerRoutes(
         WHERE o.source = 'wildberries'
           AND o.organization_id = ${orgId}
           ${storeId ? sql`AND o.store_id = ${storeId}` : sql``}
-        ORDER BY o.created_at DESC
+        ORDER BY o.id, o.created_at DESC
       `);
 
       const rows = (allOrders as any).rows || allOrders;
@@ -4627,6 +4627,20 @@ export async function registerRoutes(
       const cleanApiKey = await getWbApiKeyForStore(orgId, Number(storeId));
       if (!cleanApiKey) {
         return res.status(400).json({ message: "WB API-ключ не найден для магазина" });
+      }
+
+      // Проверить что все заказы принадлежат указанному магазину и ещё не в поставке
+      const numericOrderIds = orderIds.map(Number);
+      const existingOrders = await db.select().from(ordersTable).where(
+        and(inArray(ordersTable.id, numericOrderIds), eq(ordersTable.organizationId, orgId))
+      );
+      const wrongStore = existingOrders.filter(o => o.storeId !== Number(storeId));
+      if (wrongStore.length > 0) {
+        return res.status(400).json({ message: `${wrongStore.length} заказов принадлежат другому магазину` });
+      }
+      const alreadyInSupply = existingOrders.filter(o => o.wbSupplyId);
+      if (alreadyInSupply.length > 0) {
+        return res.status(400).json({ message: `${alreadyInSupply.length} заказов уже добавлены в поставку` });
       }
 
       const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };

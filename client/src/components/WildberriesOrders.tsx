@@ -128,6 +128,11 @@ function SupplyCard({
     setPrintingList(true);
     try {
       const res = await fetch(`/api/wb/supplies/${supplyId}/picking-list`, { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: `Ошибка сервера (${res.status})` }));
+        toast({ title: "Ошибка листа подбора", description: err.message, variant: "destructive" });
+        return;
+      }
       const data = await res.json();
       const items: any[] = data.items || [];
       const rows = items.map((item: any) => `
