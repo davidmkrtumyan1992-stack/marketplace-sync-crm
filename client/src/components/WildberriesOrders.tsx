@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Loader2, Package, PackageSearch, Printer, FileText, FileSpreadsheet,
-  XCircle, Truck, CheckCircle, MoreHorizontal, AlertTriangle,
+  XCircle, Truck, CheckCircle, MoreHorizontal,
   QrCode,
 } from "lucide-react";
 import { format } from "date-fns";
@@ -1243,16 +1243,18 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
       {/* ===== ВКЛАДКА ОТМЕНЁННЫЕ ===== */}
       {activeTab === "cancelled" && (
         <div className="space-y-3" data-testid="wb-cancelled-orders">
-          <div className="flex items-start gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 dark:bg-amber-900/20 dark:border-amber-700">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm text-amber-800 dark:text-amber-300">
-                Товары из отменённых заказов необходимо вернуть в остатки. Проверьте и обновите остатки вручную.
-              </p>
-            </div>
-            <Link href="/inventory">
-              <Button size="sm" style={{ backgroundColor: WB_COLOR }} className="text-white flex-shrink-0" data-testid="button-go-inventory">
-                Управление остатками
+          <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 mb-4 flex items-center justify-between text-sm text-blue-700">
+            <span>
+              ℹ️ Остаток у отменённого товара не прибавится автоматически. Измените его вручную во вкладке «Остатки», если товар вернулся на склад.
+            </span>
+            <Link href="/products">
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-4 text-[#7631ff] border-[#7631ff] hover:bg-violet-50 shrink-0"
+                data-testid="button-go-inventory"
+              >
+                Перейти в остатки
               </Button>
             </Link>
           </div>

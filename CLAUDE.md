@@ -141,6 +141,7 @@ npm run build        # production сборка
 ✓ status_label в GET /api/wb/supplies: open→«Ждёт передачи в доставку», closed→«Поставка в обработке»
 ✓ SupplyDetailDialog — диалог с таблицей заказов поставки (GET /api/wb/orders?supplyId=...)
 ✓ Зеркальная синхронизация поставок WB — syncWbSuppliesForOrg разделяет ACTIVE и CLOSED блоки; после успешного ACTIVE-фетча (200 OK) закрывает устаревшие «open»-поставки в БД (SET status='closed', closed_at=NOW()) которые отсутствуют в ответе WB API — только для записей с store_id != null; кнопки ручного «Синхронизировать поставки» удалены из UI (вкладки На сборке и В доставке); лог: [wb-supply-sync] store {id}: {N} активных в WB, закрыто устаревших: {M}
+✓ WB вкладка «Отменённые» — исправлены все три проблемы: (1) оранжевый блок заменён на синий информационный с кнопкой «Перейти в остатки» → /products; (2) wbStatusToInternal расширен: cancel_ignore + defect + cancelled → "cancelled"; (3) фильтр GET /api/wb/orders?status=cancelled включает defect; POST /api/wb/sync-cancelled — бэкфилл за 30 дней; startup авто-запуск бэкфилла если 0 cancelled WB заказов в БД
 📋 Синхронизация цены Яндекс Маркет — планируется
 
 ## Известные баги
