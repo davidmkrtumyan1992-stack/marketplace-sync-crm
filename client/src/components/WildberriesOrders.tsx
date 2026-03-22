@@ -910,16 +910,11 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
     }
 
     const printHTML = `<html><head><title>QR-коды поставок</title><style>
-      @page { size: A4; margin: 10mm; }
-      body { font-family: Arial, sans-serif; margin: 0; }
-      .qr-page { display: flex; flex-direction: column; align-items: center; page-break-after: always; padding: 20px; gap: 12px; }
-      h2 { font-size: 14px; color: #333; margin: 0; }
-      img { max-width: 300px; max-height: 300px; border: 1px solid #ddd; padding: 12px; border-radius: 8px; }
+      @page { size: 58mm 40mm; margin: 0; }
+      body { margin: 0; padding: 0; }
+      img { width: 58mm; height: 40mm; display: block; page-break-after: always; }
     </style></head><body>
-      ${results.map((r) => `<div class="qr-page">
-        <h2>QR-код поставки ${r.supplyId}</h2>
-        <img src="data:image/png;base64,${r.file}" />
-      </div>`).join("")}
+      ${results.map((r) => `<img src="data:image/png;base64,${r.file}" />`).join("")}
     </body></html>`;
 
     const win = window.open("", "_blank");
@@ -1062,7 +1057,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
           {/* Sticky панель выбора заказов */}
           {selectedOrderIds.size > 0 && (
             <div
-              className="sticky bottom-4 mt-4 flex items-center justify-between gap-4 px-4 py-3 rounded-xl shadow-lg border"
+              className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-between gap-4 px-6 py-3 shadow-lg border-t"
               style={{ backgroundColor: WB_COLOR, borderColor: WB_COLOR }}
               data-testid="wb-sticky-supply-panel"
             >
@@ -1140,7 +1135,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
           {/* Sticky панель выбора поставок (сборка) */}
           {selectedSupplyIds.size > 0 && (
             <div
-              className="sticky bottom-4 flex items-center justify-between gap-4 px-4 py-3 rounded-xl shadow-lg border"
+              className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-between gap-4 px-6 py-3 shadow-lg border-t"
               style={{ backgroundColor: WB_COLOR, borderColor: WB_COLOR }}
               data-testid="wb-sticky-supplies-panel"
             >
@@ -1219,7 +1214,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
           {/* Sticky панель выбора поставок (доставка) */}
           {selectedSupplyIds.size > 0 && (
             <div
-              className="sticky bottom-4 flex items-center justify-between gap-4 px-4 py-3 rounded-xl shadow-lg border"
+              className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-between gap-4 px-6 py-3 shadow-lg border-t"
               style={{ backgroundColor: WB_COLOR, borderColor: WB_COLOR }}
               data-testid="wb-sticky-delivery-panel"
             >

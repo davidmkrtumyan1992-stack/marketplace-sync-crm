@@ -133,8 +133,13 @@ npm run build        # production сборка
 ✓ fetchWithRetry — retry логика для всех 26 вызовов к Ozon API
 ✓ Пагинация с предохранителем 10 страниц для FBO/FBS sync
 ✓ Двойные показатели выручки на дашборде: Gross (Заказано) / Net (К получению) / Отменено — LineChart с двумя линиями, чекбоксы, 3 KPI-карточки, доnut переключается между gross/net breakdown
-✓ WB FBS синхронизация заказов — autoSyncWbOrders каждые 5 мин, POST /api/marketplace/wildberries/sync-orders, wbStatus → internal status mapping, isCancelledOrder включает WB cancel/user_cancel/declined
+✓ WB FBS синхронизация заказов — autoSyncWbOrders каждые 2 мин (было 5), POST /api/marketplace/wildberries/sync-orders, wbStatus → internal status mapping, isCancelledOrder включает WB cancel/user_cancel/declined; syncWbSuppliesForOrg вызывается в автосинке
 ✓ WB FBS интерфейс управления поставками — WildberriesOrders.tsx: полный редизайн под стандарт WB Seller Cabinet; вкладки Новые (чекбоксы, OrderNumCell с временным бейджем «X ч Y мин назад»+МГТ, ProductCell 48px, WarehouseCell, меню ···) / На сборке (GET /api/wb/supplies?status=open, таблица поставок, меню ··· с Лист подбора PDF/Excel/Экран / Переименовать / Закрыть) / В доставке (GET /api/wb/supplies?status=closed, статус «Поставка в обработке», closed_at) / Архив (wb_status IN delivered/sold, wb_rid, синий «Отсортировано ›») / Отменённые (жёлтая плашка + ссылка /inventory, причина отмены); GET /api/wb/orders?status=new фильтрует последние 72 часа; status=archive включает sold + фоновая синхронизация с WB API если <100 записей; GET /api/wb/supplies (wb_supplies + orders_count); PATCH /api/wb/supplies/:id/rename; Excel-экспорт через xlsx; WB_COLOR=#7631ff
+✓ WB чекбоксы + sticky bar для групповой печати QR — Assembly/Delivery вкладки имеют чекбоксы, fixed-bar (bottom-0 left-0 right-0 z-50) при выборе; handleBulkPrintQr: 58×40mm лейблы для каждой поставки
+✓ Расширенное меню поставок (PDF/Excel/QR/детализация) — SupplyActionsMenu с пунктами Стикеры/QR/PDF/Excel/Детализация + Закрыть (только assembly); DeliverySupplyRow использует то же меню с showClose=false; handlePickingListPdf использует GET /api/wb/supplies/:id/picking-pdf (бэкенд HTML)
+✓ Счётчики вкладок из /api/wb/counts — числовые бейджи на вкладках Новые/На сборке/В доставке/Архив/Отменённые; refetchInterval: 120000
+✓ status_label в GET /api/wb/supplies: open→«Ждёт передачи в доставку», closed→«Поставка в обработке»
+✓ SupplyDetailDialog — диалог с таблицей заказов поставки (GET /api/wb/orders?supplyId=...)
 📋 Синхронизация цены Яндекс Маркет — планируется
 
 ## Известные баги

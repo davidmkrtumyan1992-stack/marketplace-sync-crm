@@ -4891,8 +4891,8 @@ export async function registerRoutes(
           s.name as store_name,
           COUNT(o.id) as orders_count,
           CASE ws.status
-            WHEN 'open' THEN 'На сборке'
-            WHEN 'closed' THEN 'В доставке'
+            WHEN 'open' THEN 'Ждёт передачи в доставку'
+            WHEN 'closed' THEN 'Поставка в обработке'
             ELSE ws.status
           END as status_label
         FROM wb_supplies ws
