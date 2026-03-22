@@ -1,0 +1,183 @@
+Прочитай CLAUDE.md и SPECIFICATION.md для контекста.
+
+Исправить баги в интерфейсе Wildberries заказов.
+Цель: всё что нажимается в CRM — происходит реально в WB.
+Не трогать Ozon, Яндекс, логику sync.
+
+═══════════════════════════════════════
+БАГ 1 — Меню «···» во вкладке «Новые»
+═══════════════════════════════════════
+
+Сейчас показывает: «Распечатать этикетки» и «Отмена заказа»
+Должно показывать: «Создать поставку» и «Отменить заказ»
+
+В WildberriesOrders.tsx найди меню ··· для вкладки «Новые».
+Замени пункт «Распечатать этикетки» на «Создать поставку».
+
+При нажатии «Создать поставку» в меню ···:
+- Выбрать только этот один заказ (как если бы был отмечен чекбоксом)
+- Открыть диалог CreateSupplyDialog с этим заказом
+
+При нажатии «Отменить заказ»:
+- Вызвать WB API:
+  PATCH https://marketplace-api.wildberries.ru/api/v3/orders/{wbOrderId}/cancel
+  Headers: { Authorization: cleanApiKey }
+- После успеха: обновить wb_status = 'user_cancel' в БД
+- Показать toast: «Заказ отменён»
+- Обновить список заказов
+
+Добавить новый эндпоинт в server/routes.ts:
+POST /api/wb/orders/:orderId/cancel
+Логика:
+1. Найти заказ по id, получить wb_order_id и store_id
+2. cleanApiKey = setting.apiKey.trim()
+3. PATCH https://marketplace-api.wildberries.ru/api/v3/orders/{wb_order_id}/cancel
+   Headers: { Authorization: cleanApiKey }
+4. Обновить в БД: wb_status = 'user_cancel', status = 'cancelled'
+5. Вернуть: { success: true }
+
+═══════════════════════════════════════
+БАГ 2 — Вкладка «В доставке» пустая
+═══════════════════════════════════════
+
+Проблема: поставки есть в WB но не отображаются в CRM.
+
+Диагностика — выполни SQL:
+SELECT ws.supply_id, ws.name, ws.status, ws.created_at
+FROM wb_supplies ws
+WHERE ws.organization_id = (
+  SELECT organization_id FROM marketplace_settings 
+  WHERE marketplace = 'wildberries' LIMIT 1
+)
+ORDER BY ws.created_at DESC
+LIMIT 10;
+
+Если таблица пустая — значит поставки никогда не синхронизировались.
+Нужно подтянуть поставки из WB API:
+
+Добавить эндпоинт POST /api/wb/supplies/sync — синхронизация поставок:
+1. Для каждого WB магазина:
+   
+   // Получить открытые поставки:
+   GET https://marketplace-api.wildberries.ru/api/v3/supplies
+   ?limit=1000&next=0&status=ACTIVE
+   Headers: { Authorization: cleanApiKey }
+   
+   // Получить закрытые поставки:
+   GET https://marketplace-api.wildberries.ru/api/v3/supplies
+   ?limit=1000&next=0&status=CLOSED
+   Headers: { Authorization: cleanApiKey }
+
+2. Для каждой поставки из API сохранить в wb_supplies:
+   - supply_id: supply.id (строка WB-GI-...)
+   - name: supply.name
+   - status: supply.done ? 'closed' : 'open'
+   - store_id: resolvedStoreId
+   - organization_id: orgId
+   Использовать INSERT ... ON CONFLICT (supply_id) DO UPDATE
+
+3. Для каждой поставки получить заказы:
+   GET https://marketplace-api.wildberries.ru/api/v3/supplies/{supplyId}/orders
+   Headers: { Authorization: cleanApiKey }
+   
+   Обновить wb_supply_id в orders для этих заказов.
+
+4. Вернуть: { synced: N }
+
+Добавить кнопку «↻ Синхронизировать поставки» вверху вкладок
+«На сборке» и «В доставке» — вызывает POST /api/wb/supplies/sync.
+
+После синхронизации — обновить список поставок.
+
+Меню ··· для вкладки «В доставке»:
+- Печать стикера поставки
+- Печать QR-кода поставки:
+  GET https://marketplace-api.wildberries.ru/api/v3/supplies/{supplyId}/barcode
+  ?type=png
+  Headers: { Authorization: cleanApiKey }
+  Открыть PNG в новом окне для печати
+
+═══════════════════════════════════════
+БАГ 3 — Вкладка «Архив» пустая
+═══════════════════════════════════════
+
+Проблема: заказы с wb_status='delivered' или 'sold' не подтягиваются.
+
+Выполни SQL диагностику:
+SELECT wb_status, COUNT(*) 
+FROM orders 
+WHERE source = 'wildberries' 
+GROUP BY wb_status;
+
+Если нет delivered/sold — запустить принудительный ресинк архива.
+
+Исправить эндпоинт GET /api/wb/orders?status=archive:
+
+1. Расширить фильтр статусов архива:
+   wb_status IN ('delivered', 'sold', 'receive', 'returned', 'сlosed')
+
+2. Если в БД < 50 архивных заказов — автоматически подтянуть из WB API:
+
+   const stores = await getWbStores(orgId);
+   for (const store of stores) {
+     const cleanApiKey = store.apiKey.trim();
+     
+     // Получить заказы за последние 90 дней:
+     const dateFrom = Math.floor((Date.now() - 90 * 24 * 3600 * 1000) / 1000);
+     
+     const res = await fetchWithRetry(
+       `https://marketplace-api.wildberries.ru/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom}`,
+       { headers: { Authorization: cleanApiKey } }
+     );
+     
+     if (res.ok) {
+       const data = await res.json();
+       const archiveOrders = (data.orders || []).filter(o => 
+         ['delivered', 'sold', 'receive', 'returned'].includes(o.wbStatus || o.status || '')
+       );
+       
+       // Сохранить в БД через upsert
+       for (const order of archiveOrders) {
+         // INSERT OR UPDATE wb_status для существующих заказов
+       }
+     }
+   }
+
+═══════════════════════════════════════
+БАГ 4 — Вкладка «Отменённые» — ошибка
+═══════════════════════════════════════
+
+Покажи точную ошибку из консоли браузера и из логов сервера.
+Выполни SQL:
+SELECT wb_status, COUNT(*) 
+FROM orders 
+WHERE source = 'wildberries' 
+AND wb_status IN ('cancel', 'user_cancel', 'declined', 'cancelled')
+GROUP BY wb_status;
+
+Исправь фильтр статусов для вкладки «Отменённые» — 
+добавить все возможные варианты отмены WB:
+wb_status IN ('cancel', 'user_cancel', 'declined', 'cancelled', 'cancel_ignore')
+OR status = 'cancelled' AND source = 'wildberries'
+
+═══════════════════════════════════════
+ПОСЛЕ ВСЕХ ИСПРАВЛЕНИЙ:
+═══════════════════════════════════════
+
+1. Запустить синхронизацию поставок:
+   POST /api/wb/supplies/sync
+
+2. Показать SQL результат:
+   SELECT source, wb_status, status, COUNT(*) as cnt
+   FROM orders
+   WHERE source = 'wildberries'
+   GROUP BY source, wb_status, status
+   ORDER BY cnt DESC;
+
+3. Показать wb_supplies:
+   SELECT supply_id, name, status, created_at 
+   FROM wb_supplies 
+   ORDER BY created_at DESC 
+   LIMIT 20;
+
+Не трогать: Ozon, Яндекс, sync заказов, аутентификацию.
