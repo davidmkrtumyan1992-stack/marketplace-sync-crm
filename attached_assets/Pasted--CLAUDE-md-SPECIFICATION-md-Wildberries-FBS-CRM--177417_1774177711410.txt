@@ -1,0 +1,167 @@
+Прочитай CLAUDE.md и SPECIFICATION.md для контекста.
+
+Подключить Wildberries FBS в CRM систему.
+Архитектура должна быть мультистор (много магазинов).
+Не трогать логику Ozon и Яндекс.
+
+ШАГ 1 — Расширить схему БД в shared/schema.ts:
+
+Добавить поля в таблицу orders:
+wbOrderId: text("wb_order_id")           — уникальный ID заказа WB
+wbStatus: text("wb_status")              — системный статус WB
+wbSupplyId: text("wb_supply_id")         — ID поставки
+wbRid: text("wb_rid")                    — уникальный RID для отслеживания
+
+Добавить новую таблицу wbSupplies:
+export const wbSupplies = pgTable("wb_supplies", {
+  id: serial("id").primaryKey(),
+  supplyId: text("supply_id").notNull(),  -- ID типа WB-GI-xxxx
+  storeId: integer("store_id").references(() => stores.id, { onDelete: "cascade" }),
+  organizationId: text("organization_id").notNull(),
+  name: text("name"),
+  status: text("status").default("open"), -- open / closed / delivered
+  createdAt: timestamp("created_at").defaultNow(),
+  closedAt: timestamp("closed_at"),
+});
+
+После изменений запустить: npm run db:push
+
+ШАГ 2 — Маппинг статусов WB в server/routes.ts:
+
+Добавить функцию wbStatusToInternal:
+function wbStatusToInternal(wbStatus: string): string {
+  switch (wbStatus) {
+    case 'new':
+    case 'waiting':
+      return 'pending';
+    case 'confirm':
+    case 'complete':
+    case 'indelivery':
+    case 'delivering':
+      return 'shipped';
+    case 'delivered':
+    case 'receive':
+      return 'completed';
+    case 'cancel':
+    case 'user_cancel':
+    case 'declined':
+      return 'cancelled';
+    default:
+      return 'pending';
+  }
+}
+
+ШАГ 3 — Новый эндпоинт синхронизации WB заказов:
+
+Добавить POST /api/marketplace/wildberries/sync-orders
+по аналогии с существующим /api/marketplace/ozon/sync-orders.
+
+Логика:
+1. Получить все активные WB настройки из marketplace_settings
+   где marketplace = 'wildberries' и isActive = true
+
+2. Для каждого магазина:
+
+   // Временной диапазон — Золотой стандарт МСК:
+   const since = new Date();
+   since.setUTCHours(21, 0, 0, 0);
+   since.setUTCDate(since.getUTCDate() - 1);
+   const to = new Date();
+   to.setUTCHours(21, 0, 0, 0);
+
+   // Получить НОВЫЕ заказы:
+   GET https://marketplace-api.wildberries.ru/api/v3/orders/new
+   Headers: { Authorization: apiKey }
+
+   // Получить ВСЕ заказы за период:
+   GET https://marketplace-api.wildberries.ru/api/v3/orders
+   ?limit=1000&next=0&dateFrom={since.getTime()/1000}&dateTo={to.getTime()/1000}
+   Headers: { Authorization: apiKey }
+
+3. Для каждого заказа из API:
+   - Проверить существует ли уже (по wbOrderId + storeId)
+   - Если нет — создать новый заказ в orders
+   - Если есть — обновить wbStatus
+
+4. Маппинг полей WB заказа → orders:
+   orderNumber: order.id.toString()
+   wbOrderId: order.id.toString()
+   wbStatus: order.wbStatus или order.status
+   wbRid: order.rid
+   wbSupplyId: order.supplyId || null
+   source: 'wildberries'
+   status: wbStatusToInternal(order.wbStatus)
+   totalAmount: order.totalPrice / 100  -- WB передаёт в копейках!
+   storeId: resolvedStoreId
+   organizationId: orgId
+   createdAt: new Date(order.createdAt * 1000) -- Unix timestamp!
+
+5. Для order_items:
+   productId: найти по article (артикул товара) через getProductBySku
+   quantity: order.quantity или 1
+   price: order.convertedPrice / 100
+
+6. Обновить stores.lastSync после успешной синхронизации
+
+7. Вернуть результат:
+   { storeName, created, updated, errors }
+
+ШАГ 4 — Фоновый автосинк WB:
+
+В функции которая запускает автосинк (рядом с autoSyncOzonStatuses)
+добавить аналогичную функцию autoSyncWbOrders:
+
+- Запускать каждые 5 минут (такой же интервал как Ozon)
+- Вызывать ту же логику что и POST /api/marketplace/wildberries/sync-orders
+- Логировать результат в консоль:
+  console.log('[wb-auto-sync] Store «name»: +N новых, M обновлено')
+
+ШАГ 5 — Проверка подключения WB:
+
+В эндпоинте POST /api/stores/check-connection
+для marketplace = 'wildberries' добавить проверку:
+
+GET https://common-api.wildberries.ru/api/v1/ping
+Headers: { Authorization: apiKey }
+
+Если ответ 200 — подключение успешно.
+Показать: "Подключение к Wildberries успешно"
+
+ШАГ 6 — Добавить тестовый магазин WB в настройках:
+
+В разделе Settings → Stores показать что WB магазин 
+можно добавить с полями:
+- Название магазина
+- API токен (JWT токен WB)
+- Marketplace: Wildberries (уже есть)
+
+ШАГ 7 — Обновить getSalesData в storage.ts:
+
+Добавить фильтрацию отменённых заказов для WB:
+// Уже есть для Ozon и Яндекс — добавить WB:
+if (o.wbStatus === 'cancel' || 
+    o.wbStatus === 'user_cancel' || 
+    o.wbStatus === 'declined') {
+  // исключать из netRevenue но включать в grossRevenue
+}
+
+ШАГ 8 — Проверить API ключ WB:
+
+Перед написанием кода — сделай тестовый запрос к WB API
+чтобы убедиться что токен работает:
+
+GET https://common-api.wildberries.ru/api/v1/ping
+Headers: { Authorization: "Bearer eyJhbGci..." }
+
+Также проверь:
+GET https://marketplace-api.wildberries.ru/api/v3/orders/new
+Headers: { Authorization: "Bearer eyJhbGci..." }
+
+Токен хранится в Replit Secrets под именем WB_API_TOKEN.
+Используй process.env.WB_API_TOKEN для теста.
+
+После реализации запусти синхронизацию и покажи 
+сколько заказов подтянулось.
+
+Не трогать: логику Ozon sync, getSalesData Ozon/Яндекс логику,
+аутентификацию, RBAC.
