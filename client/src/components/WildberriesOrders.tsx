@@ -21,6 +21,7 @@ import {
 import {
   Loader2, Package, PackageSearch, Printer, FileText, FileSpreadsheet,
   Monitor, XCircle, Truck, CheckCircle, MoreHorizontal, Pencil, AlertTriangle,
+  RefreshCw, QrCode,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
@@ -556,7 +557,30 @@ function AssemblySupplyRow({ supply, onRename }: { supply: any; onRename: (suppl
 }
 
 function DeliverySupplyRow({ supply }: { supply: any }) {
+  const { toast } = useToast();
   const ordersCount = Number(supply.orders_count) || 0;
+
+  const handlePrintQr = async () => {
+    try {
+      const params = supply.store_id ? `?storeId=${supply.store_id}` : "";
+      const res = await fetch(`/api/wb/supplies/${supply.supply_id}/barcode-qr${params}`, { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Ошибка получения QR-кода" }));
+        throw new Error(err.message);
+      }
+      const data = await res.json();
+      const printHTML = `<html><head><style>
+        @page { margin: 20mm; }
+        body { margin: 0; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        img { max-width: 400px; max-height: 400px; }
+      </style></head><body><img src="data:image/png;base64,${data.file}" /></body></html>`;
+      const win = window.open("", "_blank");
+      if (win) { win.document.write(printHTML); win.document.close(); win.print(); win.close(); }
+    } catch (e: any) {
+      toast({ title: "Ошибка QR-кода", description: e.message, variant: "destructive" });
+    }
+  };
+
   return (
     <TableRow data-testid={`row-wb-delivery-supply-${supply.supply_id}`}>
       <TableCell>
@@ -587,6 +611,20 @@ function DeliverySupplyRow({ supply }: { supply: any }) {
       <TableCell>
         <span className="text-sm text-muted-foreground">{supply.store_name || "—"}</span>
       </TableCell>
+      <TableCell>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="icon" variant="ghost" className="h-8 w-8" data-testid={`button-delivery-menu-${supply.supply_id}`}>
+              <MoreHorizontal className="w-4 h-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuItem onClick={handlePrintQr} data-testid={`menu-print-qr-${supply.supply_id}`}>
+              <QrCode className="w-4 h-4 mr-2" /> Печать QR-кода поставки
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </TableCell>
     </TableRow>
   );
 }
@@ -595,9 +633,49 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
   const [activeTab, setActiveTab] = useState<WbTab>("new");
   const [selectedOrderIds, setSelectedOrderIds] = useState<Set<number>>(new Set());
   const [showCreateSupply, setShowCreateSupply] = useState(false);
+  const [singleOrderForSupply, setSingleOrderForSupply] = useState<any | null>(null);
   const [renameSupply, setRenameSupply] = useState<any | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const cancelOrderMutation = useMutation({
+    mutationFn: async (orderId: number) => {
+      const res = await apiRequest("POST", `/api/wb/orders/${orderId}/cancel`, {});
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Ошибка отмены заказа" }));
+        throw new Error(err.message);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Заказ отменён" });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/orders"] });
+    },
+    onError: (e: any) => {
+      toast({ title: "Ошибка отмены заказа", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const syncSuppliesMutation = useMutation({
+    mutationFn: async () => {
+      const body: any = {};
+      if (storeId) body.storeId = storeId;
+      const res = await apiRequest("POST", "/api/wb/supplies/sync", body);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Ошибка синхронизации поставок" }));
+        throw new Error(err.message);
+      }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({ title: `✓ Синхронизировано ${data.synced} поставок` });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/supplies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/orders"] });
+    },
+    onError: (e: any) => {
+      toast({ title: "Ошибка синхронизации", description: e.message, variant: "destructive" });
+    },
+  });
 
   const isOrdersTab = activeTab === "new" || activeTab === "archive" || activeTab === "cancelled";
   const isSuppliesTab = activeTab === "assembly" || activeTab === "delivery";
@@ -747,11 +825,19 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem data-testid={`menu-print-label-${order.id}`}>
-                            <Printer className="w-4 h-4 mr-2" /> Печать этикетки
+                          <DropdownMenuItem
+                            onClick={() => setSingleOrderForSupply(order)}
+                            data-testid={`menu-create-supply-single-${order.id}`}
+                          >
+                            <Package className="w-4 h-4 mr-2" /> Создать поставку
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem className="text-red-600 focus:text-red-600" data-testid={`menu-cancel-order-${order.id}`}>
+                          <DropdownMenuItem
+                            className="text-red-600 focus:text-red-600"
+                            disabled={cancelOrderMutation.isPending}
+                            onClick={() => cancelOrderMutation.mutate(order.id)}
+                            data-testid={`menu-cancel-order-${order.id}`}
+                          >
                             <XCircle className="w-4 h-4 mr-2" /> Отменить заказ
                           </DropdownMenuItem>
                         </DropdownMenuContent>
@@ -789,58 +875,91 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
 
       {/* ===== ВКЛАДКА НА СБОРКЕ ===== */}
       {activeTab === "assembly" && (
-        <div className="rounded-xl border overflow-hidden bg-white dark:bg-background" data-testid="wb-assembly-supplies">
+        <div className="space-y-3" data-testid="wb-assembly-supplies">
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => syncSuppliesMutation.mutate()}
+              disabled={syncSuppliesMutation.isPending}
+              data-testid="button-sync-assembly-supplies"
+            >
+              {syncSuppliesMutation.isPending
+                ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                : <RefreshCw className="w-4 h-4 mr-1.5" />}
+              Синхронизировать поставки
+            </Button>
+          </div>
           {supplies.length === 0 ? (
             <EmptyState text="У вас пока нет активных поставок" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/30">
-                  <TableHead>Поставка</TableHead>
-                  <TableHead>QR-код поставки</TableHead>
-                  <TableHead>Заказы / Грузоместа</TableHead>
-                  <TableHead>Этап сборки</TableHead>
-                  <TableHead>Склад</TableHead>
-                  <TableHead className="w-10" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {supplies.map((supply: any) => (
-                  <AssemblySupplyRow
-                    key={supply.supply_id}
-                    supply={supply}
-                    onRename={(s) => setRenameSupply(s)}
-                  />
-                ))}
-              </TableBody>
-            </Table>
+            <div className="rounded-xl border overflow-hidden bg-white dark:bg-background">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/30">
+                    <TableHead>Поставка</TableHead>
+                    <TableHead>QR-код поставки</TableHead>
+                    <TableHead>Заказы / Грузоместа</TableHead>
+                    <TableHead>Этап сборки</TableHead>
+                    <TableHead>Склад</TableHead>
+                    <TableHead className="w-10" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {supplies.map((supply: any) => (
+                    <AssemblySupplyRow
+                      key={supply.supply_id}
+                      supply={supply}
+                      onRename={(s) => setRenameSupply(s)}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </div>
       )}
 
       {/* ===== ВКЛАДКА В ДОСТАВКЕ ===== */}
       {activeTab === "delivery" && (
-        <div className="rounded-xl border overflow-hidden bg-white dark:bg-background" data-testid="wb-delivery-supplies">
+        <div className="space-y-3" data-testid="wb-delivery-supplies">
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => syncSuppliesMutation.mutate()}
+              disabled={syncSuppliesMutation.isPending}
+              data-testid="button-sync-delivery-supplies"
+            >
+              {syncSuppliesMutation.isPending
+                ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                : <RefreshCw className="w-4 h-4 mr-1.5" />}
+              Синхронизировать поставки
+            </Button>
+          </div>
           {supplies.length === 0 ? (
             <EmptyState text="У вас пока нет поставок в доставке" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/30">
-                  <TableHead>Поставка</TableHead>
-                  <TableHead>QR-код поставки</TableHead>
-                  <TableHead>Статус</TableHead>
-                  <TableHead>Время сканирования</TableHead>
-                  <TableHead>Заказы / Грузоместа</TableHead>
-                  <TableHead>Склад</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {supplies.map((supply: any) => (
-                  <DeliverySupplyRow key={supply.supply_id} supply={supply} />
-                ))}
-              </TableBody>
-            </Table>
+            <div className="rounded-xl border overflow-hidden bg-white dark:bg-background">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/30">
+                    <TableHead>Поставка</TableHead>
+                    <TableHead>QR-код поставки</TableHead>
+                    <TableHead>Статус</TableHead>
+                    <TableHead>Время сканирования</TableHead>
+                    <TableHead>Заказы / Грузоместа</TableHead>
+                    <TableHead>Склад</TableHead>
+                    <TableHead className="w-10" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {supplies.map((supply: any) => (
+                    <DeliverySupplyRow key={supply.supply_id} supply={supply} />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </div>
       )}
@@ -965,6 +1084,19 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
         storeId={selectedStoreId}
         onSuccess={handleSupplyCreated}
       />
+
+      {singleOrderForSupply && (
+        <CreateSupplyDialog
+          open={!!singleOrderForSupply}
+          onClose={() => setSingleOrderForSupply(null)}
+          selectedOrders={[singleOrderForSupply]}
+          storeId={singleOrderForSupply.store_id || storeId || null}
+          onSuccess={() => {
+            setSingleOrderForSupply(null);
+            setActiveTab("assembly");
+          }}
+        />
+      )}
 
       {renameSupply && (
         <RenameSupplyDialog

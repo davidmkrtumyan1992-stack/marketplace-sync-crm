@@ -4573,7 +4573,7 @@ export async function registerRoutes(
         SELECT DISTINCT ON (o.id)
           o.id, o.order_number, o.wb_order_id, o.wb_status,
           o.wb_supply_id, o.wb_rid, o.total_amount, o.created_at,
-          o.store_id, o.source_store_name,
+          o.store_id, o.source_store_name, o.status,
           s.name as store_name,
           oi.quantity, oi.price,
           p.name as product_name, p.sku, p.barcode, p.image_url
@@ -4601,26 +4601,26 @@ export async function registerRoutes(
           case "delivery":
             return ["complete", "indelivery", "delivering"].includes(ws);
           case "archive":
-            return ["delivered", "sold"].includes(ws);
+            return ["delivered", "sold", "receive", "returned", "closed"].includes(ws);
           case "cancelled":
-            return ["cancel", "user_cancel", "declined"].includes(ws);
+            return ["cancel", "user_cancel", "declined", "cancelled", "cancel_ignore"].includes(ws) || (o.status === "cancelled");
           default:
             return true;
         }
       });
 
-      // Архив: если < 100 записей — фоновая синхронизация с WB API (последние 30 дней, статус sold)
+      // Архив: если < 100 записей — фоновая синхронизация с WB API (последние 90 дней, статусы delivered/sold/receive/returned)
       if (status === "archive" && filtered.length < 100) {
         const requestedStoreId = storeId ? Number(storeId) : null;
         setImmediate(async () => {
           try {
             const allSettings = await storage.getMarketplaceSettings(orgId);
-            // Если в запросе указан storeId — синхронизируем только этот магазин
             const wbSettings = allSettings.filter(s =>
               s.marketplace === "wildberries" && s.isActive && s.apiKey &&
               (requestedStoreId === null || s.storeId === requestedStoreId)
             );
-            const dateFrom = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
+            const archiveStatuses = ["delivered", "sold", "receive", "returned"];
+            const dateFrom = Math.floor((Date.now() - 90 * 24 * 3600 * 1000) / 1000);
             for (const wbSetting of wbSettings) {
               const cleanKey = wbSetting.apiKey!.trim();
               const authHeaders = { "Authorization": cleanKey, "Content-Type": "application/json" };
@@ -4636,8 +4636,8 @@ export async function registerRoutes(
                 const r = await fetch(url, { headers: authHeaders });
                 if (!r.ok) continue;
                 const data = await r.json();
-                const soldOrders = (data?.orders || []).filter((o: any) => (o.wbStatus || o.status) === "sold");
-                for (const wbOrder of soldOrders) {
+                const archiveOrders = (data?.orders || []).filter((o: any) => archiveStatuses.includes(o.wbStatus || o.status || ""));
+                for (const wbOrder of archiveOrders) {
                   try {
                     const wbOrderId = String(wbOrder.id);
                     const existing = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
@@ -4645,6 +4645,7 @@ export async function registerRoutes(
                     const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
                     const article = wbOrder.article || wbOrder.supplierArticle || "";
                     const qty = wbOrder.quantity || 1;
+                    const wbStatus = wbOrder.wbStatus || wbOrder.status || "sold";
                     let productId: number | null = null;
                     if (article) {
                       const [dbProduct] = await db.select().from(productsTable)
@@ -4662,7 +4663,7 @@ export async function registerRoutes(
                       source: "wildberries",
                       externalId: wbOrderId,
                       postingNumber: null, ozonStatus: null, yandexStatus: null,
-                      wbOrderId, wbStatus: "sold",
+                      wbOrderId, wbStatus,
                       wbRid: wbOrder.rid ? String(wbOrder.rid) : null,
                       wbSupplyId: wbOrder.supplyId ? String(wbOrder.supplyId) : null,
                       fulfillmentType: "FBS",
@@ -4691,6 +4692,164 @@ export async function registerRoutes(
       res.json(filtered);
     } catch (error: any) {
       console.error("[wb-orders] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // POST /api/wb/orders/:orderId/cancel — отменить заказ WB
+  app.post("/api/wb/orders/:orderId/cancel", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const orderId = Number(req.params.orderId);
+      if (!orderId) return res.status(400).json({ message: "Неверный orderId" });
+
+      const [order] = await db.select().from(ordersTable)
+        .where(and(eq(ordersTable.id, orderId), eq(ordersTable.organizationId, orgId)));
+      if (!order) return res.status(404).json({ message: "Заказ не найден" });
+
+      const wbOrderId = order.wbOrderId;
+      if (!wbOrderId) return res.status(400).json({ message: "У заказа нет WB Order ID" });
+
+      const cleanApiKey = await getWbApiKeyForStore(orgId, order.storeId ?? null);
+      if (!cleanApiKey) return res.status(400).json({ message: "WB API-ключ не найден для магазина" });
+
+      const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
+      const cancelRes = await fetch(`${WB_MARKETPLACE_BASE}/api/v3/orders/${wbOrderId}/cancel`, {
+        method: "PATCH",
+        headers: authHeaders,
+      });
+
+      if (!cancelRes.ok && cancelRes.status !== 204) {
+        const errText = await cancelRes.text().catch(() => "");
+        console.error(`[wb-cancel-order] WB API error ${cancelRes.status}:`, errText);
+        if (cancelRes.status !== 409) {
+          return res.status(502).json({ message: `WB API ошибка отмены (${cancelRes.status}): ${errText.slice(0, 200)}` });
+        }
+      }
+
+      await db.update(ordersTable)
+        .set({ wbStatus: "user_cancel", status: "cancelled" } as any)
+        .where(and(eq(ordersTable.id, orderId), eq(ordersTable.organizationId, orgId)));
+
+      console.log(`[wb-cancel-order] Заказ ${orderId} (WB ${wbOrderId}) отменён`);
+      res.json({ success: true, orderId, wbOrderId });
+    } catch (error: any) {
+      console.error("[wb-cancel-order] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // POST /api/wb/supplies/sync — синхронизировать поставки из WB API в wb_supplies
+  app.post("/api/wb/supplies/sync", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const storeId = req.body?.storeId ? Number(req.body.storeId) : null;
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const wbSettings = allSettings.filter(s =>
+        s.marketplace === "wildberries" && s.isActive && s.apiKey &&
+        (storeId === null || s.storeId === storeId)
+      );
+
+      if (wbSettings.length === 0) {
+        return res.status(400).json({ message: "WB магазины не найдены или не настроены" });
+      }
+
+      let totalSynced = 0;
+      const errors: string[] = [];
+
+      for (const wbSetting of wbSettings) {
+        const cleanKey = wbSetting.apiKey!.trim();
+        const authHeaders = { "Authorization": cleanKey, "Content-Type": "application/json" };
+        const resolvedStoreId = wbSetting.storeId ?? null;
+
+        for (const supplyStatus of ["ACTIVE", "CLOSED"]) {
+          try {
+            const supplyRes = await fetch(
+              `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=${supplyStatus}`,
+              { headers: authHeaders }
+            );
+            if (!supplyRes.ok) {
+              const errText = await supplyRes.text().catch(() => "");
+              errors.push(`[${supplyStatus}] WB API ${supplyRes.status}: ${errText.slice(0, 100)}`);
+              continue;
+            }
+            const supplyData = await supplyRes.json();
+            const supplies: any[] = supplyData.supplies || supplyData.list || [];
+
+            for (const supply of supplies) {
+              const supplyId = String(supply.id || supply.supplyId || supply.supply_id);
+              if (!supplyId) continue;
+
+              // Upsert: check if exists first
+              const existingRows = await db.execute(sql`
+                SELECT id FROM wb_supplies WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+              `);
+              const existing = ((existingRows as any).rows || existingRows)[0];
+
+              const supplyName = supply.name || null;
+              const dbStatus = supplyStatus === "ACTIVE" ? "open" : "closed";
+              const createdAtRaw = supply.createdAt || supply.created_at;
+              const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
+              const closedAtRaw = supply.closedAt || supply.closed_at;
+              const closedAtTs = closedAtRaw ? new Date(closedAtRaw) : null;
+
+              if (existing) {
+                await db.execute(sql`
+                  UPDATE wb_supplies SET
+                    name = ${supplyName},
+                    status = ${dbStatus},
+                    closed_at = ${closedAtTs}
+                  WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+                `);
+              } else {
+                await db.insert(wbSuppliesTable).values({
+                  supplyId,
+                  storeId: resolvedStoreId ?? undefined,
+                  organizationId: orgId,
+                  name: supplyName,
+                  status: dbStatus,
+                  createdAt: createdAtTs,
+                  closedAt: closedAtTs ?? undefined,
+                } as any);
+              }
+              totalSynced++;
+
+              // Подтянуть заказы поставки и обновить wb_supply_id
+              try {
+                const ordersRes = await fetch(
+                  `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`,
+                  { headers: authHeaders }
+                );
+                if (ordersRes.ok) {
+                  const ordersData = await ordersRes.json();
+                  const supplyOrders: any[] = ordersData.orders || [];
+                  for (const so of supplyOrders) {
+                    const wbOrderId = String(so.id || so.wbOrderId || "");
+                    if (!wbOrderId) continue;
+                    await db.execute(sql`
+                      UPDATE orders SET wb_supply_id = ${supplyId}
+                      WHERE wb_order_id = ${wbOrderId}
+                        AND organization_id = ${orgId}
+                        AND (wb_supply_id IS NULL OR wb_supply_id != ${supplyId})
+                    `);
+                  }
+                }
+              } catch (e: any) {
+                console.warn(`[wb-supplies-sync] Orders fetch for supply ${supplyId}:`, e.message);
+              }
+            }
+          } catch (e: any) {
+            errors.push(`[${supplyStatus}] Error: ${e.message}`);
+            console.error(`[wb-supplies-sync] ${supplyStatus} error:`, e.message);
+          }
+        }
+      }
+
+      console.log(`[wb-supplies-sync] Синхронизировано ${totalSynced} поставок`);
+      res.json({ success: true, synced: totalSynced, errors });
+    } catch (error: any) {
+      console.error("[wb-supplies-sync] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });
@@ -4976,6 +5135,36 @@ export async function registerRoutes(
       res.json({ success: true, supplyId });
     } catch (error: any) {
       console.error("[wb-close-supply] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // GET /api/wb/supplies/:supplyId/barcode-qr — получить QR-штрихкод поставки
+  app.get("/api/wb/supplies/:supplyId/barcode-qr", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const supplyId = String(req.params.supplyId);
+      const storeId = req.query.storeId ? Number(req.query.storeId) : null;
+
+      const cleanApiKey = await getWbApiKeyForStore(orgId, storeId);
+      if (!cleanApiKey) return res.status(400).json({ message: "WB API-ключ не найден" });
+
+      const authHeaders = { "Authorization": cleanApiKey };
+      const barcodeRes = await fetch(
+        `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/barcode?type=png`,
+        { headers: authHeaders }
+      );
+
+      if (!barcodeRes.ok) {
+        const errText = await barcodeRes.text().catch(() => "");
+        return res.status(502).json({ message: `WB API ошибка QR-кода (${barcodeRes.status}): ${errText.slice(0, 200)}` });
+      }
+
+      const buffer = Buffer.from(await barcodeRes.arrayBuffer());
+      const base64 = buffer.toString("base64");
+      res.json({ file: base64, supplyId });
+    } catch (error: any) {
+      console.error("[wb-supply-barcode] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });
