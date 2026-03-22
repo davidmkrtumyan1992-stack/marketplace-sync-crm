@@ -1,0 +1,111 @@
+Прочитай CLAUDE.md для контекста.
+
+Два исправления для Wildberries.
+
+ИСПРАВЛЕНИЕ 1 — Проверка подключения (ошибка 404):
+
+В server/routes.ts найди эндпоинт POST /api/stores/check-connection
+для marketplace = 'wildberries'.
+
+ВАЖНО: перед использованием токена всегда очищать от пробелов:
+const cleanApiKey = setting.apiKey.trim();
+
+Замени URL проверки на рабочий:
+
+// Вариант 1 — попробовать сначала:
+GET https://common-api.wildberries.ru/ping
+Headers: { Authorization: cleanApiKey }
+
+// Если вариант 1 вернул 404 — попробовать вариант 2:
+GET https://marketplace-api.wildberries.ru/api/v3/orders/new?limit=1&next=0
+Headers: { Authorization: cleanApiKey }
+
+Логика результата:
+- 200 → «Подключение к Wildberries успешно»
+- 401 или 403 → «Неверный API ключ Wildberries»
+- 404 → «Неверный URL — проверьте документацию WB API»
+- другое → показать код ошибки
+
+ВАЖНО: WB токен передаётся БЕЗ слова Bearer:
+Headers: { Authorization: cleanApiKey }  // НЕ "Bearer " + cleanApiKey
+
+Также применить cleanApiKey = setting.apiKey.trim() 
+во ВСЕХ местах где используется WB apiKey в routes.ts
+(sync-orders, auto-sync, check-connection).
+
+ИСПРАВЛЕНИЕ 2 — Исторический ресинк за март 2026:
+
+В POST /api/marketplace/wildberries/sync-orders добавь логику
+глубокой синхронизации если передан параметр ?history=true:
+
+const isHistorySync = req.query.history === 'true';
+
+if (isHistorySync) {
+  // Март 2026: с 01.03 00:00 МСК = 28.02 21:00 UTC
+  dateFrom = Math.floor(new Date('2026-02-28T21:00:00Z').getTime() / 1000);
+  dateTo = Math.floor(new Date().getTime() / 1000);
+  console.log('[wb-sync] История: синхронизация с 01.03.2026');
+} else {
+  // Стандартный золотой стандарт МСК:
+  const since = new Date();
+  since.setUTCHours(21, 0, 0, 0);
+  since.setUTCDate(since.getUTCDate() - 1);
+  dateFrom = Math.floor(since.getTime() / 1000);
+  dateTo = Math.floor(new Date().getTime() / 1000);
+}
+
+Пагинация для исторического ресинка (максимум 20 страниц):
+
+const MAX_PAGES = 20;
+let nextCursor = 0;
+const allOrders: any[] = [];
+
+for (let page = 0; page < MAX_PAGES; page++) {
+  const url = `https://marketplace-api.wildberries.ru/api/v3/orders` +
+    `?limit=1000&next=${nextCursor}&dateFrom=${dateFrom}&dateTo=${dateTo}`;
+  
+  const response = await fetchWithRetry(url, {
+    headers: { Authorization: cleanApiKey }
+  });
+  
+  if (!response.ok) {
+    console.error(`[wb-sync] Ошибка API ${response.status}`);
+    break;
+  }
+  
+  const data = await response.json();
+  const orders = data.orders || [];
+  allOrders.push(...orders);
+  
+  console.log(`[wb-sync] Страница ${page + 1}: ${orders.length} заказов (всего: ${allOrders.length})`);
+  
+  if (orders.length < 1000) break;
+  nextCursor = data.next || 0;
+  if (nextCursor === 0) break;
+  
+  if (page === MAX_PAGES - 1) {
+    console.warn('[wb-sync] Достигнут лимит пагинации (20 страниц)');
+  }
+}
+
+ВАЖНО при сохранении заказов:
+- createdAt берётся из wbOrder.createdAt как ISO строка:
+  createdAt: new Date(wbOrder.createdAt)  // НЕ умножать на 1000!
+- Использовать onConflictDoNothing чтобы не дублировать
+
+После реализации запустить исторический ресинк через скрипт:
+POST /api/marketplace/wildberries/sync-orders?history=true
+
+Затем показать SQL результат:
+
+SELECT 
+  DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow') as date_msk,
+  COUNT(DISTINCT id) as orders,
+  ROUND(SUM(total_amount)::numeric, 0) as revenue
+FROM orders
+WHERE source = 'wildberries'
+GROUP BY DATE(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow')
+ORDER BY date_msk DESC
+LIMIT 30;
+
+Не трогать: логику Ozon sync, Яндекс sync, getSalesData, аутентификацию.
