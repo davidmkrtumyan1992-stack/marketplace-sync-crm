@@ -1,0 +1,231 @@
+Прочитай CLAUDE.md и SPECIFICATION.md для контекста.
+
+Доработать WildberriesOrders.tsx — привести вкладки «На сборке» 
+и «В доставке» к стандарту ЛК Wildberries Seller.
+Не трогать Ozon, Яндекс, логику sync.
+
+═══════════════════════════════════════
+ЧАСТЬ 1 — ЧЕКБОКСЫ И ГРУППОВЫЕ ОПЕРАЦИИ
+═══════════════════════════════════════
+
+В таблицах «На сборке» и «В доставке» добавить:
+
+1.1 — Колонка с чекбоксами:
+- Первая колонка таблицы — чекбокс для каждой строки поставки
+- В заголовке таблицы — чекбокс «Выбрать все»
+- При клике «Выбрать все» — выделить все поставки текущей вкладки
+- Хранить selectedSupplyIds: Set<string> в state
+
+1.2 — Sticky Bar внизу экрана:
+При выборе хотя бы одной поставки появляется фиксированная панель:
+
+┌─────────────────────────────────────────────────────────┐
+│ Выбрано N поставок        [Печать QR-кодов поставок]   │
+└─────────────────────────────────────────────────────────┘
+
+Стиль панели:
+- position: fixed, bottom: 0, left: 0, right: 0
+- bg-white border-t shadow-lg px-6 py-3
+- z-index: 50
+- Кнопка: фиолетовая #7631ff
+
+Логика кнопки «Печать QR-кодов поставок»:
+1. Для каждой выбранной поставки запросить QR-код:
+   GET /api/wb/supplies/{supplyId}/barcode-qr
+2. Собрать все PNG base64 в один массив
+3. Открыть окно печати:
+
+const printHTML = `
+  <html><head><style>
+    @page { size: 58mm 40mm; margin: 0; }
+    body { margin: 0; padding: 0; }
+    img { width: 58mm; height: 40mm; display: block; page-break-after: always; }
+  </style></head>
+  <body>
+    ${qrImages.map(b64 =>
+      `<img src="data:image/png;base64,${b64}" />`
+    ).join('')}
+  </body></html>
+`;
+const win = window.open('', '_blank');
+win.document.write(printHTML);
+win.document.close();
+win.print();
+win.close();
+
+═══════════════════════════════════════
+ЧАСТЬ 2 — РАСШИРЕНИЕ МЕНЮ ··· ДЛЯ ПОСТАВОК
+═══════════════════════════════════════
+
+В меню ··· для строк в «На сборке» и «В доставке»:
+
+1. Печать стикеров (проверить работу)
+2. Печать QR-кода поставки (проверить работу)
+3. Открыть лист подбора в PDF
+4. Скачать лист подбора в Excel
+5. Детализация поставки
+6. ───── разделитель ─────
+7. Закрыть поставку (только для «На сборке»)
+
+2.1 — Лист подбора в PDF:
+
+Добавить эндпоинт GET /api/wb/supplies/:supplyId/picking-pdf:
+
+SQL запрос:
+SELECT o.order_number, o.wb_order_id, o.wb_rid,
+  p.name as product_name, p.sku, p.barcode, p.image_url,
+  oi.quantity, oi.price
+FROM orders o
+LEFT JOIN order_items oi ON o.id = oi.order_id
+LEFT JOIN products p ON oi.product_id = p.id
+WHERE o.wb_supply_id = $supplyId
+AND o.organization_id = $orgId;
+
+Генерировать HTML таблицу:
+- Заголовок: «Лист подбора — {supplyId} — {date}»
+- Таблица: № | Название товара | Баркод | Артикул | Кол-во
+- CSS: @page { size: A4; margin: 15mm; }
+- Вернуть как text/html
+
+Фронтенд handlePickingListPDF:
+1. Fetch GET /api/wb/supplies/{supplyId}/picking-pdf
+2. Получить HTML текст
+3. Открыть в новом окне → win.print()
+
+2.2 — Лист подбора в Excel:
+
+Использовать библиотеку xlsx (уже установлена).
+
+Фронтенд handlePickingListExcel:
+1. Fetch GET /api/wb/supplies/{supplyId}/picking-list
+2. Создать worksheet:
+   const ws = XLSX.utils.json_to_sheet(items.map(item => ({
+     'Артикул': item.sku || '',
+     'Название': item.productName || '',
+     'Баркод': item.barcode || '',
+     'Кол-во': item.quantity || 1,
+     'Цена': item.price || 0,
+   })));
+3. Скачать файл: подбор_{supplyId}.xlsx
+
+2.3 — Детализация поставки:
+
+При клике «Детализация поставки» — открыть модальное окно:
+
+Заголовок: «Поставка {supplyId} — {orders_count} заказов»
+
+Таблица заказов поставки:
+Колонки: Заказ | Товар | Артикул | Баркод | Кол-во | Цена | Стикер
+
+Загружать через GET /api/wb/orders?supplyId={supplyId}
+
+Добавить фильтр supplyId в GET /api/wb/orders:
+const supplyIdFilter = req.query.supplyId as string | undefined;
+${supplyIdFilter ? sql`AND o.wb_supply_id = ${supplyIdFilter}` : sql``}
+
+═══════════════════════════════════════
+ЧАСТЬ 3 — СИНХРОНИЗАЦИЯ СТАТУСОВ
+═══════════════════════════════════════
+
+3.1 — Ускорить автосинк WB до 2 минут:
+
+В server/routes.ts найди setInterval для autoSyncWbOrders.
+// БЫЛО:
+setInterval(autoSyncWbOrders, 5 * 60 * 1000);
+// СТАЛО:
+setInterval(autoSyncWbOrders, 2 * 60 * 1000);
+
+3.2 — Добавить синхронизацию поставок в автосинк:
+
+В autoSyncWbOrders добавить после основного sync:
+
+try {
+  await fetch(`http://localhost:5000/api/wb/supplies/sync`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-internal-sync': 'true'
+    }
+  });
+} catch (e) {
+  console.log('[wb-auto-sync] Supply sync failed:', e.message);
+}
+
+В POST /api/wb/supplies/sync добавить проверку:
+if (req.headers['x-internal-sync'] === 'true') {
+  // пропустить аутентификацию — внутренний запрос
+}
+
+3.3 — Счётчики вкладок из БД:
+
+Добавить GET /api/wb/counts:
+
+-- Заказы:
+SELECT
+  COUNT(CASE WHEN wb_status IN ('new','waiting')
+    AND wb_supply_id IS NULL
+    AND created_at >= NOW() - INTERVAL '72 hours' THEN 1 END) as new_count,
+  COUNT(CASE WHEN wb_status IN ('cancel','user_cancel','declined',
+    'cancelled','cancel_ignore')
+    OR (status='cancelled' AND source='wildberries') THEN 1 END) as cancelled_count,
+  COUNT(CASE WHEN wb_status IN ('delivered','sold','receive',
+    'returned') THEN 1 END) as archive_count
+FROM orders
+WHERE source = 'wildberries' AND organization_id = $orgId;
+
+-- Поставки:
+SELECT
+  COUNT(CASE WHEN status = 'open' THEN 1 END) as assembly_count,
+  COUNT(CASE WHEN status = 'closed' THEN 1 END) as delivery_count
+FROM wb_supplies
+WHERE organization_id = $orgId;
+
+Фронтенд: useQuery с refetchInterval: 120000 (2 минуты).
+Использовать счётчики в бейджах вкладок.
+
+3.4 — Статусы поставок — точные цвета как в WB Seller:
+
+В GET /api/wb/supplies добавить status_label:
+CASE ws.status
+  WHEN 'open' THEN 'Ждёт передачи в доставку'
+  WHEN 'closed' THEN 'Поставка в обработке'
+  ELSE ws.status
+END as status_label
+
+Точные цвета бейджей:
+- status = 'open' → bg-orange-100 text-orange-700
+  текст: «Ждёт передачи в доставку»
+- status = 'closed' → bg-blue-100 text-blue-700
+  текст: «Поставка в обработке»
+
+═══════════════════════════════════════
+ЧАСТЬ 4 — БЭКЕНД ДОРАБОТКИ
+═══════════════════════════════════════
+
+4.1 — Обновить GET /api/wb/supplies:
+- Добавить status_label (CASE expression)
+- Убедиться что orders_count считается правильно
+- Вернуть closed_at
+
+4.2 — Добавить фильтр supplyId в GET /api/wb/orders (из пункта 2.3)
+
+4.3 — Убедиться что стикеры 58×40мм:
+URL: https://marketplace-api.wildberries.ru/api/v3/orders/stickers
+     ?type=png&width=58&height=40
+
+4.4 — Добавить GET /api/wb/counts (из пункта 3.3)
+
+4.5 — Добавить GET /api/wb/supplies/:supplyId/picking-pdf
+
+═══════════════════════════════════════
+ОБНОВИТЬ ДОКУМЕНТАЦИЮ
+═══════════════════════════════════════
+
+В CLAUDE.md добавь в "Статус разработки":
+✓ WB чекбоксы + sticky bar для групповой печати QR
+✓ Расширенное меню поставок (PDF/Excel/детализация)
+✓ Автосинк WB каждые 2 минуты + синхронизация поставок
+✓ Счётчики вкладок из /api/wb/counts
+✓ Статусы поставок с точными цветами WB
+
+Не трогать: Ozon, Яндекс, getSalesData, аутентификацию, RBAC.
