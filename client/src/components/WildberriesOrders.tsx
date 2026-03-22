@@ -140,13 +140,16 @@ function WarehouseCell({ order }: { order: any }) {
   );
 }
 
-function CancelReasonLabel({ wbStatus }: { wbStatus: string }) {
+function CancelReasonLabel({ wbStatus, status }: { wbStatus: string; status?: string }) {
   const reasons: Record<string, string> = {
     cancel: "Отменён продавцом",
     user_cancel: "Отменён покупателем",
     declined: "Отклонён системой",
+    cancelled: "Отменён",
+    cancel_ignore: "Отменён (игнорирован)",
   };
-  return <span className="text-sm text-red-600 dark:text-red-400">{reasons[wbStatus] || wbStatus}</span>;
+  const label = reasons[wbStatus] || (status === "cancelled" ? "Отменён" : wbStatus);
+  return <span className="text-sm text-red-600 dark:text-red-400">{label}</span>;
 }
 
 function RenameSupplyDialog({
@@ -569,13 +572,18 @@ function DeliverySupplyRow({ supply }: { supply: any }) {
         throw new Error(err.message);
       }
       const data = await res.json();
-      const printHTML = `<html><head><style>
-        @page { margin: 20mm; }
-        body { margin: 0; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-        img { max-width: 400px; max-height: 400px; }
-      </style></head><body><img src="data:image/png;base64,${data.file}" /></body></html>`;
+      const viewHTML = `<html><head><title>QR-код поставки ${supply.supply_id}</title><style>
+        body { margin: 0; background: #f8f9fa; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: Arial, sans-serif; gap: 16px; }
+        h2 { color: #333; font-size: 16px; margin: 0; }
+        img { max-width: 400px; max-height: 400px; border: 1px solid #ddd; background: #fff; padding: 16px; border-radius: 8px; }
+        button { padding: 8px 20px; background: #7631ff; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+      </style></head><body>
+        <h2>QR-код поставки ${supply.supply_id}</h2>
+        <img src="data:image/png;base64,${data.file}" />
+        <button onclick="window.print()">Печать</button>
+      </body></html>`;
       const win = window.open("", "_blank");
-      if (win) { win.document.write(printHTML); win.document.close(); win.print(); win.close(); }
+      if (win) { win.document.write(viewHTML); win.document.close(); }
     } catch (e: any) {
       toast({ title: "Ошибка QR-кода", description: e.message, variant: "destructive" });
     }
@@ -1066,7 +1074,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
                       <span className="font-mono text-xs text-muted-foreground">{order.barcode || "—"}</span>
                     </TableCell>
                     <TableCell>
-                      <CancelReasonLabel wbStatus={order.wb_status || ""} />
+                      <CancelReasonLabel wbStatus={order.wb_status || ""} status={order.status} />
                     </TableCell>
                   </TableRow>
                 ))}

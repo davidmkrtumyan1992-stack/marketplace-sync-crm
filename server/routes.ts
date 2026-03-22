@@ -4778,8 +4778,9 @@ export async function registerRoutes(
             const supplies: any[] = supplyData.supplies || supplyData.list || [];
 
             for (const supply of supplies) {
-              const supplyId = String(supply.id || supply.supplyId || supply.supply_id);
-              if (!supplyId) continue;
+              const rawId = supply.id || supply.supplyId || supply.supply_id || "";
+              const supplyId = String(rawId);
+              if (!supplyId || supplyId === "undefined" || supplyId === "null") continue;
 
               // Upsert: check if exists first
               const existingRows = await db.execute(sql`
