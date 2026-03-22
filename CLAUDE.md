@@ -44,7 +44,7 @@ organizations → companies → stores → marketplace_settings
 | Лаура — Ozon | 2311038 | ✓ подключён |
 | Лаура texnicol | 2496152 | ✓ подключён |
 | Яндекс Маркет | — | ⏳ не подключён |
-| Wildberries | — | ⏳ не подключён |
+| Wildberries | — | ✓ подключён (FBS sync) |
 
 ## Правила — ОБЯЗАТЕЛЬНО соблюдать
 
@@ -133,7 +133,7 @@ npm run build        # production сборка
 ✓ fetchWithRetry — retry логика для всех 26 вызовов к Ozon API
 ✓ Пагинация с предохранителем 10 страниц для FBO/FBS sync
 ✓ Двойные показатели выручки на дашборде: Gross (Заказано) / Net (К получению) / Отменено — LineChart с двумя линиями, чекбоксы, 3 KPI-карточки, доnut переключается между gross/net breakdown
-📋 WB sync-orders — после подключения WB
+✓ WB FBS синхронизация заказов — autoSyncWbOrders каждые 5 мин, POST /api/marketplace/wildberries/sync-orders, wbStatus → internal status mapping, isCancelledOrder включает WB cancel/user_cancel/declined
 📋 Синхронизация цены Яндекс Маркет — планируется
 
 ## Известные баги

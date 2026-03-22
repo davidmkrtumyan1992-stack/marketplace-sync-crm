@@ -80,6 +80,7 @@ export interface IStorage {
   updateOrderStatus(id: number, status: string): Promise<Order>;
   updateOrderOzonStatus(id: number, ozonStatus: string, status?: string, createdAt?: Date): Promise<Order>;
   updateOrderYandexStatus(id: number, yandexStatus: string, status?: string, createdAt?: Date): Promise<Order>;
+  updateOrderWbStatus(id: number, wbStatus: string, status?: string, createdAt?: Date): Promise<Order>;
   getOrderByExternalId(externalId: string, organizationId: string, storeId?: number | null): Promise<Order | undefined>;
 
   // Webhook Logs
@@ -495,6 +496,14 @@ export class DatabaseStorage implements IStorage {
     return order;
   }
 
+  async updateOrderWbStatus(id: number, wbStatus: string, status?: string, createdAt?: Date): Promise<Order> {
+    const updates: Record<string, any> = { wbStatus };
+    if (status) updates.status = status;
+    if (createdAt) updates.createdAt = createdAt;
+    const [order] = await db.update(orders).set(updates).where(eq(orders.id, id)).returning();
+    return order;
+  }
+
   async getOrderByExternalId(externalId: string, organizationId: string, storeId?: number | null): Promise<Order | undefined> {
     const conditions = [eq(orders.externalId, externalId), eq(orders.organizationId, organizationId)];
     if (storeId != null) {
@@ -856,7 +865,7 @@ export class DatabaseStorage implements IStorage {
    * Текущие статусы отмены:
    * - Ozon: status='cancelled' OR ozon_status='cancelled'
    * - Яндекс: yandex_status='CANCELLED' OR yandex_status='RETURNED'
-   * - WB: добавить когда подключат
+   * - WB: wbStatus in ['cancel','user_cancel','declined']
    */
   async getSalesData(organizationId: string, options: { days?: number; from?: string; to?: string; storeId?: number } = {}): Promise<SalesResponse> {
     const companyList = await this.getCompanies(organizationId);
@@ -885,7 +894,8 @@ export class DatabaseStorage implements IStorage {
     const isCancelledOrder = (o: typeof ordersList[0]) => {
       const ozonCancelled = o.status === "cancelled" && (!o.ozonStatus || o.ozonStatus === "cancelled");
       const yandexCancelled = o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED";
-      return ozonCancelled || yandexCancelled;
+      const wbCancelled = o.wbStatus === "cancel" || o.wbStatus === "user_cancel" || o.wbStatus === "declined";
+      return ozonCancelled || yandexCancelled || wbCancelled;
     };
 
     const filteredAll = ordersList.filter(o => {

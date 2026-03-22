@@ -106,6 +106,10 @@ export const orders = pgTable("orders", {
   postingNumber: text("posting_number"),
   ozonStatus: text("ozon_status"),
   yandexStatus: text("yandex_status"),
+  wbOrderId: text("wb_order_id"),
+  wbStatus: text("wb_status"),
+  wbSupplyId: text("wb_supply_id"),
+  wbRid: text("wb_rid"),
   fulfillmentType: text("fulfillment_type"),
   companyId: integer("company_id").references(() => companies.id),
   storeId: integer("store_id").references(() => stores.id, { onDelete: "cascade" }),
@@ -490,3 +494,14 @@ export type DashboardKPI = {
   };
   companies: CompanyWithStores[];
 };
+
+export const wbSupplies = pgTable("wb_supplies", {
+  id: serial("id").primaryKey(),
+  supplyId: text("supply_id").notNull(),
+  storeId: integer("store_id").references(() => stores.id, { onDelete: "cascade" }),
+  organizationId: text("organization_id").notNull(),
+  name: text("name"),
+  status: text("status").default("open"),
+  createdAt: timestamp("created_at").defaultNow(),
+  closedAt: timestamp("closed_at"),
+});

@@ -313,21 +313,32 @@ export async function registerRoutes(
 
       if (marketplace === "wildberries") {
         try {
-          const testRes = await fetch("https://common-api.wildberries.ru/api/v1/warehouses", {
+          const testRes = await fetch("https://common-api.wildberries.ru/ping", {
             method: "GET",
             headers: {
               "Authorization": apiKey,
               "Content-Type": "application/json",
             },
           });
-          if (!testRes.ok) {
-            if (testRes.status === 401 || testRes.status === 403) {
-              return res.json({ success: false, message: "Неверный API-ключ Wildberries" });
-            }
-            const errText = await testRes.text().catch(() => "");
-            return res.json({ success: false, message: `Ошибка WB API (${testRes.status}): ${errText.slice(0, 200) || "Нет деталей"}` });
+          if (testRes.ok || testRes.status === 200) {
+            return res.json({ success: true, message: "Подключение к Wildberries успешно" });
           }
-          return res.json({ success: true, message: "Подключение к Wildberries успешно" });
+          if (testRes.status === 401 || testRes.status === 403) {
+            return res.json({ success: false, message: "Неверный API-ключ Wildberries" });
+          }
+          // Fallback: try warehouses endpoint if ping not available
+          const warehousesRes = await fetch("https://common-api.wildberries.ru/api/v1/warehouses", {
+            method: "GET",
+            headers: { "Authorization": apiKey, "Content-Type": "application/json" },
+          });
+          if (warehousesRes.ok) {
+            return res.json({ success: true, message: "Подключение к Wildberries успешно" });
+          }
+          if (warehousesRes.status === 401 || warehousesRes.status === 403) {
+            return res.json({ success: false, message: "Неверный API-ключ Wildberries" });
+          }
+          const errText = await warehousesRes.text().catch(() => "");
+          return res.json({ success: false, message: `Ошибка WB API (${warehousesRes.status}): ${errText.slice(0, 200) || "Нет деталей"}` });
         } catch (error: any) {
           return res.json({ success: false, message: `Ошибка сети: ${error.message}` });
         }
@@ -3871,6 +3882,193 @@ export async function registerRoutes(
     }
   });
 
+  const wbStatusToInternal = (wbStatus: string): string => {
+    switch (wbStatus) {
+      case "new":
+      case "waiting":
+        return "pending";
+      case "confirm":
+      case "complete":
+      case "indelivery":
+      case "delivering":
+        return "shipped";
+      case "delivered":
+      case "receive":
+        return "completed";
+      case "cancel":
+      case "user_cancel":
+      case "declined":
+        return "cancelled";
+      default:
+        return "pending";
+    }
+  };
+
+  app.post("/api/marketplace/wildberries/sync-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const requestedStoreId = req.body?.storeId ? Number(req.body.storeId) : null;
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      let wbSettings = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
+
+      if (requestedStoreId) {
+        wbSettings = wbSettings.filter(s => s.storeId === requestedStoreId);
+        if (wbSettings.length === 0) {
+          const store = await storage.getStore(requestedStoreId);
+          if (store && store.marketplace === "wildberries" && store.apiKey) {
+            const company = await storage.getCompany(store.companyId);
+            if (company && company.organizationId === orgId) {
+              const newSetting = await storage.createMarketplaceSetting({
+                marketplace: "wildberries",
+                apiKey: store.apiKey,
+                clientId: null,
+                warehouseId: store.warehouseId || null,
+                isActive: true,
+                storeId: store.id,
+                companyId: store.companyId,
+                organizationId: orgId,
+              });
+              wbSettings = [newSetting];
+            }
+          }
+        }
+      }
+
+      if (wbSettings.length === 0) {
+        return res.json({ success: true, message: "Нет активных WB магазинов", storeResults: [] });
+      }
+
+      const WB_BASE = "https://marketplace-api.wildberries.ru";
+      const since = new Date();
+      since.setUTCHours(21, 0, 0, 0);
+      since.setUTCDate(since.getUTCDate() - 1);
+      const to = new Date();
+      to.setUTCHours(21, 0, 0, 0);
+
+      let totalCreated = 0, totalUpdated = 0;
+      const storeResults: { storeName: string; created: number; updated: number; errors: string[] }[] = [];
+
+      for (const wbSetting of wbSettings) {
+        let resolvedStoreId: number | null = wbSetting.storeId ?? null;
+        let resolvedCompanyId: number | null = wbSetting.companyId ?? null;
+        let resolvedStoreName: string | null = null;
+
+        if (resolvedStoreId) {
+          const store = await storage.getStore(resolvedStoreId);
+          if (store) resolvedStoreName = store.name;
+        }
+
+        let storeCreated = 0, storeUpdated = 0;
+        const storeErrors: string[] = [];
+        const apiKey = wbSetting.apiKey!;
+        const authHeaders = { "Authorization": apiKey, "Content-Type": "application/json" };
+
+        try {
+          const allOrders: any[] = [];
+
+          // Fetch new orders
+          const newRes = await fetch(`${WB_BASE}/api/v3/orders/new`, { method: "GET", headers: authHeaders });
+          if (newRes.ok) {
+            const newData = await newRes.json();
+            const newOrders = newData?.orders || [];
+            allOrders.push(...newOrders);
+          }
+
+          // Fetch all orders for the period
+          const dateFrom = Math.floor(since.getTime() / 1000);
+          const ordersRes = await fetch(
+            `${WB_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom}`,
+            { method: "GET", headers: authHeaders }
+          );
+          if (ordersRes.ok) {
+            const ordersData = await ordersRes.json();
+            const periodOrders = ordersData?.orders || [];
+            for (const o of periodOrders) {
+              if (!allOrders.find(existing => existing.id === o.id)) {
+                allOrders.push(o);
+              }
+            }
+          }
+
+          for (const wbOrder of allOrders) {
+            try {
+              const wbOrderId = String(wbOrder.id);
+              const wbStatus = wbOrder.wbStatus || wbOrder.status || "new";
+              const wbRid = wbOrder.rid ? String(wbOrder.rid) : null;
+              const wbSupplyId = wbOrder.supplyId ? String(wbOrder.supplyId) : null;
+              const createdAtTs = wbOrder.createdAt ? new Date(wbOrder.createdAt * 1000) : new Date();
+              const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
+
+              const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
+
+              if (existingOrder) {
+                if (existingOrder.wbStatus !== wbStatus) {
+                  const internalStatus = wbStatusToInternal(wbStatus);
+                  await storage.updateOrderWbStatus(existingOrder.id, wbStatus, internalStatus, createdAtTs);
+                  storeUpdated++;
+                }
+              } else {
+                const article = wbOrder.article || wbOrder.supplierArticle || "";
+                const qty = wbOrder.quantity || 1;
+                const itemPrice = totalAmount;
+
+                let productId: number | null = null;
+                if (article) {
+                  const [dbProduct] = await db.select().from(productsTable)
+                    .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
+                  if (dbProduct) productId = dbProduct.id;
+                }
+
+                await storage.createOrder({
+                  orderNumber: `WB-${wbOrderId}`,
+                  status: wbStatusToInternal(wbStatus),
+                  totalAmount: totalAmount.toFixed(2),
+                  source: "wildberries",
+                  externalId: wbOrderId,
+                  postingNumber: null,
+                  ozonStatus: null,
+                  yandexStatus: null,
+                  wbOrderId,
+                  wbStatus,
+                  wbRid,
+                  wbSupplyId,
+                  fulfillmentType: "FBS",
+                  storeId: resolvedStoreId ?? undefined,
+                  sourceStoreName: resolvedStoreName ?? undefined,
+                  companyId: resolvedCompanyId ?? undefined,
+                  organizationId: orgId,
+                  createdAt: createdAtTs,
+                } as any, productId
+                  ? [{ productId, quantity: qty, price: itemPrice }]
+                  : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: wbOrder.subject || wbOrder.category || "WB товар", quantity: qty, price: itemPrice }]);
+                storeCreated++;
+              }
+            } catch (orderErr: any) {
+              storeErrors.push(`Order ${wbOrder.id}: ${orderErr.message}`);
+            }
+          }
+
+          if (resolvedStoreId) {
+            await storage.updateStore(resolvedStoreId, { lastSync: new Date() } as any);
+          }
+        } catch (storeErr: any) {
+          storeErrors.push(`Store error: ${storeErr.message}`);
+          console.error(`[wb-sync-orders] Store «${resolvedStoreName}» error:`, storeErr.message);
+        }
+
+        storeResults.push({ storeName: resolvedStoreName || `Store #${resolvedStoreId}`, created: storeCreated, updated: storeUpdated, errors: storeErrors });
+        totalCreated += storeCreated;
+        totalUpdated += storeUpdated;
+        console.log(`[wb-sync-orders] Store «${resolvedStoreName}»: +${storeCreated} новых, ${storeUpdated} обновлено`);
+      }
+
+      res.json({ success: true, created: totalCreated, updated: totalUpdated, storeResults });
+    } catch (error: any) {
+      console.error("[wb-sync-orders] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   const OZON_SYNC_INTERVAL = 5 * 60 * 1000;
 
   const autoSyncOzonStatuses = async () => {
@@ -4201,6 +4399,126 @@ export async function registerRoutes(
   setTimeout(autoSyncYandexOrders, 15000);
   console.log(`[yandex-auto-sync] Background sync scheduled every ${YANDEX_SYNC_INTERVAL / 60000} minutes`);
 
+  const WB_SYNC_INTERVAL = 5 * 60 * 1000;
+  const autoSyncWbOrders = async () => {
+    try {
+      const allSettings = await db.select().from(marketplaceSettingsTable);
+      const wbSettingsAll = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
+      if (wbSettingsAll.length === 0) return;
+
+      const WB_BASE = "https://marketplace-api.wildberries.ru";
+      const since = new Date();
+      since.setUTCHours(21, 0, 0, 0);
+      since.setUTCDate(since.getUTCDate() - 1);
+
+      const orgIds = [...new Set(wbSettingsAll.map(s => s.organizationId))];
+      for (const orgId of orgIds) {
+        const wbSettings = wbSettingsAll.filter(s => s.organizationId === orgId);
+        let updated = 0, created = 0;
+
+        for (const wbSetting of wbSettings) {
+          const resolvedStoreId = wbSetting.storeId ?? null;
+          const resolvedCompanyId = wbSetting.companyId ?? null;
+          let resolvedStoreName: string | null = null;
+          if (resolvedStoreId) {
+            const store = await storage.getStore(resolvedStoreId);
+            if (store) resolvedStoreName = store.name;
+          }
+
+          try {
+            const apiKey = wbSetting.apiKey!;
+            const authHeaders = { "Authorization": apiKey, "Content-Type": "application/json" };
+            const allOrders: any[] = [];
+
+            const newRes = await fetch(`${WB_BASE}/api/v3/orders/new`, { method: "GET", headers: authHeaders });
+            if (newRes.ok) {
+              const newData = await newRes.json();
+              allOrders.push(...(newData?.orders || []));
+            }
+
+            const dateFrom = Math.floor(since.getTime() / 1000);
+            const ordersRes = await fetch(
+              `${WB_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom}`,
+              { method: "GET", headers: authHeaders }
+            );
+            if (ordersRes.ok) {
+              const ordersData = await ordersRes.json();
+              for (const o of ordersData?.orders || []) {
+                if (!allOrders.find(e => e.id === o.id)) allOrders.push(o);
+              }
+            }
+
+            for (const wbOrder of allOrders) {
+              try {
+                const wbOrderId = String(wbOrder.id);
+                const wbStatus = wbOrder.wbStatus || wbOrder.status || "new";
+                const wbRid = wbOrder.rid ? String(wbOrder.rid) : null;
+                const wbSupplyId = wbOrder.supplyId ? String(wbOrder.supplyId) : null;
+                const createdAtTs = wbOrder.createdAt ? new Date(wbOrder.createdAt * 1000) : new Date();
+                const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
+
+                const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
+                if (existingOrder) {
+                  if (existingOrder.wbStatus !== wbStatus) {
+                    await storage.updateOrderWbStatus(existingOrder.id, wbStatus, wbStatusToInternal(wbStatus), createdAtTs);
+                    updated++;
+                  }
+                } else {
+                  const article = wbOrder.article || wbOrder.supplierArticle || "";
+                  const qty = wbOrder.quantity || 1;
+                  let productId: number | null = null;
+                  if (article) {
+                    const [dbProduct] = await db.select().from(productsTable)
+                      .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
+                    if (dbProduct) productId = dbProduct.id;
+                  }
+                  await storage.createOrder({
+                    orderNumber: `WB-${wbOrderId}`,
+                    status: wbStatusToInternal(wbStatus),
+                    totalAmount: totalAmount.toFixed(2),
+                    source: "wildberries",
+                    externalId: wbOrderId,
+                    postingNumber: null,
+                    ozonStatus: null,
+                    yandexStatus: null,
+                    wbOrderId,
+                    wbStatus,
+                    wbRid,
+                    wbSupplyId,
+                    fulfillmentType: "FBS",
+                    storeId: resolvedStoreId ?? undefined,
+                    sourceStoreName: resolvedStoreName ?? undefined,
+                    companyId: resolvedCompanyId ?? undefined,
+                    organizationId: orgId,
+                    createdAt: createdAtTs,
+                  } as any, productId
+                    ? [{ productId, quantity: qty, price: totalAmount }]
+                    : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: wbOrder.subject || "WB товар", quantity: qty, price: totalAmount }]);
+                  created++;
+                }
+              } catch (e: any) {
+                console.error(`[wb-auto-sync] Order ${wbOrder.id} error:`, e.message);
+              }
+            }
+
+            if (resolvedStoreId) {
+              await storage.updateStore(resolvedStoreId, { lastSync: new Date() } as any);
+            }
+            console.log(`[wb-auto-sync] Store «${resolvedStoreName}»: +${created} новых, ${updated} обновлено`);
+          } catch (err: any) {
+            console.error(`[wb-auto-sync] Error for store ${resolvedStoreName}:`, err.message);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("[wb-auto-sync] Error:", error);
+    }
+  };
+
+  setInterval(autoSyncWbOrders, WB_SYNC_INTERVAL);
+  setTimeout(autoSyncWbOrders, 20000);
+  console.log(`[wb-auto-sync] Background sync scheduled every ${WB_SYNC_INTERVAL / 60000} minutes`);
+
   let lastSyncTrigger = 0;
   app.post("/api/sync/trigger", isAuthenticated, async (req, res) => {
     const now = Date.now();
@@ -4212,6 +4530,7 @@ export async function registerRoutes(
     setTimeout(() => {
       autoSyncOzonStatuses().catch(e => console.error("[sync-trigger] Ozon error:", e));
       autoSyncYandexOrders().catch(e => console.error("[sync-trigger] Yandex error:", e));
+      autoSyncWbOrders().catch(e => console.error("[sync-trigger] WB error:", e));
     }, 100);
     res.json({ ok: true, message: "Sync triggered" });
   });
