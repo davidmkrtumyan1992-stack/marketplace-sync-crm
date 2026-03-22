@@ -355,10 +355,12 @@ function SupplyDetailDialog({
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-4xl" data-testid="dialog-supply-detail">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <span>{supplyName}</span>
-            <span className="text-sm font-normal text-muted-foreground font-mono">({supplyId})</span>
+          <DialogTitle>
+            Поставка {supplyId} — {orders.length} {orders.length === 1 ? "заказ" : orders.length >= 2 && orders.length <= 4 ? "заказа" : "заказов"}
           </DialogTitle>
+          {supplyName !== supplyId && (
+            <p className="text-sm text-muted-foreground mt-1">{supplyName}</p>
+          )}
         </DialogHeader>
         {isLoading ? (
           <div className="flex justify-center py-10">
@@ -1149,7 +1151,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
                 data-testid="button-bulk-print-qr"
               >
                 <QrCode className="w-4 h-4 mr-1.5" />
-                Печать QR-кодов
+                Печать QR-кодов поставок
               </Button>
             </div>
           )}
@@ -1228,7 +1230,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
                 data-testid="button-bulk-print-qr-delivery"
               >
                 <QrCode className="w-4 h-4 mr-1.5" />
-                Печать QR-кодов
+                Печать QR-кодов поставок
               </Button>
             </div>
           )}
