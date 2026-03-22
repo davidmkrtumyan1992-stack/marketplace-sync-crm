@@ -324,21 +324,24 @@ export async function registerRoutes(
           if (pingRes.status === 401 || pingRes.status === 403) {
             return res.json({ success: false, message: "Неверный API ключ Wildberries" });
           }
-          // Fallback: ping вернул 404 — пробуем рабочий endpoint
-          const newOrdersRes = await fetch(
-            "https://marketplace-api.wildberries.ru/api/v3/orders/new?limit=1&next=0",
-            { method: "GET", headers: { "Authorization": cleanApiKey } }
-          );
-          if (newOrdersRes.ok || newOrdersRes.status === 200) {
-            return res.json({ success: true, message: "Подключение к Wildberries успешно" });
+          // Только при 404 — пробуем fallback endpoint
+          if (pingRes.status === 404) {
+            const newOrdersRes = await fetch(
+              "https://marketplace-api.wildberries.ru/api/v3/orders/new?limit=1&next=0",
+              { method: "GET", headers: { "Authorization": cleanApiKey } }
+            );
+            if (newOrdersRes.ok || newOrdersRes.status === 200) {
+              return res.json({ success: true, message: "Подключение к Wildberries успешно" });
+            }
+            if (newOrdersRes.status === 401 || newOrdersRes.status === 403) {
+              return res.json({ success: false, message: "Неверный API ключ Wildberries" });
+            }
+            if (newOrdersRes.status === 404) {
+              return res.json({ success: false, message: "Неверный URL — проверьте документацию WB API" });
+            }
+            return res.json({ success: false, message: `Ошибка WB API (${newOrdersRes.status})` });
           }
-          if (newOrdersRes.status === 401 || newOrdersRes.status === 403) {
-            return res.json({ success: false, message: "Неверный API ключ Wildberries" });
-          }
-          if (newOrdersRes.status === 404) {
-            return res.json({ success: false, message: "Неверный URL — проверьте документацию WB API" });
-          }
-          return res.json({ success: false, message: `Ошибка WB API (${newOrdersRes.status})` });
+          return res.json({ success: false, message: `Ошибка WB API (${pingRes.status})` });
         } catch (error: any) {
           return res.json({ success: false, message: `Ошибка сети: ${error.message}` });
         }
@@ -4544,109 +4547,6 @@ export async function registerRoutes(
   setInterval(autoSyncWbOrders, WB_SYNC_INTERVAL);
   setTimeout(autoSyncWbOrders, 20000);
   console.log(`[wb-auto-sync] Background sync scheduled every ${WB_SYNC_INTERVAL / 60000} minutes`);
-
-  // Одноразовый исторический ресинк WB — 01.03.2026 по сегодня (запускается 30 сек после старта)
-  const runWbHistoricalSync = async () => {
-    try {
-      const allSettings = await db.select().from(marketplaceSettingsTable);
-      const wbSettingsAll = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
-      if (wbSettingsAll.length === 0) {
-        console.log("[wb-history] Нет активных WB магазинов, пропуск");
-        return;
-      }
-      // 01.03.2026 00:00 МСК = 28.02.2026 21:00 UTC
-      const dateFrom = Math.floor(new Date("2026-02-28T21:00:00Z").getTime() / 1000);
-      const dateTo = Math.floor(Date.now() / 1000);
-      console.log(`[wb-history] Исторический ресинк с 01.03.2026 по сегодня для ${wbSettingsAll.length} магазина(ов)`);
-
-      for (const wbSetting of wbSettingsAll) {
-        const orgId = wbSetting.organizationId;
-        const resolvedStoreId = wbSetting.storeId ?? null;
-        const cleanApiKey = wbSetting.apiKey!.trim();
-        const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
-        const WB_BASE = "https://marketplace-api.wildberries.ru";
-        let storeName = `Store #${resolvedStoreId}`;
-        if (resolvedStoreId) {
-          const store = await storage.getStore(resolvedStoreId);
-          if (store) storeName = store.name;
-        }
-        let created = 0, updated = 0;
-        const allOrders: any[] = [];
-
-        const MAX_PAGES = 20;
-        let nextCursor = 0;
-        for (let page = 0; page < MAX_PAGES; page++) {
-          const url = `${WB_BASE}/api/v3/orders?limit=1000&next=${nextCursor}&dateFrom=${dateFrom}&dateTo=${dateTo}`;
-          try {
-            const res = await fetchWithRetry(url, { headers: authHeaders });
-            if (!res.ok) { console.error(`[wb-history] API ${res.status} стр. ${page + 1}`); break; }
-            const data = await res.json();
-            const pageOrders: any[] = data?.orders || [];
-            for (const o of pageOrders) {
-              if (!allOrders.find(e => e.id === o.id)) allOrders.push(o);
-            }
-            console.log(`[wb-history] «${storeName}» стр. ${page + 1}: ${pageOrders.length} заказов (всего: ${allOrders.length})`);
-            if (pageOrders.length < 1000) break;
-            nextCursor = data.next || 0;
-            if (nextCursor === 0) break;
-            if (page === MAX_PAGES - 1) console.warn("[wb-history] Достигнут лимит 20 страниц");
-          } catch (err: any) {
-            console.error(`[wb-history] Fetch error стр. ${page + 1}:`, err.message);
-            break;
-          }
-        }
-
-        for (const wbOrder of allOrders) {
-          try {
-            const wbOrderId = String(wbOrder.id);
-            const wbStatus = wbOrder.wbStatus || wbOrder.status || "new";
-            const wbRid = wbOrder.rid ? String(wbOrder.rid) : null;
-            const wbSupplyId = wbOrder.supplyId ? String(wbOrder.supplyId) : null;
-            const createdAtRaw = wbOrder.createdAt;
-            const createdAtTs = createdAtRaw
-              ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
-              : new Date();
-            const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
-            const article = wbOrder.article || wbOrder.supplierArticle || "";
-
-            const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
-            if (existingOrder) {
-              if (existingOrder.wbStatus !== wbStatus) {
-                await storage.updateOrderWbStatus(existingOrder.id, wbStatus, wbStatusToInternal(wbStatus), createdAtTs);
-                updated++;
-              }
-            } else {
-              let productId: number | null = null;
-              if (article) {
-                const [dbProduct] = await db.select().from(productsTable)
-                  .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
-                if (dbProduct) productId = dbProduct.id;
-              }
-              await storage.createOrder({
-                orderNumber: `WB-${wbOrderId}`, status: wbStatusToInternal(wbStatus),
-                totalAmount: totalAmount.toFixed(2), source: "wildberries",
-                externalId: wbOrderId, postingNumber: null, ozonStatus: null, yandexStatus: null,
-                wbOrderId, wbStatus, wbRid, wbSupplyId, fulfillmentType: "FBS",
-                storeId: resolvedStoreId ?? undefined,
-                companyId: wbSetting.companyId ?? undefined, organizationId: orgId,
-                createdAt: createdAtTs,
-              } as any, productId
-                ? [{ productId, quantity: 1, price: totalAmount }]
-                : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: wbOrder.subject || "WB товар", quantity: 1, price: totalAmount }]);
-              created++;
-            }
-          } catch (orderErr: any) {
-            console.error(`[wb-history] Order ${wbOrder.id} error:`, orderErr.message);
-          }
-        }
-        console.log(`[wb-history] «${storeName}» завершено: +${created} новых, ${updated} обновлено`);
-      }
-      console.log("[wb-history] Исторический ресинк завершён");
-    } catch (err: any) {
-      console.error("[wb-history] Ошибка:", err.message);
-    }
-  };
-  setTimeout(runWbHistoricalSync, 30000);
 
   let lastSyncTrigger = 0;
   app.post("/api/sync/trigger", isAuthenticated, async (req, res) => {
