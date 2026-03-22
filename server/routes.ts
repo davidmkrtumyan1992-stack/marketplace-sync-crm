@@ -313,7 +313,7 @@ export async function registerRoutes(
 
       if (marketplace === "wildberries") {
         try {
-          const testRes = await fetch("https://common-api.wildberries.ru/ping", {
+          const testRes = await fetch("https://common-api.wildberries.ru/api/v1/ping", {
             method: "GET",
             headers: {
               "Authorization": apiKey,
@@ -3996,7 +3996,10 @@ export async function registerRoutes(
               const wbStatus = wbOrder.wbStatus || wbOrder.status || "new";
               const wbRid = wbOrder.rid ? String(wbOrder.rid) : null;
               const wbSupplyId = wbOrder.supplyId ? String(wbOrder.supplyId) : null;
-              const createdAtTs = wbOrder.createdAt ? new Date(wbOrder.createdAt * 1000) : new Date();
+              const createdAtRaw = wbOrder.createdAt;
+              const createdAtTs = createdAtRaw
+                ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+                : new Date();
               const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
 
               const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
@@ -4414,9 +4417,9 @@ export async function registerRoutes(
       const orgIds = [...new Set(wbSettingsAll.map(s => s.organizationId))];
       for (const orgId of orgIds) {
         const wbSettings = wbSettingsAll.filter(s => s.organizationId === orgId);
-        let updated = 0, created = 0;
 
         for (const wbSetting of wbSettings) {
+          let storeCreated = 0, storeUpdated = 0;
           const resolvedStoreId = wbSetting.storeId ?? null;
           const resolvedCompanyId = wbSetting.companyId ?? null;
           let resolvedStoreName: string | null = null;
@@ -4454,14 +4457,17 @@ export async function registerRoutes(
                 const wbStatus = wbOrder.wbStatus || wbOrder.status || "new";
                 const wbRid = wbOrder.rid ? String(wbOrder.rid) : null;
                 const wbSupplyId = wbOrder.supplyId ? String(wbOrder.supplyId) : null;
-                const createdAtTs = wbOrder.createdAt ? new Date(wbOrder.createdAt * 1000) : new Date();
+                const createdAtRaw = wbOrder.createdAt;
+                const createdAtTs = createdAtRaw
+                  ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+                  : new Date();
                 const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
 
                 const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
                 if (existingOrder) {
                   if (existingOrder.wbStatus !== wbStatus) {
                     await storage.updateOrderWbStatus(existingOrder.id, wbStatus, wbStatusToInternal(wbStatus), createdAtTs);
-                    updated++;
+                    storeUpdated++;
                   }
                 } else {
                   const article = wbOrder.article || wbOrder.supplierArticle || "";
@@ -4494,7 +4500,7 @@ export async function registerRoutes(
                   } as any, productId
                     ? [{ productId, quantity: qty, price: totalAmount }]
                     : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: wbOrder.subject || "WB товар", quantity: qty, price: totalAmount }]);
-                  created++;
+                  storeCreated++;
                 }
               } catch (e: any) {
                 console.error(`[wb-auto-sync] Order ${wbOrder.id} error:`, e.message);
@@ -4504,7 +4510,7 @@ export async function registerRoutes(
             if (resolvedStoreId) {
               await storage.updateStore(resolvedStoreId, { lastSync: new Date() } as any);
             }
-            console.log(`[wb-auto-sync] Store «${resolvedStoreName}»: +${created} новых, ${updated} обновлено`);
+            console.log(`[wb-auto-sync] Store «${resolvedStoreName}»: +${storeCreated} новых, ${storeUpdated} обновлено`);
           } catch (err: any) {
             console.error(`[wb-auto-sync] Error for store ${resolvedStoreName}:`, err.message);
           }
