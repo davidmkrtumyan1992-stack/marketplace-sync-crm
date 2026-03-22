@@ -4425,7 +4425,7 @@ export async function registerRoutes(
   setTimeout(autoSyncYandexOrders, 15000);
   console.log(`[yandex-auto-sync] Background sync scheduled every ${YANDEX_SYNC_INTERVAL / 60000} minutes`);
 
-  const WB_SYNC_INTERVAL = 5 * 60 * 1000;
+  const WB_SYNC_INTERVAL = 2 * 60 * 1000;
   const autoSyncWbOrders = async () => {
     try {
       const allSettings = await db.select().from(marketplaceSettingsTable);
@@ -4539,6 +4539,11 @@ export async function registerRoutes(
           }
         }
       }
+      // Sync supplies for all active WB orgs after order sync
+      for (const syncOrgId of orgIds) {
+        await syncWbSuppliesForOrg(syncOrgId).catch((e: any) =>
+          console.log('[wb-auto-sync] Supply sync failed:', e.message));
+      }
     } catch (error) {
       console.error("[wb-auto-sync] Error:", error);
     }
@@ -4562,12 +4567,115 @@ export async function registerRoutes(
     return wbSettings[0]?.apiKey?.trim() || null;
   }
 
+  async function syncWbSuppliesForOrg(orgId: string, storeId: number | null = null): Promise<{synced: number, errors: string[]}> {
+    const allSettings = await storage.getMarketplaceSettings(orgId);
+    const wbSettings = allSettings.filter(s =>
+      s.marketplace === "wildberries" && s.isActive && s.apiKey &&
+      (storeId === null || s.storeId === storeId)
+    );
+    if (wbSettings.length === 0) return { synced: 0, errors: [] };
+
+    let totalSynced = 0;
+    const errors: string[] = [];
+
+    for (const wbSetting of wbSettings) {
+      const cleanKey = wbSetting.apiKey!.trim();
+      const authHeaders = { "Authorization": cleanKey, "Content-Type": "application/json" };
+      const resolvedStoreId = wbSetting.storeId ?? null;
+
+      for (const supplyStatus of ["ACTIVE", "CLOSED"]) {
+        try {
+          const supplyRes = await fetch(
+            `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=${supplyStatus}`,
+            { headers: authHeaders }
+          );
+          if (!supplyRes.ok) {
+            const errText = await supplyRes.text().catch(() => "");
+            errors.push(`[${supplyStatus}] WB API ${supplyRes.status}: ${errText.slice(0, 100)}`);
+            continue;
+          }
+          const supplyData = await supplyRes.json();
+          const supplies: any[] = supplyData.supplies || supplyData.list || [];
+
+          for (const supply of supplies) {
+            const rawId = supply.id || supply.supplyId || supply.supply_id || "";
+            const supplyId = String(rawId);
+            if (!supplyId || supplyId === "undefined" || supplyId === "null") continue;
+
+            const existingRows = await db.execute(sql`
+              SELECT id FROM wb_supplies WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+            `);
+            const existing = ((existingRows as any).rows || existingRows)[0];
+
+            const supplyName = supply.name || null;
+            const dbStatus = supplyStatus === "ACTIVE" ? "open" : "closed";
+            const createdAtRaw = supply.createdAt || supply.created_at;
+            const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
+            const closedAtRaw = supply.closedAt || supply.closed_at;
+            const closedAtTs = closedAtRaw ? new Date(closedAtRaw) : null;
+
+            if (existing) {
+              await db.execute(sql`
+                UPDATE wb_supplies SET
+                  name = ${supplyName},
+                  status = ${dbStatus},
+                  closed_at = ${closedAtTs}
+                WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+              `);
+            } else {
+              await db.insert(wbSuppliesTable).values({
+                supplyId,
+                storeId: resolvedStoreId ?? undefined,
+                organizationId: orgId,
+                name: supplyName,
+                status: dbStatus,
+                createdAt: createdAtTs,
+                closedAt: closedAtTs ?? undefined,
+              } as any);
+            }
+            totalSynced++;
+
+            try {
+              const ordersRes = await fetch(
+                `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`,
+                { headers: authHeaders }
+              );
+              if (ordersRes.ok) {
+                const ordersData = await ordersRes.json();
+                const supplyOrders: any[] = ordersData.orders || [];
+                for (const so of supplyOrders) {
+                  const wbOrderId = String(so.id || so.wbOrderId || "");
+                  if (!wbOrderId) continue;
+                  await db.execute(sql`
+                    UPDATE orders SET wb_supply_id = ${supplyId}
+                    WHERE wb_order_id = ${wbOrderId}
+                      AND organization_id = ${orgId}
+                      AND (wb_supply_id IS NULL OR wb_supply_id != ${supplyId})
+                  `);
+                }
+              }
+            } catch (e: any) {
+              console.warn(`[wb-supplies-sync] Orders fetch for supply ${supplyId}:`, e.message);
+            }
+          }
+        } catch (e: any) {
+          errors.push(`[${supplyStatus}] Error: ${e.message}`);
+          console.error(`[wb-supplies-sync] ${supplyStatus} error:`, e.message);
+        }
+      }
+    }
+
+    console.log(`[wb-supplies-sync] org ${orgId}: Синхронизировано ${totalSynced} поставок`);
+    return { synced: totalSynced, errors };
+  }
+
   // GET /api/wb/orders — список заказов WB с маппингом статусов
   app.get("/api/wb/orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const status = req.query.status as string || "new";
       const storeId = req.query.storeId ? Number(req.query.storeId) : null;
+      const supplyIdFilter = req.query.supplyId as string | undefined;
 
       const allOrders = await db.execute(sql`
         SELECT DISTINCT ON (o.id)
@@ -4584,11 +4692,17 @@ export async function registerRoutes(
         WHERE o.source = 'wildberries'
           AND o.organization_id = ${orgId}
           ${storeId ? sql`AND o.store_id = ${storeId}` : sql``}
-          ${status === "new" ? sql`AND o.created_at >= NOW() - INTERVAL '72 hours'` : sql``}
+          ${supplyIdFilter ? sql`AND o.wb_supply_id = ${supplyIdFilter}` : sql``}
+          ${status === "new" && !supplyIdFilter ? sql`AND o.created_at >= NOW() - INTERVAL '72 hours'` : sql``}
         ORDER BY o.id, o.created_at DESC
       `);
 
       const rows = (allOrders as any).rows || allOrders;
+
+      // When supplyIdFilter is provided, return all orders for that supply without status filtering
+      if (supplyIdFilter) {
+        return res.json(rows);
+      }
 
       const filtered = rows.filter((o: any) => {
         const ws = o.wb_status || "";
@@ -4755,100 +4869,8 @@ export async function registerRoutes(
         return res.status(400).json({ message: "WB магазины не найдены или не настроены" });
       }
 
-      let totalSynced = 0;
-      const errors: string[] = [];
-
-      for (const wbSetting of wbSettings) {
-        const cleanKey = wbSetting.apiKey!.trim();
-        const authHeaders = { "Authorization": cleanKey, "Content-Type": "application/json" };
-        const resolvedStoreId = wbSetting.storeId ?? null;
-
-        for (const supplyStatus of ["ACTIVE", "CLOSED"]) {
-          try {
-            const supplyRes = await fetch(
-              `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=${supplyStatus}`,
-              { headers: authHeaders }
-            );
-            if (!supplyRes.ok) {
-              const errText = await supplyRes.text().catch(() => "");
-              errors.push(`[${supplyStatus}] WB API ${supplyRes.status}: ${errText.slice(0, 100)}`);
-              continue;
-            }
-            const supplyData = await supplyRes.json();
-            const supplies: any[] = supplyData.supplies || supplyData.list || [];
-
-            for (const supply of supplies) {
-              const rawId = supply.id || supply.supplyId || supply.supply_id || "";
-              const supplyId = String(rawId);
-              if (!supplyId || supplyId === "undefined" || supplyId === "null") continue;
-
-              // Upsert: check if exists first
-              const existingRows = await db.execute(sql`
-                SELECT id FROM wb_supplies WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
-              `);
-              const existing = ((existingRows as any).rows || existingRows)[0];
-
-              const supplyName = supply.name || null;
-              const dbStatus = supplyStatus === "ACTIVE" ? "open" : "closed";
-              const createdAtRaw = supply.createdAt || supply.created_at;
-              const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
-              const closedAtRaw = supply.closedAt || supply.closed_at;
-              const closedAtTs = closedAtRaw ? new Date(closedAtRaw) : null;
-
-              if (existing) {
-                await db.execute(sql`
-                  UPDATE wb_supplies SET
-                    name = ${supplyName},
-                    status = ${dbStatus},
-                    closed_at = ${closedAtTs}
-                  WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
-                `);
-              } else {
-                await db.insert(wbSuppliesTable).values({
-                  supplyId,
-                  storeId: resolvedStoreId ?? undefined,
-                  organizationId: orgId,
-                  name: supplyName,
-                  status: dbStatus,
-                  createdAt: createdAtTs,
-                  closedAt: closedAtTs ?? undefined,
-                } as any);
-              }
-              totalSynced++;
-
-              // Подтянуть заказы поставки и обновить wb_supply_id
-              try {
-                const ordersRes = await fetch(
-                  `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`,
-                  { headers: authHeaders }
-                );
-                if (ordersRes.ok) {
-                  const ordersData = await ordersRes.json();
-                  const supplyOrders: any[] = ordersData.orders || [];
-                  for (const so of supplyOrders) {
-                    const wbOrderId = String(so.id || so.wbOrderId || "");
-                    if (!wbOrderId) continue;
-                    await db.execute(sql`
-                      UPDATE orders SET wb_supply_id = ${supplyId}
-                      WHERE wb_order_id = ${wbOrderId}
-                        AND organization_id = ${orgId}
-                        AND (wb_supply_id IS NULL OR wb_supply_id != ${supplyId})
-                    `);
-                  }
-                }
-              } catch (e: any) {
-                console.warn(`[wb-supplies-sync] Orders fetch for supply ${supplyId}:`, e.message);
-              }
-            }
-          } catch (e: any) {
-            errors.push(`[${supplyStatus}] Error: ${e.message}`);
-            console.error(`[wb-supplies-sync] ${supplyStatus} error:`, e.message);
-          }
-        }
-      }
-
-      console.log(`[wb-supplies-sync] Синхронизировано ${totalSynced} поставок`);
-      res.json({ success: true, synced: totalSynced, errors });
+      const result = await syncWbSuppliesForOrg(orgId, storeId);
+      res.json({ success: true, synced: result.synced, errors: result.errors });
     } catch (error: any) {
       console.error("[wb-supplies-sync] Error:", error);
       res.status(500).json({ message: error.message });
@@ -4867,7 +4889,12 @@ export async function registerRoutes(
           ws.id, ws.supply_id, ws.name, ws.status, ws.store_id,
           ws.created_at, ws.closed_at,
           s.name as store_name,
-          COUNT(o.id) as orders_count
+          COUNT(o.id) as orders_count,
+          CASE ws.status
+            WHEN 'open' THEN 'На сборке'
+            WHEN 'closed' THEN 'В доставке'
+            ELSE ws.status
+          END as status_label
         FROM wb_supplies ws
         LEFT JOIN stores s ON ws.store_id = s.id
         LEFT JOIN orders o ON o.wb_supply_id = ws.supply_id AND o.organization_id = ws.organization_id
@@ -5166,6 +5193,123 @@ export async function registerRoutes(
       res.json({ file: base64, supplyId });
     } catch (error: any) {
       console.error("[wb-supply-barcode] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // GET /api/wb/counts — счётчики заказов и поставок по вкладкам
+  app.get("/api/wb/counts", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+
+      const orderCounts = await db.execute(sql`
+        SELECT
+          COUNT(CASE WHEN wb_status IN ('new','waiting') AND wb_supply_id IS NULL
+            AND created_at >= NOW() - INTERVAL '72 hours' THEN 1 END) as new_count,
+          COUNT(CASE WHEN (wb_status IN ('cancel','user_cancel','declined','cancelled','cancel_ignore')
+            OR status = 'cancelled') THEN 1 END) as cancelled_count,
+          COUNT(CASE WHEN wb_status IN ('delivered','sold','receive','returned') THEN 1 END) as archive_count
+        FROM orders
+        WHERE source = 'wildberries' AND organization_id = ${orgId}
+      `);
+
+      const supplyCounts = await db.execute(sql`
+        SELECT
+          COUNT(CASE WHEN status = 'open' THEN 1 END) as assembly_count,
+          COUNT(CASE WHEN status = 'closed' THEN 1 END) as delivery_count
+        FROM wb_supplies
+        WHERE organization_id = ${orgId}
+      `);
+
+      const oc: any = ((orderCounts as any).rows || orderCounts)[0] || {};
+      const sc: any = ((supplyCounts as any).rows || supplyCounts)[0] || {};
+
+      res.json({
+        new_count: Number(oc.new_count) || 0,
+        assembly_count: Number(sc.assembly_count) || 0,
+        delivery_count: Number(sc.delivery_count) || 0,
+        archive_count: Number(oc.archive_count) || 0,
+        cancelled_count: Number(oc.cancelled_count) || 0,
+      });
+    } catch (error: any) {
+      console.error("[wb-counts] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // GET /api/wb/supplies/:supplyId/picking-pdf — генерация листа подбора в HTML для печати
+  app.get("/api/wb/supplies/:supplyId/picking-pdf", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const supplyId = String(req.params.supplyId);
+
+      const rows = await db.execute(sql`
+        SELECT
+          o.order_number, o.wb_order_id, o.wb_rid,
+          p.name as product_name, p.sku, p.barcode,
+          COALESCE(oi.quantity, 1) as quantity,
+          oi.price
+        FROM orders o
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        LEFT JOIN products p ON oi.product_id = p.id
+        WHERE o.wb_supply_id = ${supplyId}
+          AND o.organization_id = ${orgId}
+        ORDER BY o.id
+      `);
+
+      const items = (rows as any).rows || rows;
+      const date = new Date().toLocaleDateString("ru-RU");
+
+      const tableRows = items.map((r: any, idx: number) => `
+        <tr>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:center;color:#6b7280;">${idx + 1}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-weight:500;">${r.product_name || "WB товар"}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-family:monospace;font-size:11px;">${r.barcode || "—"}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-family:monospace;font-size:11px;">${r.sku || "—"}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:center;font-weight:700;font-size:15px;">${r.quantity || 1}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:center;">☐</td>
+        </tr>
+      `).join("");
+
+      const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Лист подбора — ${supplyId}</title>
+<style>
+  @page { size: A4; margin: 15mm; }
+  body { font-family: Arial, sans-serif; font-size: 12px; color: #111827; margin: 0; }
+  .header { margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0 0 4px; color: #111827; }
+  .subtitle { font-size: 13px; color: #6b7280; margin: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #f9fafb; padding: 8px; text-align: left; border-bottom: 2px solid #d1d5db; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; }
+  tr:hover { background: #f9fafb; }
+  @media print { .no-print { display: none; } }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>Лист подбора — ${supplyId}</h1>
+    <p class="subtitle">Дата: ${date} · Позиций: ${items.length}</p>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th style="text-align:center;width:36px;">№</th>
+        <th>Название товара</th>
+        <th>Баркод</th>
+        <th>Артикул</th>
+        <th style="text-align:center;width:60px;">Кол-во</th>
+        <th style="text-align:center;width:36px;">✓</th>
+      </tr>
+    </thead>
+    <tbody>${tableRows}</tbody>
+  </table>
+</body></html>`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
+    } catch (error: any) {
+      console.error("[wb-picking-pdf] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });

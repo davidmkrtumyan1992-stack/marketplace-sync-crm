@@ -14,13 +14,10 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   Loader2, Package, PackageSearch, Printer, FileText, FileSpreadsheet,
-  Monitor, XCircle, Truck, CheckCircle, MoreHorizontal, Pencil, AlertTriangle,
+  XCircle, Truck, CheckCircle, MoreHorizontal, AlertTriangle,
   RefreshCw, QrCode,
 } from "lucide-react";
 import { format } from "date-fns";
@@ -61,6 +58,15 @@ function pluralOrders(n: number): string {
   if (mod10 === 1) return `${n} заказ`;
   if (mod10 >= 2 && mod10 <= 4) return `${n} заказа`;
   return `${n} заказов`;
+}
+
+function pluralSupplies(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 19) return `${n} поставок`;
+  if (mod10 === 1) return `${n} поставка`;
+  if (mod10 >= 2 && mod10 <= 4) return `${n} поставки`;
+  return `${n} поставок`;
 }
 
 function EmptyState({ text = "У вас пока нет заказов в этом статусе" }: { text?: string }) {
@@ -320,22 +326,122 @@ function CreateSupplyDialog({
   );
 }
 
+function SupplyDetailDialog({
+  open,
+  supply,
+  onClose,
+}: {
+  open: boolean;
+  supply: any;
+  onClose: () => void;
+}) {
+  const supplyId = supply?.supply_id;
+  const { data: orders = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/wb/orders", "supplyDetail", supplyId],
+    queryFn: async () => {
+      if (!supplyId) return [];
+      const res = await fetch(`/api/wb/orders?supplyId=${supplyId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Ошибка загрузки заказов поставки");
+      return res.json();
+    },
+    enabled: open && !!supplyId,
+  });
+
+  const supplyName = supply?.name || (supply?.created_at
+    ? `Поставка от ${format(new Date(supply.created_at), "dd.MM.yyyy", { locale: ru })}`
+    : supplyId);
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-4xl" data-testid="dialog-supply-detail">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span>{supplyName}</span>
+            <span className="text-sm font-normal text-muted-foreground font-mono">({supplyId})</span>
+          </DialogTitle>
+        </DialogHeader>
+        {isLoading ? (
+          <div className="flex justify-center py-10">
+            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="max-h-[60vh] overflow-y-auto rounded border">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/30">
+                  <TableHead>Заказ WB</TableHead>
+                  <TableHead>Товар</TableHead>
+                  <TableHead>Артикул</TableHead>
+                  <TableHead>Баркод</TableHead>
+                  <TableHead>Кол-во</TableHead>
+                  <TableHead>Сумма</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {orders.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="p-0">
+                      <EmptyState text="Заказы для этой поставки не найдены" />
+                    </TableCell>
+                  </TableRow>
+                ) : orders.map((order: any) => (
+                  <TableRow key={order.id} data-testid={`row-detail-order-${order.id}`}>
+                    <TableCell>
+                      <span className="font-mono text-sm">{order.wb_order_id || order.order_number || order.id}</span>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <ProductPhoto imageUrl={order.image_url} sku={order.sku || ""} size={32} />
+                        <span className="text-sm truncate max-w-[180px]">{order.product_name || "WB товар"}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-mono text-xs text-muted-foreground">{order.sku || "—"}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-mono text-xs text-muted-foreground">{order.barcode || "—"}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-medium">{order.quantity || 1}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm">{formatCurrency(Number(order.total_amount))}</span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+        <div className="flex items-center justify-between pt-1">
+          <span className="text-sm text-muted-foreground">
+            {orders.length > 0 ? pluralOrders(orders.length) : ""}
+          </span>
+          <Button variant="outline" onClick={onClose} data-testid="button-close-detail-dialog">Закрыть</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function SupplyActionsMenu({
   supply,
   onPrintStickers,
+  onPrintQr,
   onPickingListPdf,
   onPickingListExcel,
-  onPickingListScreen,
-  onRename,
+  onDetailDialog,
+  showClose = false,
   onClose,
 }: {
   supply: any;
   onPrintStickers: () => void;
+  onPrintQr: () => void;
   onPickingListPdf: () => void;
   onPickingListExcel: () => void;
-  onPickingListScreen: () => void;
-  onRename: () => void;
-  onClose: () => void;
+  onDetailDialog: () => void;
+  showClose?: boolean;
+  onClose?: () => void;
 }) {
   return (
     <DropdownMenu>
@@ -344,38 +450,36 @@ function SupplyActionsMenu({
           <MoreHorizontal className="w-4 h-4" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-52">
+      <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuItem onClick={onPrintStickers} data-testid={`menu-print-stickers-${supply.supply_id}`}>
           <Printer className="w-4 h-4 mr-2" /> Печать стикеров
         </DropdownMenuItem>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger data-testid={`menu-picking-list-${supply.supply_id}`}>
-            <FileText className="w-4 h-4 mr-2" /> Лист подбора
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-            <DropdownMenuItem onClick={onPickingListPdf}>
-              <FileText className="w-4 h-4 mr-2" /> PDF
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={onPickingListExcel}>
-              <FileSpreadsheet className="w-4 h-4 mr-2" /> Excel
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={onPickingListScreen}>
-              <Monitor className="w-4 h-4 mr-2" /> Экран
-            </DropdownMenuItem>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={onRename} data-testid={`menu-rename-supply-${supply.supply_id}`}>
-          <Pencil className="w-4 h-4 mr-2" /> Переименовать
+        <DropdownMenuItem onClick={onPrintQr} data-testid={`menu-print-qr-${supply.supply_id}`}>
+          <QrCode className="w-4 h-4 mr-2" /> Печать QR-кода поставки
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onClick={onClose}
-          className="text-red-600 focus:text-red-600"
-          data-testid={`menu-close-supply-${supply.supply_id}`}
-        >
-          <XCircle className="w-4 h-4 mr-2" /> Закрыть поставку
+        <DropdownMenuItem onClick={onPickingListPdf} data-testid={`menu-picking-pdf-${supply.supply_id}`}>
+          <FileText className="w-4 h-4 mr-2" /> Открыть лист подбора в PDF
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={onPickingListExcel} data-testid={`menu-picking-excel-${supply.supply_id}`}>
+          <FileSpreadsheet className="w-4 h-4 mr-2" /> Скачать лист подбора в Excel
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={onDetailDialog} data-testid={`menu-detail-supply-${supply.supply_id}`}>
+          <Package className="w-4 h-4 mr-2" /> Детализация поставки
+        </DropdownMenuItem>
+        {showClose && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={onClose}
+              className="text-red-600 focus:text-red-600"
+              data-testid={`menu-close-supply-${supply.supply_id}`}
+            >
+              <XCircle className="w-4 h-4 mr-2" /> Закрыть поставку
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -424,54 +528,44 @@ function useSupplyActions(supply: any, toast: any, queryClient: any) {
     }
   };
 
-  const buildPickingListHTML = (items: any[], storeName: string) => {
-    const rows = items.map((item: any) => `
-      <tr>
-        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">
-          ${item.imageUrl ? `<img src="${item.imageUrl}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;" />` : `<div style="width:40px;height:40px;background:#f3f4f6;border-radius:4px;"></div>`}
-        </td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-family:monospace;">${item.sku || "—"}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${item.productName || "WB товар"}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-family:monospace;">${item.barcode || "—"}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:center;font-weight:600;">${item.quantity}</td>
-      </tr>
-    `).join("");
-    return `<html><head><style>
-      @page { margin: 20mm; }
-      body { font-family: Arial, sans-serif; font-size: 12px; color: #111; }
-      h1 { font-size: 18px; margin-bottom: 4px; }
-      h2 { font-size: 13px; color: #666; margin-bottom: 16px; font-weight: normal; }
-      table { width: 100%; border-collapse: collapse; }
-      th { background: #f3f4f6; padding: 8px; text-align: left; border-bottom: 2px solid #d1d5db; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
-    </style></head><body>
-      <h1>Лист подбора — ${supplyId}</h1>
-      <h2>${storeName} · ${format(new Date(), "d MMMM yyyy", { locale: ru })}</h2>
-      <table>
-        <thead><tr>
-          <th>Фото</th><th>Артикул</th><th>Название</th><th>Штрихкод</th><th>Кол-во</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </body></html>`;
+  const handlePrintQr = async () => {
+    try {
+      const params = storeId ? `?storeId=${storeId}` : "";
+      const res = await fetch(`/api/wb/supplies/${supplyId}/barcode-qr${params}`, { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Ошибка получения QR-кода" }));
+        throw new Error(err.message);
+      }
+      const data = await res.json();
+      const viewHTML = `<html><head><title>QR-код поставки ${supplyId}</title><style>
+        body { margin: 0; background: #f8f9fa; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: Arial, sans-serif; gap: 16px; }
+        h2 { color: #333; font-size: 16px; margin: 0; }
+        img { max-width: 400px; max-height: 400px; border: 1px solid #ddd; background: #fff; padding: 16px; border-radius: 8px; }
+        button { padding: 8px 20px; background: #7631ff; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+      </style></head><body>
+        <h2>QR-код поставки ${supplyId}</h2>
+        <img src="data:image/png;base64,${data.file}" />
+        <button onclick="window.print()">Печать</button>
+      </body></html>`;
+      const win = window.open("", "_blank");
+      if (win) { win.document.write(viewHTML); win.document.close(); }
+    } catch (e: any) {
+      toast({ title: "Ошибка QR-кода", description: e.message, variant: "destructive" });
+    }
   };
 
   const handlePickingListPdf = async () => {
     try {
-      const items = await fetchPickingListItems();
-      const html = buildPickingListHTML(items, supply.store_name || "");
+      const res = await fetch(`/api/wb/supplies/${supplyId}/picking-pdf`, { credentials: "include" });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        let msg = `Ошибка сервера (${res.status})`;
+        try { msg = JSON.parse(errText).message || msg; } catch {}
+        throw new Error(msg);
+      }
+      const html = await res.text();
       const win = window.open("", "_blank");
       if (win) { win.document.write(html); win.document.close(); win.print(); win.close(); }
-    } catch (e: any) {
-      toast({ title: "Ошибка листа подбора", description: e.message, variant: "destructive" });
-    }
-  };
-
-  const handlePickingListScreen = async () => {
-    try {
-      const items = await fetchPickingListItems();
-      const html = buildPickingListHTML(items, supply.store_name || "");
-      const win = window.open("", "_blank");
-      if (win) { win.document.write(html); win.document.close(); }
     } catch (e: any) {
       toast({ title: "Ошибка листа подбора", description: e.message, variant: "destructive" });
     }
@@ -509,17 +603,37 @@ function useSupplyActions(supply: any, toast: any, queryClient: any) {
     }
   };
 
-  return { handlePrintStickers, handlePickingListPdf, handlePickingListScreen, handlePickingListExcel, handleCloseSupply };
+  return { handlePrintStickers, handlePrintQr, handlePickingListPdf, handlePickingListExcel, handleCloseSupply };
 }
 
-function AssemblySupplyRow({ supply, onRename }: { supply: any; onRename: (supply: any) => void }) {
+function AssemblySupplyRow({
+  supply,
+  isSelected,
+  onSelect,
+  onOpenDetail,
+}: {
+  supply: any;
+  isSelected: boolean;
+  onSelect: (supplyId: string, checked: boolean) => void;
+  onOpenDetail: (supply: any) => void;
+}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const actions = useSupplyActions(supply, toast, queryClient);
   const ordersCount = Number(supply.orders_count) || 0;
 
   return (
-    <TableRow data-testid={`row-wb-assembly-supply-${supply.supply_id}`}>
+    <TableRow
+      className={isSelected ? "bg-violet-50 dark:bg-violet-900/10" : ""}
+      data-testid={`row-wb-assembly-supply-${supply.supply_id}`}
+    >
+      <TableCell className="w-10">
+        <Checkbox
+          checked={isSelected}
+          onCheckedChange={(c) => onSelect(supply.supply_id, !!c)}
+          data-testid={`checkbox-assembly-supply-${supply.supply_id}`}
+        />
+      </TableCell>
       <TableCell>
         <div className="flex flex-col gap-0.5">
           <span className="font-medium text-sm">{supply.name || `Поставка от ${format(new Date(supply.created_at), "dd.MM.yyyy", { locale: ru })}`}</span>
@@ -548,10 +662,11 @@ function AssemblySupplyRow({ supply, onRename }: { supply: any; onRename: (suppl
         <SupplyActionsMenu
           supply={supply}
           onPrintStickers={actions.handlePrintStickers}
+          onPrintQr={actions.handlePrintQr}
           onPickingListPdf={actions.handlePickingListPdf}
           onPickingListExcel={actions.handlePickingListExcel}
-          onPickingListScreen={actions.handlePickingListScreen}
-          onRename={() => onRename(supply)}
+          onDetailDialog={() => onOpenDetail(supply)}
+          showClose={true}
           onClose={actions.handleCloseSupply}
         />
       </TableCell>
@@ -559,38 +674,34 @@ function AssemblySupplyRow({ supply, onRename }: { supply: any; onRename: (suppl
   );
 }
 
-function DeliverySupplyRow({ supply }: { supply: any }) {
+function DeliverySupplyRow({
+  supply,
+  isSelected,
+  onSelect,
+  onOpenDetail,
+}: {
+  supply: any;
+  isSelected: boolean;
+  onSelect: (supplyId: string, checked: boolean) => void;
+  onOpenDetail: (supply: any) => void;
+}) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const actions = useSupplyActions(supply, toast, queryClient);
   const ordersCount = Number(supply.orders_count) || 0;
 
-  const handlePrintQr = async () => {
-    try {
-      const params = supply.store_id ? `?storeId=${supply.store_id}` : "";
-      const res = await fetch(`/api/wb/supplies/${supply.supply_id}/barcode-qr${params}`, { credentials: "include" });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: "Ошибка получения QR-кода" }));
-        throw new Error(err.message);
-      }
-      const data = await res.json();
-      const viewHTML = `<html><head><title>QR-код поставки ${supply.supply_id}</title><style>
-        body { margin: 0; background: #f8f9fa; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: Arial, sans-serif; gap: 16px; }
-        h2 { color: #333; font-size: 16px; margin: 0; }
-        img { max-width: 400px; max-height: 400px; border: 1px solid #ddd; background: #fff; padding: 16px; border-radius: 8px; }
-        button { padding: 8px 20px; background: #7631ff; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
-      </style></head><body>
-        <h2>QR-код поставки ${supply.supply_id}</h2>
-        <img src="data:image/png;base64,${data.file}" />
-        <button onclick="window.print()">Печать</button>
-      </body></html>`;
-      const win = window.open("", "_blank");
-      if (win) { win.document.write(viewHTML); win.document.close(); }
-    } catch (e: any) {
-      toast({ title: "Ошибка QR-кода", description: e.message, variant: "destructive" });
-    }
-  };
-
   return (
-    <TableRow data-testid={`row-wb-delivery-supply-${supply.supply_id}`}>
+    <TableRow
+      className={isSelected ? "bg-violet-50 dark:bg-violet-900/10" : ""}
+      data-testid={`row-wb-delivery-supply-${supply.supply_id}`}
+    >
+      <TableCell className="w-10">
+        <Checkbox
+          checked={isSelected}
+          onCheckedChange={(c) => onSelect(supply.supply_id, !!c)}
+          data-testid={`checkbox-delivery-supply-${supply.supply_id}`}
+        />
+      </TableCell>
       <TableCell>
         <div className="flex flex-col gap-0.5">
           <span className="font-medium text-sm">{supply.name || `Поставка от ${format(new Date(supply.created_at), "dd.MM.yyyy", { locale: ru })}`}</span>
@@ -620,18 +731,15 @@ function DeliverySupplyRow({ supply }: { supply: any }) {
         <span className="text-sm text-muted-foreground">{supply.store_name || "—"}</span>
       </TableCell>
       <TableCell>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="icon" variant="ghost" className="h-8 w-8" data-testid={`button-delivery-menu-${supply.supply_id}`}>
-              <MoreHorizontal className="w-4 h-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuItem onClick={handlePrintQr} data-testid={`menu-print-qr-${supply.supply_id}`}>
-              <QrCode className="w-4 h-4 mr-2" /> Печать QR-кода поставки
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <SupplyActionsMenu
+          supply={supply}
+          onPrintStickers={actions.handlePrintStickers}
+          onPrintQr={actions.handlePrintQr}
+          onPickingListPdf={actions.handlePickingListPdf}
+          onPickingListExcel={actions.handlePickingListExcel}
+          onDetailDialog={() => onOpenDetail(supply)}
+          showClose={false}
+        />
       </TableCell>
     </TableRow>
   );
@@ -640,9 +748,11 @@ function DeliverySupplyRow({ supply }: { supply: any }) {
 export default function WildberriesOrders({ storeId }: { storeId?: number | null }) {
   const [activeTab, setActiveTab] = useState<WbTab>("new");
   const [selectedOrderIds, setSelectedOrderIds] = useState<Set<number>>(new Set());
+  const [selectedSupplyIds, setSelectedSupplyIds] = useState<Set<string>>(new Set());
   const [showCreateSupply, setShowCreateSupply] = useState(false);
   const [singleOrderForSupply, setSingleOrderForSupply] = useState<any | null>(null);
   const [renameSupply, setRenameSupply] = useState<any | null>(null);
+  const [detailSupply, setDetailSupply] = useState<any | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -679,6 +789,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
       toast({ title: `✓ Синхронизировано ${data.synced} поставок` });
       queryClient.invalidateQueries({ queryKey: ["/api/wb/supplies"] });
       queryClient.invalidateQueries({ queryKey: ["/api/wb/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/counts"] });
     },
     onError: (e: any) => {
       toast({ title: "Ошибка синхронизации", description: e.message, variant: "destructive" });
@@ -687,6 +798,16 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
 
   const isOrdersTab = activeTab === "new" || activeTab === "archive" || activeTab === "cancelled";
   const isSuppliesTab = activeTab === "assembly" || activeTab === "delivery";
+
+  const { data: wbCounts } = useQuery<any>({
+    queryKey: ["/api/wb/counts"],
+    queryFn: async () => {
+      const res = await fetch("/api/wb/counts", { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
+    refetchInterval: 120000,
+  });
 
   const ordersQuery = useQuery<any[]>({
     queryKey: ["/api/wb/orders", activeTab, storeId],
@@ -736,14 +857,73 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
     });
   };
 
+  const handleSelectSupply = (supplyId: string, checked: boolean) => {
+    setSelectedSupplyIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(supplyId); else next.delete(supplyId);
+      return next;
+    });
+  };
+
+  const handleSelectAllSupplies = (checked: boolean) => {
+    setSelectedSupplyIds(checked ? new Set(supplies.map((s: any) => s.supply_id)) : new Set());
+  };
+
   const handleTabChange = (tab: WbTab) => {
     setActiveTab(tab);
     setSelectedOrderIds(new Set());
+    setSelectedSupplyIds(new Set());
   };
 
   const handleSupplyCreated = () => {
     setSelectedOrderIds(new Set());
     setActiveTab("assembly");
+  };
+
+  const handleBulkPrintQr = async () => {
+    const supplyList = supplies.filter((s: any) => selectedSupplyIds.has(s.supply_id));
+    if (supplyList.length === 0) return;
+
+    toast({ title: `Загружаем QR-коды для ${pluralSupplies(supplyList.length)}…` });
+    const results: { supplyId: string; file: string }[] = [];
+    const errors: string[] = [];
+
+    for (const supply of supplyList) {
+      try {
+        const params = supply.store_id ? `?storeId=${supply.store_id}` : "";
+        const res = await fetch(`/api/wb/supplies/${supply.supply_id}/barcode-qr${params}`, { credentials: "include" });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ message: "Ошибка" }));
+          errors.push(`${supply.supply_id}: ${err.message}`);
+          continue;
+        }
+        const data = await res.json();
+        results.push({ supplyId: supply.supply_id, file: data.file });
+      } catch (e: any) {
+        errors.push(`${supply.supply_id}: ${e.message}`);
+      }
+    }
+
+    if (results.length === 0) {
+      toast({ title: "Не удалось загрузить QR-коды", description: errors.join("; "), variant: "destructive" });
+      return;
+    }
+
+    const printHTML = `<html><head><title>QR-коды поставок</title><style>
+      @page { size: A4; margin: 10mm; }
+      body { font-family: Arial, sans-serif; margin: 0; }
+      .qr-page { display: flex; flex-direction: column; align-items: center; page-break-after: always; padding: 20px; gap: 12px; }
+      h2 { font-size: 14px; color: #333; margin: 0; }
+      img { max-width: 300px; max-height: 300px; border: 1px solid #ddd; padding: 12px; border-radius: 8px; }
+    </style></head><body>
+      ${results.map((r) => `<div class="qr-page">
+        <h2>QR-код поставки ${r.supplyId}</h2>
+        <img src="data:image/png;base64,${r.file}" />
+      </div>`).join("")}
+    </body></html>`;
+
+    const win = window.open("", "_blank");
+    if (win) { win.document.write(printHTML); win.document.close(); win.print(); win.close(); }
   };
 
   if (isLoading) {
@@ -754,6 +934,17 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
     );
   }
 
+  const getTabCount = (tabKey: string): number | undefined => {
+    if (!wbCounts) return undefined;
+    switch (tabKey) {
+      case "new":       return wbCounts.new_count || 0;
+      case "assembly":  return wbCounts.assembly_count || 0;
+      case "delivery":  return wbCounts.delivery_count || 0;
+      case "archive":   return wbCounts.archive_count || 0;
+      case "cancelled": return wbCounts.cancelled_count || 0;
+    }
+  };
+
   return (
     <div className="space-y-4" data-testid="wb-orders-container">
       {/* Вкладки */}
@@ -761,6 +952,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
         {WB_TABS.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.key;
+          const count = getTabCount(tab.key);
           return (
             <button
               key={tab.key}
@@ -773,6 +965,16 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
             >
               <Icon className="w-3.5 h-3.5" />
               {tab.label}
+              {count !== undefined && count > 0 && (
+                <span
+                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
+                    isActive ? "bg-white/25 text-white" : "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300"
+                  }`}
+                  data-testid={`badge-tab-count-${tab.key}`}
+                >
+                  {count}
+                </span>
+              )}
             </button>
           );
         })}
@@ -857,7 +1059,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
             </Table>
           </div>
 
-          {/* Sticky панель выбора */}
+          {/* Sticky панель выбора заказов */}
           {selectedOrderIds.size > 0 && (
             <div
               className="sticky bottom-4 mt-4 flex items-center justify-between gap-4 px-4 py-3 rounded-xl shadow-lg border"
@@ -905,6 +1107,13 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/30">
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={supplies.length > 0 && selectedSupplyIds.size === supplies.length}
+                        onCheckedChange={(c) => handleSelectAllSupplies(!!c)}
+                        data-testid="checkbox-select-all-assembly"
+                      />
+                    </TableHead>
                     <TableHead>Поставка</TableHead>
                     <TableHead>QR-код поставки</TableHead>
                     <TableHead>Заказы / Грузоместа</TableHead>
@@ -918,11 +1127,35 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
                     <AssemblySupplyRow
                       key={supply.supply_id}
                       supply={supply}
-                      onRename={(s) => setRenameSupply(s)}
+                      isSelected={selectedSupplyIds.has(supply.supply_id)}
+                      onSelect={handleSelectSupply}
+                      onOpenDetail={setDetailSupply}
                     />
                   ))}
                 </TableBody>
               </Table>
+            </div>
+          )}
+
+          {/* Sticky панель выбора поставок (сборка) */}
+          {selectedSupplyIds.size > 0 && (
+            <div
+              className="sticky bottom-4 flex items-center justify-between gap-4 px-4 py-3 rounded-xl shadow-lg border"
+              style={{ backgroundColor: WB_COLOR, borderColor: WB_COLOR }}
+              data-testid="wb-sticky-supplies-panel"
+            >
+              <span className="text-white font-medium">
+                Выбрано {pluralSupplies(selectedSupplyIds.size)}
+              </span>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={handleBulkPrintQr}
+                data-testid="button-bulk-print-qr"
+              >
+                <QrCode className="w-4 h-4 mr-1.5" />
+                Печать QR-кодов
+              </Button>
             </div>
           )}
         </div>
@@ -952,6 +1185,13 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/30">
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={supplies.length > 0 && selectedSupplyIds.size === supplies.length}
+                        onCheckedChange={(c) => handleSelectAllSupplies(!!c)}
+                        data-testid="checkbox-select-all-delivery"
+                      />
+                    </TableHead>
                     <TableHead>Поставка</TableHead>
                     <TableHead>QR-код поставки</TableHead>
                     <TableHead>Статус</TableHead>
@@ -963,10 +1203,38 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
                 </TableHeader>
                 <TableBody>
                   {supplies.map((supply: any) => (
-                    <DeliverySupplyRow key={supply.supply_id} supply={supply} />
+                    <DeliverySupplyRow
+                      key={supply.supply_id}
+                      supply={supply}
+                      isSelected={selectedSupplyIds.has(supply.supply_id)}
+                      onSelect={handleSelectSupply}
+                      onOpenDetail={setDetailSupply}
+                    />
                   ))}
                 </TableBody>
               </Table>
+            </div>
+          )}
+
+          {/* Sticky панель выбора поставок (доставка) */}
+          {selectedSupplyIds.size > 0 && (
+            <div
+              className="sticky bottom-4 flex items-center justify-between gap-4 px-4 py-3 rounded-xl shadow-lg border"
+              style={{ backgroundColor: WB_COLOR, borderColor: WB_COLOR }}
+              data-testid="wb-sticky-delivery-panel"
+            >
+              <span className="text-white font-medium">
+                Выбрано {pluralSupplies(selectedSupplyIds.size)}
+              </span>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={handleBulkPrintQr}
+                data-testid="button-bulk-print-qr-delivery"
+              >
+                <QrCode className="w-4 h-4 mr-1.5" />
+                Печать QR-кодов
+              </Button>
             </div>
           )}
         </div>
@@ -1028,7 +1296,6 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
       {/* ===== ВКЛАДКА ОТМЕНЁННЫЕ ===== */}
       {activeTab === "cancelled" && (
         <div className="space-y-3" data-testid="wb-cancelled-orders">
-          {/* Предупреждение об остатках */}
           <div className="flex items-start gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 dark:bg-amber-900/20 dark:border-amber-700">
             <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
@@ -1114,6 +1381,14 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
           currentName={renameSupply.name || ""}
           onClose={() => setRenameSupply(null)}
           onSuccess={() => setRenameSupply(null)}
+        />
+      )}
+
+      {detailSupply && (
+        <SupplyDetailDialog
+          open={!!detailSupply}
+          supply={detailSupply}
+          onClose={() => setDetailSupply(null)}
         />
       )}
     </div>
