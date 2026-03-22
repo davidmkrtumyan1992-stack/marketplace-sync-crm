@@ -1,0 +1,109 @@
+Прочитай CLAUDE.md для контекста.
+
+КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Синхронизация поставок WB должна 
+зеркально отражать личный кабинет WB. Если в ЛК WB пусто — 
+в CRM тоже должно быть пусто.
+
+ШАГ 1 — Исправить логику синхронизации поставок.
+
+В функции syncWbSuppliesForOrg в server/routes.ts:
+
+Текущая проблема: при синхронизации мы добавляем поставки из WB API,
+но НИКОГДА не закрываем те что исчезли из WB.
+
+Исправить логику:
+
+1. Получить все активные поставки из WB API:
+   GET https://marketplace-api.wildberries.ru/api/v3/supplies
+   ?limit=1000&next=0&status=ACTIVE
+   Headers: { Authorization: cleanApiKey }
+
+   ВАЖНО — защита от сбоя API:
+   Если запрос к WB API вернул ошибку (статус не 200 OK),
+   или вернул 401/403/500, или response.ok === false —
+   НЕ выполнять очистку в БД.
+   Залогировать: console.warn('[wb-supply-sync] API error, skipping cleanup')
+   и продолжить без изменений статусов существующих поставок.
+   Очистка должна срабатывать ТОЛЬКО при успешном ответе 200 OK.
+
+2. Получить ID всех активных поставок из успешного ответа WB:
+   const activeSupplyIds = new Set(supplies.map(s => s.id));
+
+3. Получить все поставки в нашей БД со status='open' для этого магазина:
+   SELECT supply_id FROM wb_supplies 
+   WHERE status = 'open' 
+   AND store_id = resolvedStoreId
+   AND organization_id = orgId
+
+4. КЛЮЧЕВОЙ ШАГ — закрыть поставки которых нет в WB:
+   Для каждой поставки в БД со status='open':
+   если её supply_id НЕТ в activeSupplyIds — обновить статус.
+   
+   ТОЛЬКО если WB API вернул 200 OK (проверка из шага 1):
+   
+   UPDATE wb_supplies 
+   SET status = 'closed',
+       closed_at = NOW()
+   WHERE supply_id NOT IN (...activeSupplyIds...)
+   AND status = 'open'
+   AND store_id = resolvedStoreId
+   AND organization_id = orgId
+   
+   Поле closed_at = NOW() — чтобы в истории «В доставке» 
+   было видно когда поставка ушла со сборки.
+
+5. Добавить/обновить поставки которые есть в WB но нет в БД
+   (существующая логика upsert).
+
+6. Логировать результат:
+   console.log(`[wb-supply-sync] ${displayName}: ${activeSupplyIds.size} активных в WB, закрыто устаревших: ${closedCount}`)
+
+ШАГ 2 — Убрать кнопку «Синхронизировать поставки» из UI.
+
+В WildberriesOrders.tsx найди и удали:
+- Кнопку «↻ Синхронизировать поставки» из вкладок «На сборке» и «В доставке»
+- Мутацию syncSuppliesMutation
+- Связанный useToast вызов для этой кнопки
+
+ШАГ 3 — Убедиться что автосинк вызывает syncWbSuppliesForOrg.
+
+В autoSyncWbOrders проверь что в конце функции вызывается:
+for (const syncOrgId of orgIds) {
+  await syncWbSuppliesForOrg(syncOrgId).catch((e: any) =>
+    console.log('[wb-auto-sync] Supply sync failed:', e.message));
+}
+
+Если этого вызова нет — добавить.
+
+ШАГ 4 — Принудительно запустить очистку прямо сейчас.
+
+Сначала выполни SQL и покажи результат ДО синхронизации:
+SELECT supply_id, name, status, store_id, created_at, closed_at
+FROM wb_supplies 
+ORDER BY created_at DESC;
+
+Затем запусти syncWbSuppliesForOrg для всех WB магазинов
+с новой логикой очистки.
+
+После синхронизации выполни SQL и покажи результат ПОСЛЕ:
+SELECT supply_id, name, status, store_id, created_at, closed_at
+FROM wb_supplies 
+ORDER BY created_at DESC;
+
+Выведи результаты обоих SQL-запросов (ДО и ПОСЛЕ синхронизации)
+прямо здесь в чате в виде таблицы чтобы я мог подтвердить
+что очистка сработала корректно.
+
+Ожидаемый результат: если в WB нет активных поставок —
+все записи должны получить status='closed' и closed_at=NOW().
+Вкладка «На сборке» в CRM станет пустой как в ЛК WB.
+
+ШАГ 5 — Обновить CLAUDE.md:
+Добавить в "Статус разработки":
+✓ WB поставки: автосинк с очисткой каждые 2 минуты
+✓ Зеркальное отображение ЛК WB — если WB пусто, CRM пусто
+✓ Защита от сбоя API — очистка только при 200 OK
+✓ closed_at проставляется при автозакрытии поставки
+✓ Убрана кнопка ручной синхронизации поставок
+
+Не трогать: Ozon sync, Яндекс sync, аутентификацию.
