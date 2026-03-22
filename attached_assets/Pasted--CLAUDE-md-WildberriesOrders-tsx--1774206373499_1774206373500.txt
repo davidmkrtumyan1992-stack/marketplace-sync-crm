@@ -1,0 +1,106 @@
+Прочитай CLAUDE.md для контекста.
+
+Исправить вкладку «Отменённые» в WildberriesOrders.tsx.
+Три проблемы: ложная тревога, битая кнопка, пустой список.
+Не трогать: Ozon sync, Яндекс sync, аутентификацию, RBAC.
+
+ШАГ 1 — Убрать оранжевый блок-предупреждение.
+
+В WildberriesOrders.tsx найди вкладку «Отменённые» (cancelled tab).
+Замени жёлтый/оранжевый блок на нейтральный информационный:
+
+// СТАЛО — нейтральная информация как в WB:
+<div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 mb-4 
+     flex items-center justify-between text-sm text-blue-700">
+  <span>
+    ℹ️ Остаток у отменённого товара не прибавится автоматически. 
+    Измените его вручную во вкладке «Остатки», если товар вернулся на склад.
+  </span>
+  <Button 
+    variant="outline" 
+    size="sm"
+    className="ml-4 text-[#7631ff] border-[#7631ff] hover:bg-violet-50 shrink-0"
+    onClick={() => window.location.href = '/inventory'}
+  >
+    Перейти в остатки
+  </Button>
+</div>
+
+Найди маршруты в client/src/App.tsx или router.
+Если /inventory не существует — использовать '/products'.
+
+ШАГ 2 — Исправить фильтр отменённых заказов.
+
+Выполни SQL диагностику и покажи результат:
+SELECT wb_status, status, COUNT(*) 
+FROM orders 
+WHERE source = 'wildberries'
+GROUP BY wb_status, status
+ORDER BY COUNT(*) DESC;
+
+В server/routes.ts в GET /api/wb/orders
+исправить фильтр для status=cancelled:
+
+case "cancelled":
+  return (
+    ["cancel", "user_cancel", "declined", "cancelled",
+     "cancel_ignore", "defect"].includes(ws) ||
+    (o.status === "cancelled" && o.source === "wildberries")
+  );
+
+Убедись что для cancelled НЕТ ограничения по дате 72 часа
+(оно должно быть только для "new").
+
+ШАГ 3 — Подтянуть отменённые заказы из WB API за 30 дней.
+
+Сделай прямой запрос к WB API для store_id=45:
+GET https://marketplace-api.wildberries.ru/api/v3/orders
+?limit=1000&next=0&dateFrom={Unix timestamp 30 дней назад}
+Headers: { Authorization: cleanApiKey из marketplace_settings }
+
+Из полученных заказов отфильтровать все с wbStatus:
+'cancelled', 'cancel', 'user_cancel', 'declined'
+
+Обновить их в БД:
+UPDATE orders 
+SET wb_status = {реальный wbStatus из API},
+    status = 'cancelled'
+WHERE wb_order_id = {id из API}
+AND organization_id = {orgId}
+
+Если заказа нет в БД — создать новый с правильными полями.
+
+ШАГ 4 — Обновить автосинк WB.
+
+В autoSyncWbOrders найди логику обновления статусов заказов.
+Убедись что маппинг включает отменённые статусы:
+
+function wbStatusToInternal(wbStatus: string): string {
+  switch (wbStatus) {
+    case 'cancel':
+    case 'user_cancel':
+    case 'cancelled':
+    case 'declined':
+    case 'cancel_ignore':
+    case 'defect':
+      return 'cancelled';
+    // остальные статусы как были
+  }
+}
+
+ШАГ 5 — Проверка после исправлений.
+
+Выполни SQL и покажи результат в виде таблицы:
+
+SELECT wb_status, status, COUNT(*) as cnt
+FROM orders 
+WHERE source = 'wildberries'
+AND (
+  wb_status IN ('cancel','user_cancel','cancelled','declined','defect')
+  OR status = 'cancelled'
+)
+GROUP BY wb_status, status
+ORDER BY cnt DESC;
+
+Ожидаемый результат: должны появиться отменённые заказы.
+Вкладка «Отменённые» в CRM должна показывать заказы как в ЛК WB.
