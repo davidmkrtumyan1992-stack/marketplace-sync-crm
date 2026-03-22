@@ -425,6 +425,50 @@ OR yandexStatus IN ('CANCELLED','RETURNED')
 - `grossMarketplaceBreakdown` — breakdown по gross
 - Каждая точка `SalesDataPoint`: `grossRevenue`, `cancelledRevenue` (+ старый `revenue` = net)
 
+### 4.5 WB FBS — интерфейс управления поставками (WildberriesOrders.tsx)
+
+**Цвет:** WB_COLOR = `#7631ff` (фиолетовый) — используется для всех WB-элементов: вкладки, кнопки, sticky-панель, цвет таба Wildberries в MARKETPLACE_TABS.
+
+**Вкладки (5 штук):**
+| Ключ | Условие фильтрации |
+|---|---|
+| new | wb_status IN ('new','waiting') AND wb_supply_id IS NULL |
+| assembly | wb_supply_id IS NOT NULL AND wb_status NOT IN ('complete','indelivery','delivering','delivered','cancel','user_cancel','declined') |
+| delivery | wb_status IN ('complete','indelivery','delivering') |
+| archive | wb_status = 'delivered' |
+| cancelled | wb_status IN ('cancel','user_cancel','declined') |
+
+**Вкладка «Новые»:**
+- Таблица с чекбоксами (Фото/Артикул/Название/Сумма/Дата/Магазин)
+- Sticky-панель снизу при выборе заказов: «Создать поставку»
+- CreateSupplyDialog — подтверждение с перечнем заказов
+
+**Вкладка «На сборке»:**
+- Карточки SupplyCard, сгруппированные по wb_supply_id
+- Кнопки: «Печать стикеров» / «Лист подбора» / «Закрыть поставку»
+- Accordion (разворот списка заказов поставки)
+
+**API-эндпоинты WB FBS:**
+```
+GET  /api/wb/orders?status=new|assembly|delivery|archive|cancelled&storeId=N
+POST /api/wb/supplies          body: {storeId, orderIds[]}
+POST /api/wb/stickers          body: {storeId, wbOrderIds[]}  → stickers[{orderId, file (base64 PNG 58×40)}]
+GET  /api/wb/supplies/:id/picking-list → {supplyId, items[{productName, sku, barcode, imageUrl, quantity}]}
+POST /api/wb/supplies/:id/close        body: {storeId}
+```
+
+**Создание поставки (POST /api/wb/supplies):**
+1. `POST /api/v3/supplies` → supplyId
+2. Для каждого заказа: `PATCH /api/v3/supplies/{supplyId}/orders/{wbOrderId}`
+3. Обновить `wb_supply_id` в БД
+4. Вставить запись в `wb_supplies`
+
+**Печать стикеров:** POST /api/v3/orders/stickers?type=png&width=58&height=40 → base64 PNG → window.print() в новой вкладке, @page {size: 58mm 40mm}
+
+**Лист подбора:** SELECT из БД orders+order_items+products по wb_supply_id → HTML-таблица → window.print()
+
+**Закрытие поставки:** `PATCH /api/v3/supplies/{supplyId}/deliver` + обновить status='closed' в wb_supplies (409 = уже закрыта, не ошибка)
+
 ### 4.6 Список товаров (страница Products)
 **Колонки таблицы:**
 - Фото, Название, SKU, Штрихкод

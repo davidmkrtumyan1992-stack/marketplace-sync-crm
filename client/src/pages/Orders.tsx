@@ -141,7 +141,7 @@ const WB_SUB_FILTERS: { key: WbSubFilter; label: string; icon: any }[] = [
 const MARKETPLACE_TABS: { key: MarketplaceTab; label: string; bg: string; color: string; activeBorder: string }[] = [
   { key: "ozon", label: "Ozon", bg: "#005BFF", color: "#FFFFFF", activeBorder: "border-[#005BFF]" },
   { key: "yandex", label: "Yandex Market", bg: "#FFCC00", color: "#000000", activeBorder: "border-[#FFCC00]" },
-  { key: "wildberries", label: "Wildberries", bg: "#CB11AB", color: "#FFFFFF", activeBorder: "border-[#CB11AB]" },
+  { key: "wildberries", label: "Wildberries", bg: "#7631ff", color: "#FFFFFF", activeBorder: "border-[#7631ff]" },
 ];
 
 
@@ -664,23 +664,25 @@ export default function Orders() {
           </>
         )}
 
-        <div className="flex flex-wrap gap-3">
-          <span className="teal-badge">
-            <ShoppingCart className="w-4 h-4 mr-1.5 inline" />
-            Всего: {marketplaceOrders.length}
-          </span>
-          {pendingCount > 0 && (
-            <span className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 px-3 py-1.5 rounded-full text-sm font-medium">
-              Новых: {pendingCount}
+        {marketplaceTab !== "wildberries" && (
+          <div className="flex flex-wrap gap-3">
+            <span className="teal-badge">
+              <ShoppingCart className="w-4 h-4 mr-1.5 inline" />
+              Всего: {marketplaceOrders.length}
             </span>
-          )}
-          <span className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 px-3 py-1.5 rounded-full text-sm font-medium">
-            <CreditCard className="w-4 h-4 mr-1.5 inline" />
-            {formatCurrency(totalRevenue, true)}
-          </span>
-        </div>
+            {pendingCount > 0 && (
+              <span className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 px-3 py-1.5 rounded-full text-sm font-medium">
+                Новых: {pendingCount}
+              </span>
+            )}
+            <span className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 px-3 py-1.5 rounded-full text-sm font-medium">
+              <CreditCard className="w-4 h-4 mr-1.5 inline" />
+              {formatCurrency(totalRevenue, true)}
+            </span>
+          </div>
+        )}
 
-        {isLoading ? (
+        {marketplaceTab !== "wildberries" && (isLoading ? (
           <div className="grid gap-4">
             {[1, 2, 3].map((i) => (
               <Card key={i} className="kpi-card animate-pulse">
@@ -694,17 +696,8 @@ export default function Orders() {
           <Card className="kpi-card">
             <CardContent className="py-16 text-center">
               <ShoppingCart className="w-16 h-16 mx-auto text-muted-foreground/30 mb-4" />
-              {marketplaceTab === "wildberries" ? (
-                <>
-                  <p className="text-xl font-medium text-muted-foreground">Интеграция Wildberries в разработке</p>
-                  <p className="text-sm text-muted-foreground mt-2">Заказы появятся после подключения магазина Wildberries</p>
-                </>
-              ) : (
-                <>
-                  <p className="text-xl font-medium text-muted-foreground">Заказов пока нет</p>
-                  <p className="text-sm text-muted-foreground mt-2">Заказы появятся здесь после оформления</p>
-                </>
-              )}
+              <p className="text-xl font-medium text-muted-foreground">Заказов пока нет</p>
+              <p className="text-sm text-muted-foreground mt-2">Заказы появятся здесь после оформления</p>
             </CardContent>
           </Card>
         ) : (
@@ -736,7 +729,7 @@ export default function Orders() {
               </div>
             ))}
           </div>
-        )}
+        ))}
       </div>
 
       <DirectSaleDialog

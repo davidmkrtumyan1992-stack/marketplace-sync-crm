@@ -4739,7 +4739,7 @@ export async function registerRoutes(
   app.get("/api/wb/supplies/:supplyId/picking-list", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const supplyId = req.params.supplyId;
+      const supplyId = String(req.params.supplyId);
 
       const rows = await db.execute(sql`
         SELECT 
@@ -4776,7 +4776,7 @@ export async function registerRoutes(
   app.post("/api/wb/supplies/:supplyId/close", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const supplyId = req.params.supplyId;
+      const supplyId = String(req.params.supplyId);
       const storeId = req.body?.storeId ? Number(req.body.storeId) : null;
 
       const cleanApiKey = await getWbApiKeyForStore(orgId, storeId);
