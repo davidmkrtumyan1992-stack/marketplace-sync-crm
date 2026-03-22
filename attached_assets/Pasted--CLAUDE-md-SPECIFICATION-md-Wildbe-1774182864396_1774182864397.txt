@@ -1,0 +1,178 @@
+Прочитай CLAUDE.md и SPECIFICATION.md для контекста.
+
+Создать интерфейс управления заказами Wildberries FBS.
+Добавить вкладку «Wildberries» в раздел Заказы.
+Не трогать существующие вкладки Ozon и Яндекс.
+
+Логика работы заказчика:
+1. Видит новые заказы → отмечает галочками → нажимает «Создать поставку»
+2. Заказы уходят в WB API → получают supplyId → переходят в «На сборке»
+3. Во вкладке «На сборке» → печатает стикеры 58×40мм + лист подбора
+4. После упаковки → закрывает поставку → везёт на склад WB
+
+Цвет WB везде: фиолетовый #7631ff (отличать от синего Ozon).
+
+ШАГ 1 — Новые эндпоинты в server/routes.ts:
+
+1.1 GET /api/wb/orders
+Параметры: ?status=new|assembly|delivery|archive|cancelled&storeId=N
+
+Маппинг статусов:
+- new: wb_status IN ('new', 'waiting') AND wb_supply_id IS NULL
+- assembly: wb_supply_id IS NOT NULL AND wb_status NOT IN ('complete','indelivery','delivering','delivered','cancel','user_cancel','declined')
+- delivery: wb_status IN ('complete', 'indelivery', 'delivering')
+- archive: wb_status = 'delivered'
+- cancelled: wb_status IN ('cancel', 'user_cancel', 'declined')
+
+SQL запрос:
+SELECT 
+  o.id, o.order_number, o.wb_order_id, o.wb_status,
+  o.wb_supply_id, o.wb_rid, o.total_amount, o.created_at,
+  s.name as store_name, s.id as store_id,
+  oi.quantity, oi.price,
+  p.name as product_name, p.sku, p.barcode, p.image_url
+FROM orders o
+JOIN stores s ON o.store_id = s.id
+LEFT JOIN order_items oi ON o.id = oi.order_id
+LEFT JOIN products p ON oi.product_id = p.id
+WHERE o.source = 'wildberries'
+AND o.organization_id = $orgId
+ORDER BY o.created_at DESC;
+
+1.2 POST /api/wb/supplies — создать поставку:
+Body: { storeId: number, orderIds: number[] }
+
+Логика:
+1. Получить cleanApiKey = setting.apiKey.trim()
+2. Создать поставку в WB API:
+   POST https://marketplace-api.wildberries.ru/api/v3/supplies
+   Body: { name: "Поставка " + new Date().toLocaleDateString('ru-RU') }
+   Headers: { Authorization: cleanApiKey }
+3. Получить supplyId из ответа (поле id)
+4. Для каждого заказа добавить в поставку:
+   PATCH https://marketplace-api.wildberries.ru/api/v3/supplies/{supplyId}/orders/{wbOrderId}
+   Headers: { Authorization: cleanApiKey }
+5. Обновить wb_supply_id в orders для всех выбранных заказов
+6. Сохранить запись в wb_supplies таблице
+7. Вернуть: { supplyId, name, ordersAdded }
+
+1.3 POST /api/wb/stickers — получить стикеры для печати:
+Body: { storeId: number, wbOrderIds: number[] }
+
+Логика:
+1. Вызвать WB API:
+   POST https://marketplace-api.wildberries.ru/api/v3/orders/stickers?type=png&width=58&height=40
+   Body: { orders: wbOrderIds }
+   Headers: { Authorization: cleanApiKey }
+2. Вернуть массив стикеров: [{ orderId, file (base64 PNG) }]
+
+1.4 GET /api/wb/supplies/:supplyId/picking-list — лист подбора:
+Вернуть список товаров в поставке:
+- Название товара, артикул, штрихкод, количество
+Формат: JSON (фронтенд сам распечатает)
+
+1.5 POST /api/wb/supplies/:supplyId/close — закрыть поставку:
+Логика:
+1. PATCH https://marketplace-api.wildberries.ru/api/v3/supplies/{supplyId}/close
+   Headers: { Authorization: cleanApiKey }
+2. Обновить статус в wb_supplies: status = 'closed', closedAt = NOW()
+3. Вернуть: { success: true }
+
+ШАГ 2 — Компонент WildberriesOrders.tsx:
+
+Создать client/src/components/WildberriesOrders.tsx
+
+const TABS = [
+  { key: 'new',       label: 'Новые',        icon: '📦' },
+  { key: 'assembly',  label: 'На сборке',    icon: '🔧' },
+  { key: 'delivery',  label: 'В доставке',   icon: '🚚' },
+  { key: 'archive',   label: 'Архив',        icon: '✅' },
+  { key: 'cancelled', label: 'Отменённые',   icon: '❌' },
+];
+
+Вкладка НОВЫЕ — таблица с чекбоксами:
+Колонки: [ ] | Фото | Артикул | Название | Цена | Дата заказа
+Фото: если есть p.image_url — показать, иначе серый placeholder
+Внизу sticky панель: "Выбрано N заказов [Создать поставку]"
+Кнопка "Создать поставку" — цвет #7631ff — активна если N > 0
+
+Вкладка НА СБОРКЕ — группировка по wb_supply_id:
+Карточка поставки:
+  Заголовок: "Поставка {supplyId}" | "{N} заказов" | Дата создания
+  Кнопки (цвет #7631ff): [Печать стикеров] [Лист подбора] [Закрыть поставку]
+  Раскрывающийся список заказов внутри карточки
+
+Вкладки В ДОСТАВКЕ, АРХИВ, ОТМЕНЁННЫЕ:
+Простая таблица без чекбоксов
+Колонки: Артикул | Название | Цена | Статус | Дата
+
+Диалог создания поставки CreateSupplyDialog:
+- Показать список выбранных заказов
+- Кнопки: [Создать] [Отмена]
+- После создания: toast "✓ Поставка {supplyId} создана, {N} заказов добавлено"
+
+Печать стикеров handlePrintStickers:
+1. Запросить base64 PNG через POST /api/wb/stickers
+2. Сформировать HTML с правильным CSS для принтера этикеток:
+
+const printHTML = `
+  <html>
+  <head>
+    <style>
+      @page { size: 58mm 40mm; margin: 0; }
+      body { margin: 0; padding: 0; }
+      img { 
+        width: 58mm; 
+        height: 40mm; 
+        display: block; 
+        page-break-after: always; 
+      }
+    </style>
+  </head>
+  <body>
+    ${stickers.map(s => 
+      `<img src="data:image/png;base64,${s.file}" />`
+    ).join('')}
+  </body>
+  </html>
+`;
+const win = window.open('', '_blank');
+win.document.write(printHTML);
+win.document.close();
+win.print();
+win.close();
+
+Лист подбора handlePickingList:
+Открыть окно с таблицей для печати:
+| Фото | Артикул | Название | Штрихкод | Кол-во |
+Использовать window.print() для печати.
+
+ШАГ 3 — Добавить вкладку WB в Orders.tsx:
+
+В client/src/pages/Orders.tsx:
+- Найди список вкладок маркетплейсов (Все / Ozon / Яндекс)
+- Добавь вкладку «Wildberries» с цветом #7631ff
+- При активной вкладке WB — показывать WildberriesOrders
+- При других вкладках — обычный список заказов как сейчас
+
+ШАГ 4 — Обновить документацию:
+
+В CLAUDE.md добавь в "Статус разработки":
+✓ Интерфейс заказов WB: 5 вкладок (Новые/На сборке/В доставке/Архив/Отменённые)
+✓ Создание поставок WB из CRM с автоматической привязкой заказов
+✓ Печать стикеров WB 58×40мм (PNG через браузерный print)
+✓ Лист подбора для сборки поставки
+
+В SPECIFICATION.md раздел 4 добавь подраздел 4.5:
+### 4.5 Интерфейс заказов Wildberries FBS
+Компонент: WildberriesOrders.tsx
+Вкладки: Новые / На сборке / В доставке / Архив / Отменённые
+Цвет WB: #7631ff (фиолетовый)
+Создание поставки: POST /api/wb/supplies
+Стикеры: POST /api/wb/stickers (58×40мм PNG base64)
+Лист подбора: GET /api/wb/supplies/:id/picking-list
+Закрытие: POST /api/wb/supplies/:id/close
+Фото товаров: из products.image_url (placeholder если нет)
+
+Не трогать: Ozon интерфейс, Яндекс интерфейс,
+логику sync заказов, getSalesData, аутентификацию.
