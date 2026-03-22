@@ -4556,23 +4556,105 @@ export async function registerRoutes(
   setTimeout(autoSyncWbOrders, 20000);
   console.log(`[wb-auto-sync] Background sync scheduled every ${WB_SYNC_INTERVAL / 60000} minutes`);
 
-  // Startup: бэкфилл отменённых WB заказов за 30 дней (один раз, если 0 записей)
-  setTimeout(async () => {
-    try {
-      const CANCELLED_STATUSES = ["cancel", "user_cancel", "declined", "cancel_ignore", "defect", "cancelled"];
-      const [countRow] = await db.select({ cnt: sql<number>`COUNT(*)::int` }).from(ordersTable)
-        .where(and(
-          eq(ordersTable.source, "wildberries"),
-          inArray(ordersTable.status, ["cancelled"])
-        ));
-      const cancelledCount = countRow?.cnt ?? 0;
-      if (cancelledCount > 0) {
-        console.log(`[wb-cancelled-backfill] ${cancelledCount} отменённых уже в БД, пропускаем`);
-        return;
+  // Shared helper: бэкфилл отменённых WB заказов для одной организации
+  const WB_CANCELLED_STATUSES = ["cancel", "user_cancel", "declined", "cancel_ignore", "defect", "cancelled"];
+
+  async function runWbCancelledBackfillForOrg(
+    orgId: string,
+    wbOrgSettings: any[]
+  ): Promise<{ updated: number; created: number }> {
+    const WB_BASE = "https://marketplace-api.wildberries.ru";
+    const dateFrom = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
+    let totalUpdated = 0, totalCreated = 0;
+
+    for (const wbSetting of wbOrgSettings) {
+      const cleanApiKey = wbSetting.apiKey!.trim();
+      const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
+      const resolvedStoreId = wbSetting.storeId ?? null;
+      const resolvedCompanyId = wbSetting.companyId ?? null;
+      let resolvedStoreName: string | null = null;
+      if (resolvedStoreId) {
+        const store = await storage.getStore(resolvedStoreId);
+        if (store) resolvedStoreName = store.name;
       }
 
-      const WB_BASE = "https://marketplace-api.wildberries.ru";
-      const dateFrom = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
+      const ordersRes = await fetch(
+        `${WB_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom}`,
+        { method: "GET", headers: authHeaders }
+      );
+      if (!ordersRes.ok) {
+        console.warn(`[wb-cancelled-backfill] WB API error ${ordersRes.status} for store ${resolvedStoreName}`);
+        continue;
+      }
+      const ordersData = await ordersRes.json();
+      const allOrders: any[] = ordersData?.orders || [];
+      const cancelledOrders = allOrders.filter(o =>
+        WB_CANCELLED_STATUSES.includes(o.wbStatus || o.status || "")
+      );
+
+      for (const wbOrder of cancelledOrders) {
+        try {
+          const wbOrderId = String(wbOrder.id);
+          const wbStatus = wbOrder.wbStatus || wbOrder.status || "cancel";
+          const wbRid = wbOrder.rid ? String(wbOrder.rid) : null;
+          const wbSupplyId = wbOrder.supplyId ? String(wbOrder.supplyId) : null;
+          const createdAtRaw = wbOrder.createdAt;
+          const createdAtTs = createdAtRaw
+            ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+            : new Date();
+          const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
+
+          const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
+          if (existingOrder) {
+            if (existingOrder.wbStatus !== wbStatus || existingOrder.status !== "cancelled") {
+              await storage.updateOrderWbStatus(existingOrder.id, wbStatus, "cancelled", createdAtTs);
+              totalUpdated++;
+            }
+          } else {
+            const article = wbOrder.article || wbOrder.supplierArticle || "";
+            const qty = wbOrder.quantity || 1;
+            let productId: number | null = null;
+            if (article) {
+              const [dbProduct] = await db.select().from(productsTable)
+                .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
+              if (dbProduct) productId = dbProduct.id;
+            }
+            await storage.createOrder({
+              orderNumber: `WB-${wbOrderId}`,
+              status: "cancelled",
+              totalAmount: totalAmount.toFixed(2),
+              source: "wildberries",
+              externalId: wbOrderId,
+              postingNumber: null,
+              ozonStatus: null,
+              yandexStatus: null,
+              wbOrderId,
+              wbStatus,
+              wbRid,
+              wbSupplyId,
+              fulfillmentType: "FBS",
+              storeId: resolvedStoreId ?? undefined,
+              sourceStoreName: resolvedStoreName ?? undefined,
+              companyId: resolvedCompanyId ?? undefined,
+              organizationId: orgId,
+              createdAt: createdAtTs,
+            } as any, productId
+              ? [{ productId, quantity: qty, price: totalAmount }]
+              : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: wbOrder.subject || "WB товар", quantity: qty, price: totalAmount }]);
+            totalCreated++;
+          }
+        } catch (e: any) {
+          console.error(`[wb-cancelled-backfill] Order ${wbOrder.id} error:`, e.message);
+        }
+      }
+      console.log(`[wb-cancelled-backfill] Store «${resolvedStoreName}»: ${cancelledOrders.length} отменённых из WB`);
+    }
+    return { updated: totalUpdated, created: totalCreated };
+  }
+
+  // Startup: бэкфилл отменённых WB заказов за 30 дней (один раз на org, если 0 cancelled записей)
+  setTimeout(async () => {
+    try {
       const allSettings = await db.select().from(marketplaceSettingsTable);
       const wbSettingsAll = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
       if (wbSettingsAll.length === 0) return;
@@ -4581,89 +4663,21 @@ export async function registerRoutes(
       let totalUpdated = 0, totalCreated = 0;
 
       for (const orgId of orgIds) {
-        const wbSettings = wbSettingsAll.filter(s => s.organizationId === orgId);
-        for (const wbSetting of wbSettings) {
-          const cleanApiKey = wbSetting.apiKey!.trim();
-          const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
-          const resolvedStoreId = wbSetting.storeId ?? null;
-          const resolvedCompanyId = wbSetting.companyId ?? null;
-          let resolvedStoreName: string | null = null;
-          if (resolvedStoreId) {
-            const store = await storage.getStore(resolvedStoreId);
-            if (store) resolvedStoreName = store.name;
-          }
-
-          const ordersRes = await fetch(
-            `${WB_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom}`,
-            { method: "GET", headers: authHeaders }
-          );
-          if (!ordersRes.ok) {
-            console.warn(`[wb-cancelled-backfill] WB API error ${ordersRes.status} for store ${resolvedStoreName}`);
-            continue;
-          }
-          const ordersData = await ordersRes.json();
-          const allOrders: any[] = ordersData?.orders || [];
-          const cancelledOrders = allOrders.filter(o =>
-            CANCELLED_STATUSES.includes(o.wbStatus || o.status || "")
-          );
-
-          for (const wbOrder of cancelledOrders) {
-            try {
-              const wbOrderId = String(wbOrder.id);
-              const wbStatus = wbOrder.wbStatus || wbOrder.status || "cancel";
-              const wbRid = wbOrder.rid ? String(wbOrder.rid) : null;
-              const wbSupplyId = wbOrder.supplyId ? String(wbOrder.supplyId) : null;
-              const createdAtRaw = wbOrder.createdAt;
-              const createdAtTs = createdAtRaw
-                ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
-                : new Date();
-              const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
-
-              const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
-              if (existingOrder) {
-                if (existingOrder.wbStatus !== wbStatus || existingOrder.status !== "cancelled") {
-                  await storage.updateOrderWbStatus(existingOrder.id, wbStatus, "cancelled", createdAtTs);
-                  totalUpdated++;
-                }
-              } else {
-                const article = wbOrder.article || wbOrder.supplierArticle || "";
-                const qty = wbOrder.quantity || 1;
-                let productId: number | null = null;
-                if (article) {
-                  const [dbProduct] = await db.select().from(productsTable)
-                    .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
-                  if (dbProduct) productId = dbProduct.id;
-                }
-                await storage.createOrder({
-                  orderNumber: `WB-${wbOrderId}`,
-                  status: "cancelled",
-                  totalAmount: totalAmount.toFixed(2),
-                  source: "wildberries",
-                  externalId: wbOrderId,
-                  postingNumber: null,
-                  ozonStatus: null,
-                  yandexStatus: null,
-                  wbOrderId,
-                  wbStatus,
-                  wbRid,
-                  wbSupplyId,
-                  fulfillmentType: "FBS",
-                  storeId: resolvedStoreId ?? undefined,
-                  sourceStoreName: resolvedStoreName ?? undefined,
-                  companyId: resolvedCompanyId ?? undefined,
-                  organizationId: orgId,
-                  createdAt: createdAtTs,
-                } as any, productId
-                  ? [{ productId, quantity: qty, price: totalAmount }]
-                  : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: wbOrder.subject || "WB товар", quantity: qty, price: totalAmount }]);
-                totalCreated++;
-              }
-            } catch (e: any) {
-              console.error(`[wb-cancelled-backfill] Order ${wbOrder.id} error:`, e.message);
-            }
-          }
-          console.log(`[wb-cancelled-backfill] Store «${resolvedStoreName}»: ${cancelledOrders.length} отменённых из WB`);
+        const [countRow] = await db.select({ cnt: sql<number>`COUNT(*)::int` }).from(ordersTable)
+          .where(and(
+            eq(ordersTable.source, "wildberries"),
+            eq(ordersTable.status, "cancelled"),
+            eq(ordersTable.organizationId, orgId)
+          ));
+        const cancelledCount = countRow?.cnt ?? 0;
+        if (cancelledCount > 0) {
+          console.log(`[wb-cancelled-backfill] org ${orgId}: ${cancelledCount} отменённых уже в БД, пропускаем`);
+          continue;
         }
+        const wbOrgSettings = wbSettingsAll.filter(s => s.organizationId === orgId);
+        const { updated, created } = await runWbCancelledBackfillForOrg(orgId, wbOrgSettings);
+        totalUpdated += updated;
+        totalCreated += created;
       }
       console.log(`[wb-cancelled-backfill] Завершено: обновлено ${totalUpdated}, создано ${totalCreated}`);
     } catch (e: any) {
@@ -5065,101 +5079,12 @@ export async function registerRoutes(
   app.post("/api/wb/sync-cancelled", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const WB_BASE = "https://marketplace-api.wildberries.ru";
-      const CANCELLED_STATUSES = ["cancel", "user_cancel", "declined", "cancel_ignore", "defect", "cancelled"];
-      const dateFrom = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
-
       const allSettings = await storage.getMarketplaceSettings(orgId);
       const wbSettings = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
       if (wbSettings.length === 0) return res.json({ updated: 0, created: 0, message: "Нет активных WB-магазинов" });
 
-      let totalUpdated = 0;
-      let totalCreated = 0;
-
-      for (const wbSetting of wbSettings) {
-        const cleanApiKey = wbSetting.apiKey!.trim();
-        const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
-        const resolvedStoreId = wbSetting.storeId ?? null;
-        const resolvedCompanyId = wbSetting.companyId ?? null;
-        let resolvedStoreName: string | null = null;
-        if (resolvedStoreId) {
-          const store = await storage.getStore(resolvedStoreId);
-          if (store) resolvedStoreName = store.name;
-        }
-
-        const ordersRes = await fetch(
-          `${WB_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom}`,
-          { method: "GET", headers: authHeaders }
-        );
-        if (!ordersRes.ok) {
-          console.warn(`[wb-sync-cancelled] WB API error ${ordersRes.status} for store ${resolvedStoreName}`);
-          continue;
-        }
-        const ordersData = await ordersRes.json();
-        const allOrders: any[] = ordersData?.orders || [];
-        const cancelledOrders = allOrders.filter(o =>
-          CANCELLED_STATUSES.includes(o.wbStatus || o.status || "")
-        );
-
-        for (const wbOrder of cancelledOrders) {
-          try {
-            const wbOrderId = String(wbOrder.id);
-            const wbStatus = wbOrder.wbStatus || wbOrder.status || "cancel";
-            const wbRid = wbOrder.rid ? String(wbOrder.rid) : null;
-            const wbSupplyId = wbOrder.supplyId ? String(wbOrder.supplyId) : null;
-            const createdAtRaw = wbOrder.createdAt;
-            const createdAtTs = createdAtRaw
-              ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
-              : new Date();
-            const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
-
-            const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
-            if (existingOrder) {
-              if (existingOrder.wbStatus !== wbStatus || existingOrder.status !== "cancelled") {
-                await storage.updateOrderWbStatus(existingOrder.id, wbStatus, "cancelled", createdAtTs);
-                totalUpdated++;
-              }
-            } else {
-              const article = wbOrder.article || wbOrder.supplierArticle || "";
-              const qty = wbOrder.quantity || 1;
-              let productId: number | null = null;
-              if (article) {
-                const [dbProduct] = await db.select().from(productsTable)
-                  .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
-                if (dbProduct) productId = dbProduct.id;
-              }
-              await storage.createOrder({
-                orderNumber: `WB-${wbOrderId}`,
-                status: "cancelled",
-                totalAmount: totalAmount.toFixed(2),
-                source: "wildberries",
-                externalId: wbOrderId,
-                postingNumber: null,
-                ozonStatus: null,
-                yandexStatus: null,
-                wbOrderId,
-                wbStatus,
-                wbRid,
-                wbSupplyId,
-                fulfillmentType: "FBS",
-                storeId: resolvedStoreId ?? undefined,
-                sourceStoreName: resolvedStoreName ?? undefined,
-                companyId: resolvedCompanyId ?? undefined,
-                organizationId: orgId,
-                createdAt: createdAtTs,
-              } as any, productId
-                ? [{ productId, quantity: qty, price: totalAmount }]
-                : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: wbOrder.subject || "WB товар", quantity: qty, price: totalAmount }]);
-              totalCreated++;
-            }
-          } catch (e: any) {
-            console.error(`[wb-sync-cancelled] Order ${wbOrder.id} error:`, e.message);
-          }
-        }
-        console.log(`[wb-sync-cancelled] Store «${resolvedStoreName}»: ${cancelledOrders.length} отменённых из WB, обновлено ${totalUpdated}, создано ${totalCreated}`);
-      }
-
-      res.json({ updated: totalUpdated, created: totalCreated });
+      const { updated, created } = await runWbCancelledBackfillForOrg(orgId, wbSettings);
+      res.json({ updated, created });
     } catch (error: any) {
       console.error("[wb-sync-cancelled] Error:", error);
       res.status(500).json({ message: error.message });
