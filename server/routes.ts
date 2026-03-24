@@ -4584,6 +4584,86 @@ export async function registerRoutes(
   setTimeout(autoSyncWbOrders, 20000);
   console.log(`[wb-auto-sync] Background sync scheduled every ${WB_SYNC_INTERVAL / 60000} minutes`);
 
+  // Принудительная синхронизация устаревших заказов (старше 24 ч) при старте сервера
+  const syncWbStaleOrdersAll = async () => {
+    try {
+      const allSettings = await db.select().from(marketplaceSettingsTable);
+      const wbSettingsAll = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
+      if (wbSettingsAll.length === 0) return;
+
+      const WB_BASE = "https://marketplace-api.wildberries.ru";
+      const dateFrom60 = Math.floor((Date.now() - 60 * 24 * 3600 * 1000) / 1000);
+
+      const orgIds = [...new Set(wbSettingsAll.map(s => s.organizationId))];
+
+      for (const orgId of orgIds) {
+        const wbSettings = wbSettingsAll.filter(s => s.organizationId === orgId);
+        let totalUpdated = 0;
+
+        for (const wbSetting of wbSettings) {
+          try {
+            const cleanApiKey = wbSetting.apiKey!.trim();
+            const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
+
+            // Получаем заказы за 60 дней из WB API
+            const res = await fetch(
+              `${WB_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom60}`,
+              { method: "GET", headers: authHeaders }
+            );
+            if (!res.ok) {
+              console.error(`[wb-stale-sync] API error ${res.status} for org ${orgId}`);
+              continue;
+            }
+            const data = await res.json();
+            const wbOrders: any[] = data?.orders || [];
+
+            for (const wbOrder of wbOrders) {
+              try {
+                const wbOrderId = String(wbOrder.id);
+                const wbStatus = wbOrder.wbStatus || wbOrder.status || "new";
+
+                // Ищем в БД заказы с устаревшим статусом (new/waiting) привязанные к поставке
+                const [existing] = await db.execute(sql`
+                  SELECT id, wb_status FROM orders
+                  WHERE wb_order_id = ${wbOrderId}
+                    AND source = 'wildberries'
+                    AND wb_status IN ('new', 'waiting')
+                    AND wb_supply_id IS NOT NULL
+                    AND organization_id = ${orgId}
+                  LIMIT 1
+                `);
+                const row = ((existing as any).rows || existing)[0] as any;
+                if (row && row.wb_status !== wbStatus) {
+                  const createdAtRaw = wbOrder.createdAt;
+                  const createdAtTs = createdAtRaw
+                    ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+                    : new Date();
+                  await storage.updateOrderWbStatus(row.id, wbStatus, wbStatusToInternal(wbStatus), createdAtTs);
+                  totalUpdated++;
+                }
+              } catch (e: any) {
+                // skip individual order errors
+              }
+            }
+          } catch (err: any) {
+            console.error(`[wb-stale-sync] Error for setting ${wbSetting.id}:`, err.message);
+          }
+        }
+
+        console.log(`[wb-stale-sync] org ${orgId}: обновлено ${totalUpdated} устаревших статусов заказов`);
+
+        // После обновления статусов — синхронизировать поставки (закрыть те, которых нет в WB ACTIVE)
+        await syncWbSuppliesForOrg(orgId).catch((e: any) =>
+          console.log('[wb-stale-sync] Supply sync failed:', e.message));
+      }
+    } catch (error) {
+      console.error("[wb-stale-sync] Error:", error);
+    }
+  };
+
+  // Запустить стейл-синк один раз при старте (через 15 с, до первого autoSyncWbOrders)
+  setTimeout(syncWbStaleOrdersAll, 15000);
+
   // Shared helper: бэкфилл отменённых WB заказов для одной организации
   const WB_CANCELLED_STATUSES = ["cancel", "user_cancel", "declined", "cancel_ignore", "defect", "cancelled"];
 
@@ -5187,7 +5267,7 @@ export async function registerRoutes(
             SELECT 1 FROM orders o2
             WHERE o2.wb_supply_id = ws.supply_id
               AND o2.source = 'wildberries'
-              AND o2.wb_status NOT IN ('cancel','user_cancel','declined','cancelled','delivered','sold')
+              AND o2.wb_status IN ('new', 'waiting', 'confirm')
           )` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ws.created_at DESC
@@ -5507,7 +5587,7 @@ export async function registerRoutes(
             SELECT 1 FROM orders o
             WHERE o.wb_supply_id = ws.supply_id
               AND o.source = 'wildberries'
-              AND o.wb_status NOT IN ('cancel','user_cancel','declined','cancelled','delivered','sold')
+              AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
           COUNT(CASE WHEN status = 'closed' THEN 1 END) as delivery_count
         FROM wb_supplies ws
