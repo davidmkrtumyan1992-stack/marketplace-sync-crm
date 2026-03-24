@@ -4891,10 +4891,9 @@ export async function registerRoutes(
           if (existing) {
             await db.execute(sql`
               UPDATE wb_supplies SET
-                name = ${supplyName},
-                status = 'open',
-                closed_at = NULL
+                name = ${supplyName}
               WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+                AND status = 'open'
             `);
           } else {
             await db.insert(wbSuppliesTable).values({
@@ -5294,8 +5293,9 @@ export async function registerRoutes(
               AND o2.source = 'wildberries'
               AND o2.wb_status IN ('new', 'waiting', 'confirm')
           )` : sql``}
+          ${status === "closed" ? sql`AND ws.closed_at >= DATE_TRUNC('year', NOW())` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
-        ORDER BY ws.created_at DESC
+        ORDER BY ${status === "closed" ? sql`ws.closed_at DESC NULLS LAST` : sql`ws.created_at DESC`}
       `);
 
       res.json((rows as any).rows || rows);
@@ -5614,7 +5614,7 @@ export async function registerRoutes(
               AND o.source = 'wildberries'
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
-          COUNT(CASE WHEN status = 'closed' THEN 1 END) as delivery_count
+          COUNT(CASE WHEN ws.status = 'closed' AND ws.closed_at >= DATE_TRUNC('year', NOW()) THEN 1 END) as delivery_count
         FROM wb_supplies ws
         WHERE organization_id = ${orgId}
       `);
