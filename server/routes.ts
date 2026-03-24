@@ -5211,12 +5211,10 @@ export async function registerRoutes(
     }
 
     // ── ФАЗА 3: upsert CLOSED поставок по каждому WB аккаунту ───────────────
-    // Only supplies returned exclusively by WB's CLOSED endpoint (not in ACTIVE)
-    // are WB-confirmed deliveries → wb_synced_as_closed = true.
-    // Note: WB API quirk — for some accounts, ACTIVE and CLOSED return identical
-    // supply sets, so wb_synced_as_closed stays false for those supplies.
-    const wbConfirmedClosedIds = new Set<string>();
-    const allWbClosedIds = new Set<string>(); // ALL supplies from WB CLOSED (incl. duplicates)
+    // ALL supplies returned by WB CLOSED endpoint get wb_synced_as_closed = true.
+    // If a supply is also in ACTIVE we keep its status='open' but still flag it.
+    // Only supplies not in ACTIVE get status='closed' via full upsert.
+    const allWbClosedIds = new Set<string>(); // ALL supplies from WB CLOSED endpoint
 
     for (const wbSetting of wbSettings) {
       const cleanKey = wbSetting.apiKey!.trim();
@@ -5243,15 +5241,18 @@ export async function registerRoutes(
             const supplyId = String(rawId);
             if (!supplyId || supplyId === "undefined" || supplyId === "null") continue;
 
-            // Track ALL WB CLOSED IDs (including ACTIVE duplicates) for backfill reset
+            // Track ALL WB CLOSED IDs for backfill
             allWbClosedIds.add(supplyId);
 
-            // ACTIVE always wins over CLOSED (WB API can return same supply in both lists)
-            if (allActiveSupplyIds.has(supplyId)) continue;
+            if (allActiveSupplyIds.has(supplyId)) {
+              // Supply is also in ACTIVE: keep status='open' but set wb_synced_as_closed=true
+              await db.execute(sql`
+                UPDATE wb_supplies SET wb_synced_as_closed = true
+                WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+              `);
+              continue;
+            }
             closedOnlyCount++;
-
-            // Track WB-confirmed CLOSED-only supplies (delivery confirmed by WB)
-            wbConfirmedClosedIds.add(supplyId);
 
             const existingRows = await db.execute(sql`
               SELECT id FROM wb_supplies WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
@@ -5296,22 +5297,19 @@ export async function registerRoutes(
     }
 
     // ── BACKFILL: синхронизация флага wb_synced_as_closed ────────────────────────
-    // Per task spec: only WB-confirmed CLOSED-only supplies → true; all others → false.
-    // wbConfirmedClosedIds: supplies exclusively in CLOSED (not in ACTIVE) = real delivery
-    // allWbClosedIds: ALL from WB CLOSED endpoint (incl. ACTIVE duplicates)
+    // Per spec: ALL supplies from WB CLOSED → wb_synced_as_closed=true;
+    // all other closed supplies (closed by our cleanup, not returned by WB CLOSED) → false.
     if (anyActiveFetchSucceeded && allWbClosedIds.size > 0) {
-      // Step 1: mark WB-confirmed deliveries (CLOSED-only, not in ACTIVE)
-      for (const sid of wbConfirmedClosedIds) {
+      // Step 1: set true for any closed DB supplies in allWbClosedIds not yet flagged
+      for (const sid of allWbClosedIds) {
         await db.execute(sql`
           UPDATE wb_supplies SET wb_synced_as_closed = true
           WHERE supply_id = ${sid}
             AND organization_id = ${orgId}
-            AND status = 'closed'
             AND wb_synced_as_closed = false
         `);
       }
-      // Step 2: reset closed supplies that are NOT WB-confirmed deliveries
-      // (closed by our Phase 2 cleanup or stale-sync, not by WB CLOSED-only signal)
+      // Step 2: reset false for closed DB supplies NOT returned by WB CLOSED
       const closedInDb = await db.execute(sql`
         SELECT supply_id FROM wb_supplies
         WHERE status = 'closed'
@@ -5321,18 +5319,18 @@ export async function registerRoutes(
       const flaggedIds: any[] = (closedInDb as any).rows || closedInDb;
       const toReset = flaggedIds
         .map((r: any) => String(r.supply_id))
-        .filter((id: string) => !wbConfirmedClosedIds.has(id));
+        .filter((id: string) => !allWbClosedIds.has(id));
       for (const sid of toReset) {
         await db.execute(sql`
           UPDATE wb_supplies SET wb_synced_as_closed = false
           WHERE supply_id = ${sid} AND organization_id = ${orgId}
         `);
       }
-      if (wbConfirmedClosedIds.size > 0) {
-        console.log(`[wb-supply-sync] Backfill: помечено «в доставке» ${wbConfirmedClosedIds.size} WB CLOSED-only поставок`);
+      if (allWbClosedIds.size > 0) {
+        console.log(`[wb-supply-sync] Backfill: помечено wb_synced_as_closed=true у ${allWbClosedIds.size} WB CLOSED поставок`);
       }
       if (toReset.length > 0) {
-        console.log(`[wb-supply-sync] Backfill: сброшен флаг у ${toReset.length} поставок (не подтверждены WB CLOSED-only)`);
+        console.log(`[wb-supply-sync] Backfill: сброшен флаг у ${toReset.length} поставок (не в WB CLOSED)`);
       }
     }
 
