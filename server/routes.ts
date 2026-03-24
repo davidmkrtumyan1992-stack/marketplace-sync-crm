@@ -4710,15 +4710,18 @@ export async function registerRoutes(
     let totalSynced = 0;
     const errors: string[] = [];
 
+    // ── ФАЗА 1: собрать UNION всех ACTIVE IDs по всем WB аккаунтам + upsert ─
+    // Safe Total Mirror: collect from ALL accounts before any cleanup.
+    // This prevents a second account's narrower ACTIVE list from closing
+    // supplies that legitimately belong to a different account (store_id).
+    const allActiveSupplyIds = new Set<string>();
+    let anyActiveFetchSucceeded = false;
+
     for (const wbSetting of wbSettings) {
       const cleanKey = wbSetting.apiKey!.trim();
       const authHeaders = { "Authorization": cleanKey, "Content-Type": "application/json" };
       const resolvedStoreId = wbSetting.storeId ?? null;
       const displayName = resolvedStoreId ? `store ${resolvedStoreId}` : `org ${orgId}`;
-
-      // ── ACTIVE supplies ─────────────────────────────────────────────────────
-      // Collect returned IDs for mirror cleanup (only if API returns 200 OK)
-      let activeSupplyIds: Set<string> | null = null;
 
       try {
         const activeRes = await fetch(
@@ -4728,140 +4731,118 @@ export async function registerRoutes(
         if (activeRes.status !== 200) {
           const errText = await activeRes.text().catch(() => "");
           errors.push(`[ACTIVE] WB API ${activeRes.status}: ${errText.slice(0, 100)}`);
-          console.warn(`[wb-supply-sync] API error for ${displayName} (${activeRes.status}), skipping cleanup`);
-        } else {
-          const supplyData = await activeRes.json();
-          const supplies: any[] = supplyData.supplies || supplyData.list || [];
-          activeSupplyIds = new Set<string>();
-
-          for (const supply of supplies) {
-            const rawId = supply.id || supply.supplyId || supply.supply_id || "";
-            const supplyId = String(rawId);
-            if (!supplyId || supplyId === "undefined" || supplyId === "null") continue;
-
-            activeSupplyIds.add(supplyId);
-
-            const existingRows = await db.execute(sql`
-              SELECT id FROM wb_supplies WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
-            `);
-            const existing = ((existingRows as any).rows || existingRows)[0];
-
-            const supplyName = supply.name || null;
-            const createdAtRaw = supply.createdAt || supply.created_at;
-            const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
-
-            if (existing) {
-              await db.execute(sql`
-                UPDATE wb_supplies SET
-                  name = ${supplyName},
-                  status = 'open',
-                  closed_at = NULL
-                WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
-              `);
-            } else {
-              await db.insert(wbSuppliesTable).values({
-                supplyId,
-                storeId: resolvedStoreId ?? undefined,
-                organizationId: orgId,
-                name: supplyName,
-                status: "open",
-                createdAt: createdAtTs,
-              } as any);
-            }
-            totalSynced++;
-
-            // Attach orders to this supply
-            try {
-              const ordersRes = await fetch(
-                `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`,
-                { headers: authHeaders }
-              );
-              if (ordersRes.ok) {
-                const ordersData = await ordersRes.json();
-                const supplyOrders: any[] = ordersData.orders || [];
-                for (const so of supplyOrders) {
-                  const wbOrderId = String(so.id || so.wbOrderId || "");
-                  if (!wbOrderId) continue;
-                  await db.execute(sql`
-                    UPDATE orders SET wb_supply_id = ${supplyId}
-                    WHERE wb_order_id = ${wbOrderId}
-                      AND organization_id = ${orgId}
-                      AND (wb_supply_id IS NULL OR wb_supply_id != ${supplyId})
-                  `);
-                }
-              }
-            } catch (e: any) {
-              console.warn(`[wb-supplies-sync] Orders fetch for supply ${supplyId}:`, e.message);
-            }
-          }
-
-          // ── MIRROR CLEANUP: close stale open supplies not present in WB ─────
-          // Only runs when ACTIVE fetch succeeded (200 OK)
-          let closedCount = 0;
-
-          // 1. Cleanup for known storeId (unchanged)
-          if (resolvedStoreId !== null) {
-            const openRows = await db.execute(sql`
-              SELECT supply_id FROM wb_supplies
-              WHERE status = 'open'
-                AND store_id = ${resolvedStoreId}
-                AND organization_id = ${orgId}
-            `);
-            const openSupplies: any[] = (openRows as any).rows || openRows;
-            const toClose = openSupplies
-              .map((r: any) => String(r.supply_id))
-              .filter((id: string) => !activeSupplyIds!.has(id));
-
-            for (const sid of toClose) {
-              await db.execute(sql`
-                UPDATE wb_supplies
-                SET status = 'closed', closed_at = NOW()
-                WHERE supply_id = ${sid}
-                  AND status = 'open'
-                  AND store_id = ${resolvedStoreId}
-                  AND organization_id = ${orgId}
-              `);
-            }
-            closedCount = toClose.length;
-          }
-
-          // 2. Cleanup for store_id=null entries (legacy supplies imported without store context)
-          // These were synced before the store was linked and are never returned by WB API.
-          // Since WB returned an explicit ACTIVE list, anything NOT in it must be closed.
-          const nullStoreRows = await db.execute(sql`
-            SELECT supply_id FROM wb_supplies
-            WHERE status = 'open'
-              AND store_id IS NULL
-              AND organization_id = ${orgId}
-          `);
-          const nullStoreSupplies: any[] = (nullStoreRows as any).rows || nullStoreRows;
-          const nullToClose = nullStoreSupplies
-            .map((r: any) => String(r.supply_id))
-            .filter((id: string) => !activeSupplyIds!.has(id));
-
-          for (const sid of nullToClose) {
-            await db.execute(sql`
-              UPDATE wb_supplies
-              SET status = 'closed', closed_at = NOW()
-              WHERE supply_id = ${sid}
-                AND status = 'open'
-                AND store_id IS NULL
-                AND organization_id = ${orgId}
-            `);
-          }
-          if (nullToClose.length > 0) {
-            console.log(`[wb-supply-sync] ${displayName}: закрыто устаревших (store_id=null): ${nullToClose.length}`);
-          }
-          closedCount += nullToClose.length;
-
-          console.log(`[wb-supply-sync] ${displayName}: ${activeSupplyIds.size} активных в WB, закрыто устаревших: ${closedCount}`);
+          console.warn(`[wb-supply-sync] API error for ${displayName} (${activeRes.status}), skipping`);
+          continue;
         }
+
+        anyActiveFetchSucceeded = true;
+        const supplyData = await activeRes.json();
+        const supplies: any[] = supplyData.supplies || supplyData.list || [];
+
+        for (const supply of supplies) {
+          const rawId = supply.id || supply.supplyId || supply.supply_id || "";
+          const supplyId = String(rawId);
+          if (!supplyId || supplyId === "undefined" || supplyId === "null") continue;
+
+          allActiveSupplyIds.add(supplyId);
+
+          const existingRows = await db.execute(sql`
+            SELECT id FROM wb_supplies WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+          `);
+          const existing = ((existingRows as any).rows || existingRows)[0];
+
+          const supplyName = supply.name || null;
+          const createdAtRaw = supply.createdAt || supply.created_at;
+          const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
+
+          if (existing) {
+            await db.execute(sql`
+              UPDATE wb_supplies SET
+                name = ${supplyName},
+                status = 'open',
+                closed_at = NULL
+              WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+            `);
+          } else {
+            await db.insert(wbSuppliesTable).values({
+              supplyId,
+              storeId: resolvedStoreId ?? undefined,
+              organizationId: orgId,
+              name: supplyName,
+              status: "open",
+              createdAt: createdAtTs,
+            } as any);
+          }
+          totalSynced++;
+
+          // Attach orders to this supply
+          try {
+            const ordersRes = await fetch(
+              `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`,
+              { headers: authHeaders }
+            );
+            if (ordersRes.ok) {
+              const ordersData = await ordersRes.json();
+              const supplyOrders: any[] = ordersData.orders || [];
+              for (const so of supplyOrders) {
+                const wbOrderId = String(so.id || so.wbOrderId || "");
+                if (!wbOrderId) continue;
+                await db.execute(sql`
+                  UPDATE orders SET wb_supply_id = ${supplyId}
+                  WHERE wb_order_id = ${wbOrderId}
+                    AND organization_id = ${orgId}
+                    AND (wb_supply_id IS NULL OR wb_supply_id != ${supplyId})
+                `);
+              }
+            }
+          } catch (e: any) {
+            console.warn(`[wb-supplies-sync] Orders fetch for supply ${supplyId}:`, e.message);
+          }
+        }
+
+        console.log(`[wb-supply-sync] ${displayName}: ${supplies.length} активных в WB`);
       } catch (e: any) {
         errors.push(`[ACTIVE] Error: ${e.message}`);
-        console.error(`[wb-supplies-sync] ACTIVE error:`, e.message);
+        console.error(`[wb-supplies-sync] ACTIVE error for ${displayName}:`, e.message);
       }
+    }
 
-      // ── CLOSED supplies ──────────────────────────────────────────────────────
+    // ── ФАЗА 2: TOTAL MIRROR CLEANUP ────────────────────────────────────────
+    // Runs only when at least one ACTIVE fetch succeeded.
+    // Uses the UNION of all accounts' ACTIVE IDs → safe for multi-account orgs.
+    if (anyActiveFetchSucceeded) {
+      const openRows = await db.execute(sql`
+        SELECT supply_id FROM wb_supplies
+        WHERE status = 'open'
+          AND organization_id = ${orgId}
+      `);
+      const allOpen: any[] = (openRows as any).rows || openRows;
+      const toClose = allOpen
+        .map((r: any) => String(r.supply_id))
+        .filter((id: string) => !allActiveSupplyIds.has(id));
+
+      for (const sid of toClose) {
+        await db.execute(sql`
+          UPDATE wb_supplies
+          SET status = 'closed', closed_at = NOW()
+          WHERE supply_id = ${sid}
+            AND status = 'open'
+            AND organization_id = ${orgId}
+        `);
+      }
+      if (toClose.length > 0) {
+        console.log(`[wb-supply-sync] Total Mirror: закрыто устаревших: ${toClose.length} (активных в WB: ${allActiveSupplyIds.size})`);
+      } else {
+        console.log(`[wb-supply-sync] Total Mirror: всё чисто (активных в WB: ${allActiveSupplyIds.size})`);
+      }
+    }
+
+    // ── ФАЗА 3: upsert CLOSED поставок по каждому WB аккаунту ───────────────
+    for (const wbSetting of wbSettings) {
+      const cleanKey = wbSetting.apiKey!.trim();
+      const authHeaders = { "Authorization": cleanKey, "Content-Type": "application/json" };
+      const resolvedStoreId = wbSetting.storeId ?? null;
+
       try {
         const closedRes = await fetch(
           `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=CLOSED`,
@@ -4878,6 +4859,9 @@ export async function registerRoutes(
             const rawId = supply.id || supply.supplyId || supply.supply_id || "";
             const supplyId = String(rawId);
             if (!supplyId || supplyId === "undefined" || supplyId === "null") continue;
+
+            // ACTIVE always wins over CLOSED (WB API can return same supply in both lists)
+            if (allActiveSupplyIds.has(supplyId)) continue;
 
             const existingRows = await db.execute(sql`
               SELECT id FROM wb_supplies WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
