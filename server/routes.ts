@@ -4584,6 +4584,83 @@ export async function registerRoutes(
   setTimeout(autoSyncWbOrders, 20000);
   console.log(`[wb-auto-sync] Background sync scheduled every ${WB_SYNC_INTERVAL / 60000} minutes`);
 
+  // Синк архивных статусов — обновляет статусы существующих заказов за последние 30 дней
+  const syncWbArchiveStatuses = async () => {
+    try {
+      const allSettings = await db.select().from(marketplaceSettingsTable);
+      const wbSettingsAll = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
+      if (wbSettingsAll.length === 0) return;
+
+      const WB_BASE = "https://marketplace-api.wildberries.ru";
+      const archiveSince = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
+      const orgIds = [...new Set(wbSettingsAll.map(s => s.organizationId))];
+
+      for (const orgId of orgIds) {
+        const wbSettings = wbSettingsAll.filter(s => s.organizationId === orgId);
+        let totalUpdated = 0;
+
+        for (const wbSetting of wbSettings) {
+          try {
+            const cleanApiKey = wbSetting.apiKey!.trim();
+            const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
+
+            const res = await fetch(
+              `${WB_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${archiveSince}`,
+              { method: "GET", headers: authHeaders }
+            );
+            if (!res.ok) continue;
+
+            const data = await res.json();
+            const orders: any[] = data?.orders || [];
+
+            for (const wbOrder of orders) {
+              try {
+                const wbOrderId = String(wbOrder.id);
+                const wbStatus = wbOrder.wbStatus || wbOrder.status || "";
+                if (!wbStatus) continue;
+
+                const existingRows = await db.execute(sql`
+                  SELECT id, wb_status FROM orders
+                  WHERE wb_order_id = ${wbOrderId}
+                    AND source = 'wildberries'
+                    AND organization_id = ${orgId}
+                  LIMIT 1
+                `);
+                const existing = ((existingRows as any).rows || existingRows)[0];
+                if (!existing) continue;
+
+                if (existing.wb_status === wbStatus) continue;
+
+                const internalStatus = wbStatusToInternal(wbStatus);
+                const createdAtRaw = wbOrder.createdAt;
+                const createdAtTs = createdAtRaw
+                  ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+                  : new Date();
+
+                await storage.updateOrderWbStatus(existing.id, wbStatus, internalStatus, createdAtTs);
+                totalUpdated++;
+              } catch (e: any) {
+                // skip individual order errors
+              }
+            }
+          } catch (e: any) {
+            console.error(`[wb-archive-status-sync] Error for org ${orgId}:`, e.message);
+          }
+        }
+
+        if (totalUpdated > 0) {
+          console.log(`[wb-archive-status-sync] Org ${orgId}: обновлено статусов ${totalUpdated}`);
+        }
+      }
+    } catch (error: any) {
+      console.error("[wb-archive-status-sync] Error:", error.message);
+    }
+  };
+
+  setTimeout(syncWbArchiveStatuses, 30000);
+  setInterval(syncWbArchiveStatuses, 60 * 60 * 1000);
+  console.log("[wb-archive-status-sync] Scheduled every 60 min, first run in 30s");
+
   // Принудительная синхронизация устаревших заказов (старше 24 ч) при старте сервера
   const syncWbStaleOrdersAll = async () => {
     try {
@@ -5084,7 +5161,7 @@ export async function registerRoutes(
           case "delivery":
             return ["complete", "indelivery", "delivering"].includes(ws);
           case "archive":
-            return ["delivered", "sold", "receive", "returned", "closed"].includes(ws);
+            return ["delivered", "sold", "receive", "returned", "closed", "sorted", "waiting_for_cancel"].includes(ws);
           case "cancelled":
             return ["cancel", "user_cancel", "declined", "cancelled", "cancel_ignore", "defect"].includes(ws) || (o.status === "cancelled");
           default:
@@ -5606,7 +5683,7 @@ export async function registerRoutes(
             AND created_at >= NOW() - INTERVAL '72 hours' THEN 1 END) as new_count,
           COUNT(CASE WHEN (wb_status IN ('cancel','user_cancel','declined','cancelled','cancel_ignore')
             OR status = 'cancelled') THEN 1 END) as cancelled_count,
-          COUNT(CASE WHEN wb_status IN ('delivered','sold','receive','returned') THEN 1 END) as archive_count
+          COUNT(CASE WHEN wb_status IN ('delivered','sold','receive','returned','sorted','waiting_for_cancel') THEN 1 END) as archive_count
         FROM orders
         WHERE source = 'wildberries' AND organization_id = ${orgId}
       `);
