@@ -1,0 +1,108 @@
+Прочитай CLAUDE.md для контекста.
+
+Исправить отображение времени и цвета бейджа в вкладке «Новые»
+компонента WildberriesOrders.tsx.
+Не трогать: Ozon, Яндекс, sync логику, аутентификацию.
+
+ПРИОРИТЕТ №1 — Проверить источник времени в БД.
+
+Это самое важное — без этого всё остальное не поможет.
+
+Выполни SQL:
+SELECT 
+  wb_order_id,
+  order_number,
+  created_at,
+  created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow' as msk_time,
+  EXTRACT(EPOCH FROM (NOW() - created_at))/3600 as hours_ago
+FROM orders 
+WHERE source = 'wildberries'
+AND wb_status IN ('new', 'waiting')
+ORDER BY created_at DESC
+LIMIT 5;
+
+Покажи результат в таблице.
+
+Затем найди в server/routes.ts в autoSyncWbOrders
+место где записывается created_at при создании WB заказа.
+
+Если там стоит new Date() — это критический баг!
+Немедленно заменить на реальное время из WB API:
+
+// БЫЛО (неправильно — время синхронизации):
+createdAt: new Date()
+
+// СТАЛО (правильно — реальное время заказа из WB):
+createdAt: wbOrder.createdAt 
+  ? new Date(wbOrder.createdAt)
+  : wbOrder.date
+    ? new Date(wbOrder.date * 1000)
+    : new Date()
+
+После исправления перезапусти сервер и снова выполни SQL —
+убедись что created_at теперь соответствует реальному
+времени создания заказа в WB.
+
+ПРОБЛЕМА 2 — Timezone при отображении времени:
+
+В WildberriesOrders.tsx найди функцию timeAgo.
+created_at хранится в БД как UTC без суффикса 'Z'.
+JavaScript парсит строку без 'Z' как локальное время
+что даёт ошибку в 3-4 часа.
+
+Исправить:
+
+function timeAgo(dateInput: string | Date): string {
+  const now = new Date();
+  const date = typeof dateInput === 'string'
+    ? new Date(dateInput.endsWith('Z') ? dateInput : dateInput + 'Z')
+    : dateInput;
+  const diffMs = now.getTime() - date.getTime();
+  if (diffMs < 0) return '0 мин назад';
+  const diffH = Math.floor(diffMs / 3600000);
+  const diffM = Math.floor((diffMs % 3600000) / 60000);
+  if (diffH > 0) return `${diffH} ч ${diffM} мин назад`;
+  return `${diffM} мин назад`;
+}
+
+ПРОБЛЕМА 3 — Цвет бейджа как в WB:
+
+В WB заказы старше 24 часов уже горят красным —
+это сигнал срочности для сборщика.
+
+Пороги цвета (точно как в WB):
+- До 24 часов → зелёный (успеваем)
+- От 24 до 47 часов → красный (срочно!)
+- Больше 47 часов → ярко-красный (критично!)
+
+function getTimeAgoBadgeClass(dateInput: string | Date): string {
+  const now = new Date();
+  const date = typeof dateInput === 'string'
+    ? new Date(dateInput.endsWith('Z') ? dateInput : dateInput + 'Z')
+    : dateInput;
+  const diffH = (now.getTime() - date.getTime()) / 3600000;
+  if (diffH > 47) return 'bg-red-200 text-red-800 border-red-300';
+  if (diffH > 24) return 'bg-red-100 text-red-700 border-red-200';
+  return 'bg-green-100 text-green-700 border-green-200';
+}
+
+Найди бейдж времени в строке заказа вкладки «Новые»
+и применить getTimeAgoBadgeClass для цвета бейджа.
+
+ФИНАЛЬНАЯ ПРОВЕРКА:
+
+Выполни SQL после всех исправлений:
+SELECT 
+  wb_order_id,
+  order_number,
+  created_at,
+  created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow' as msk_time,
+  EXTRACT(EPOCH FROM (NOW() - created_at))/3600 as hours_ago
+FROM orders 
+WHERE source = 'wildberries'
+AND wb_status IN ('new', 'waiting')
+ORDER BY created_at DESC
+LIMIT 5;
+
+Выведи результат в виде таблицы.
+hours_ago должен совпадать с тем что показывает ЛК WB.
