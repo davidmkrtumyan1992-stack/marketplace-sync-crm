@@ -4604,52 +4604,73 @@ export async function registerRoutes(
             const cleanApiKey = wbSetting.apiKey!.trim();
             const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
 
-            // Paginate through all orders (cursor-based pagination via next)
+            // Шаг 1: собрать все ID заказов за 30 дней постранично
+            const allOrderMeta: any[] = [];
             let nextCursor = 0;
-            let pageErrors = 0;
             while (true) {
               const res = await fetch(
                 `${WB_BASE}/api/v3/orders?limit=1000&next=${nextCursor}&dateFrom=${archiveSince}`,
                 { method: "GET", headers: authHeaders }
               );
               if (!res.ok) break;
-
               const data = await res.json();
-              const orders: any[] = data?.orders || [];
+              const page: any[] = data?.orders || [];
+              allOrderMeta.push(...page);
               nextCursor = data?.next ?? 0;
+              if (!nextCursor || page.length < 1000) break;
+            }
 
-              for (const wbOrder of orders) {
-                try {
-                  const wbOrderId = String(wbOrder.id);
-                  const wbStatus = wbOrder.wbStatus || wbOrder.status || "";
-                  if (!wbStatus) continue;
+            if (allOrderMeta.length === 0) continue;
 
-                  const existingRows = await db.execute(sql`
-                    SELECT id, wb_status FROM orders
-                    WHERE wb_order_id = ${wbOrderId}
-                      AND source = 'wildberries'
-                      AND organization_id = ${orgId}
-                    LIMIT 1
-                  `);
-                  const existing = ((existingRows as any).rows || existingRows)[0];
-                  if (!existing) continue;
-
-                  if (existing.wb_status === wbStatus) continue;
-
-                  const internalStatus = wbStatusToInternal(wbStatus);
-                  const createdAtRaw = wbOrder.createdAt;
-                  const createdAtTs = createdAtRaw
-                    ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
-                    : new Date();
-
-                  await storage.updateOrderWbStatus(existing.id, wbStatus, internalStatus, createdAtTs);
-                  totalUpdated++;
-                } catch (e: any) {
-                  pageErrors++;
+            // Шаг 2: запросить реальные статусы через POST /api/v3/orders/status
+            const statusMap: Record<string, { wbStatus: string; meta: any }> = {};
+            for (let i = 0; i < allOrderMeta.length; i += 1000) {
+              const batch = allOrderMeta.slice(i, i + 1000);
+              try {
+                const statusRes = await fetch(`${WB_BASE}/api/v3/orders/status`, {
+                  method: "POST",
+                  headers: authHeaders,
+                  body: JSON.stringify({ orders: batch.map((o: any) => Number(o.id)) }),
+                });
+                if (statusRes.ok) {
+                  const statusData = await statusRes.json();
+                  for (const s of statusData?.orders || []) {
+                    if (s.id && s.wbStatus) {
+                      const meta = allOrderMeta.find((o: any) => o.id === s.id) || {};
+                      statusMap[String(s.id)] = { wbStatus: s.wbStatus, meta };
+                    }
+                  }
                 }
+              } catch (e: any) {
+                console.warn(`[wb-archive-status-sync] status batch error: ${e.message}`);
               }
+            }
 
-              if (!nextCursor || orders.length < 1000) break;
+            // Шаг 3: обновить существующие записи с изменившимся статусом
+            let pageErrors = 0;
+            for (const [wbOrderId, { wbStatus, meta }] of Object.entries(statusMap)) {
+              try {
+                const existingRows = await db.execute(sql`
+                  SELECT id, wb_status FROM orders
+                  WHERE wb_order_id = ${wbOrderId}
+                    AND source = 'wildberries'
+                    AND organization_id = ${orgId}
+                  LIMIT 1
+                `);
+                const existing = ((existingRows as any).rows || existingRows)[0];
+                if (!existing) continue;
+                if (existing.wb_status === wbStatus) continue;
+
+                const internalStatus = wbStatusToInternal(wbStatus);
+                const createdAtRaw = meta.createdAt;
+                const createdAtTs = createdAtRaw
+                  ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+                  : new Date();
+                await storage.updateOrderWbStatus(existing.id, wbStatus, internalStatus, createdAtTs);
+                totalUpdated++;
+              } catch (e: any) {
+                pageErrors++;
+              }
             }
 
             if (pageErrors > 0) {
@@ -4694,24 +4715,54 @@ export async function registerRoutes(
             const cleanApiKey = wbSetting.apiKey!.trim();
             const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
 
-            // Получаем заказы за 60 дней из WB API
-            const res = await fetch(
-              `${WB_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom60}`,
-              { method: "GET", headers: authHeaders }
-            );
-            if (!res.ok) {
-              console.error(`[wb-stale-sync] API error ${res.status} for org ${orgId}`);
-              continue;
+            // Шаг 1: собрать все ID заказов за 60 дней постранично
+            const allOrderMeta: any[] = [];
+            let nextCursor = 0;
+            while (true) {
+              const res = await fetch(
+                `${WB_BASE}/api/v3/orders?limit=1000&next=${nextCursor}&dateFrom=${dateFrom60}`,
+                { method: "GET", headers: authHeaders }
+              );
+              if (!res.ok) {
+                console.error(`[wb-stale-sync] API error ${res.status} for org ${orgId}`);
+                break;
+              }
+              const data = await res.json();
+              const page: any[] = data?.orders || [];
+              allOrderMeta.push(...page);
+              nextCursor = data?.next ?? 0;
+              if (!nextCursor || page.length < 1000) break;
             }
-            const data = await res.json();
-            const wbOrders: any[] = data?.orders || [];
 
-            for (const wbOrder of wbOrders) {
+            if (allOrderMeta.length === 0) continue;
+
+            // Шаг 2: запросить реальные статусы через POST /api/v3/orders/status
+            const statusMap: Record<string, { wbStatus: string; meta: any }> = {};
+            for (let i = 0; i < allOrderMeta.length; i += 1000) {
+              const batch = allOrderMeta.slice(i, i + 1000);
               try {
-                const wbOrderId = String(wbOrder.id);
-                const wbStatus = wbOrder.wbStatus || wbOrder.status || "new";
+                const statusRes = await fetch(`${WB_BASE}/api/v3/orders/status`, {
+                  method: "POST",
+                  headers: authHeaders,
+                  body: JSON.stringify({ orders: batch.map((o: any) => Number(o.id)) }),
+                });
+                if (statusRes.ok) {
+                  const statusData = await statusRes.json();
+                  for (const s of statusData?.orders || []) {
+                    if (s.id && s.wbStatus) {
+                      const meta = allOrderMeta.find((o: any) => o.id === s.id) || {};
+                      statusMap[String(s.id)] = { wbStatus: s.wbStatus, meta };
+                    }
+                  }
+                }
+              } catch (e: any) {
+                console.warn(`[wb-stale-sync] status batch error: ${e.message}`);
+              }
+            }
 
-                // Ищем в БД заказы с устаревшим статусом (new/waiting) привязанные к поставке
+            // Шаг 3: обновить заказы в БД с устаревшим статусом (new/waiting в поставке)
+            for (const [wbOrderId, { wbStatus, meta }] of Object.entries(statusMap)) {
+              try {
                 const [existing] = await db.execute(sql`
                   SELECT id, wb_status FROM orders
                   WHERE wb_order_id = ${wbOrderId}
@@ -4723,7 +4774,7 @@ export async function registerRoutes(
                 `);
                 const row = ((existing as any).rows || existing)[0] as any;
                 if (row && row.wb_status !== wbStatus) {
-                  const createdAtRaw = wbOrder.createdAt;
+                  const createdAtRaw = meta.createdAt;
                   const createdAtTs = createdAtRaw
                     ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
                     : new Date();
@@ -4778,15 +4829,16 @@ export async function registerRoutes(
   // Запустить стейл-синк один раз при старте (через 15 с, до первого autoSyncWbOrders)
   setTimeout(syncWbStaleOrdersAll, 15000);
 
-  // Shared helper: бэкфилл отменённых WB заказов для одной организации
-  const WB_CANCELLED_STATUSES = ["cancel", "user_cancel", "declined", "cancel_ignore", "defect", "cancelled"];
+  // Shared helper: бэкфилл отменённых WB заказов для одной организации (90 дней, курсорная пагинация)
+  // WB API /api/v3/orders не содержит поле wbStatus — статус получаем через POST /api/v3/orders/status
+  const WB_CANCELLED_STATUSES = ["cancel", "user_cancel", "declined", "cancel_ignore", "defect", "cancelled", "declined_by_client"];
 
   async function runWbCancelledBackfillForOrg(
     orgId: string,
     wbOrgSettings: any[]
   ): Promise<{ updated: number; created: number }> {
     const WB_BASE = "https://marketplace-api.wildberries.ru";
-    const dateFrom = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
+    const dateFrom = Math.floor((Date.now() - 90 * 24 * 60 * 60 * 1000) / 1000);
     let totalUpdated = 0, totalCreated = 0;
 
     for (const wbSetting of wbOrgSettings) {
@@ -4800,24 +4852,66 @@ export async function registerRoutes(
         if (store) resolvedStoreName = store.name;
       }
 
-      const ordersRes = await fetch(
-        `${WB_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom}`,
-        { method: "GET", headers: authHeaders }
-      );
-      if (!ordersRes.ok) {
-        console.warn(`[wb-cancelled-backfill] WB API error ${ordersRes.status} for store ${resolvedStoreName}`);
+      // Шаг 1: собрать все заказы (только ID + метаданные) за 90 дней постранично
+      const allOrderMeta: any[] = [];
+      let nextCursor = 0;
+      while (true) {
+        const ordersRes = await fetch(
+          `${WB_BASE}/api/v3/orders?limit=1000&next=${nextCursor}&dateFrom=${dateFrom}`,
+          { method: "GET", headers: authHeaders }
+        );
+        if (!ordersRes.ok) {
+          console.warn(`[wb-cancelled-backfill] WB API error ${ordersRes.status} for store ${resolvedStoreName}`);
+          break;
+        }
+        const ordersData = await ordersRes.json();
+        const page: any[] = ordersData?.orders || [];
+        allOrderMeta.push(...page);
+        nextCursor = ordersData?.next ?? 0;
+        if (!nextCursor || page.length < 1000) break;
+      }
+
+      if (allOrderMeta.length === 0) {
+        console.log(`[wb-cancelled-backfill] Store «${resolvedStoreName}»: 0 заказов из WB за 90 дней`);
         continue;
       }
-      const ordersData = await ordersRes.json();
-      const allOrders: any[] = ordersData?.orders || [];
-      const cancelledOrders = allOrders.filter(o =>
-        WB_CANCELLED_STATUSES.includes(o.wbStatus || o.status || "")
-      );
 
-      for (const wbOrder of cancelledOrders) {
+      // Шаг 2: запросить статусы батчами по 1000 через POST /api/v3/orders/status
+      const statusMap: Record<string, string> = {};
+      for (let i = 0; i < allOrderMeta.length; i += 1000) {
+        const batch = allOrderMeta.slice(i, i + 1000);
         try {
-          const wbOrderId = String(wbOrder.id);
-          const wbStatus = wbOrder.wbStatus || wbOrder.status || "cancel";
+          const statusRes = await fetch(`${WB_BASE}/api/v3/orders/status`, {
+            method: "POST",
+            headers: authHeaders,
+            body: JSON.stringify({ orders: batch.map((o: any) => Number(o.id)) }),
+          });
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            for (const s of statusData?.orders || []) {
+              if (s.id && s.wbStatus) statusMap[String(s.id)] = s.wbStatus;
+            }
+          } else {
+            const errText = await statusRes.text();
+            console.warn(`[wb-cancelled-backfill] status API error ${statusRes.status}: ${errText.slice(0, 200)}`);
+          }
+        } catch (e: any) {
+          console.warn(`[wb-cancelled-backfill] status batch error: ${e.message}`);
+        }
+      }
+
+      // Шаг 3: фильтровать отменённые и создать/обновить записи
+      const metaById: Record<string, any> = {};
+      for (const o of allOrderMeta) metaById[String(o.id)] = o;
+
+      let storeCancelledCount = 0;
+      let pageErrors = 0;
+
+      for (const [wbOrderId, wbStatus] of Object.entries(statusMap)) {
+        if (!WB_CANCELLED_STATUSES.includes(wbStatus)) continue;
+        storeCancelledCount++;
+        const wbOrder = metaById[wbOrderId] || {};
+        try {
           const wbRid = wbOrder.rid ? String(wbOrder.rid) : null;
           const wbSupplyId = wbOrder.supplyId ? String(wbOrder.supplyId) : null;
           const createdAtRaw = wbOrder.createdAt;
@@ -4866,16 +4960,21 @@ export async function registerRoutes(
             totalCreated++;
           }
         } catch (e: any) {
-          console.error(`[wb-cancelled-backfill] Order ${wbOrder.id} error:`, e.message);
+          pageErrors++;
+          console.error(`[wb-cancelled-backfill] Order ${wbOrderId} error:`, e.message);
         }
       }
-      console.log(`[wb-cancelled-backfill] Store «${resolvedStoreName}»: ${cancelledOrders.length} отменённых из WB`);
+
+      if (pageErrors > 0) {
+        console.warn(`[wb-cancelled-backfill] Store «${resolvedStoreName}»: пропущено ошибок ${pageErrors}`);
+      }
+      console.log(`[wb-cancelled-backfill] Store «${resolvedStoreName}»: ${allOrderMeta.length} заказов, ${storeCancelledCount} отменённых из WB`);
     }
     return { updated: totalUpdated, created: totalCreated };
   }
 
-  // Startup: бэкфилл отменённых WB заказов за 30 дней (один раз на org, если 0 cancelled записей)
-  setTimeout(async () => {
+  // Бэкфилл отменённых WB заказов: запуск через 30с после старта, затем каждые 2 часа
+  const runWbCancelledBackfillAll = async () => {
     try {
       const allSettings = await db.select().from(marketplaceSettingsTable);
       const wbSettingsAll = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
@@ -4885,27 +4984,22 @@ export async function registerRoutes(
       let totalUpdated = 0, totalCreated = 0;
 
       for (const orgId of orgIds) {
-        const [countRow] = await db.select({ cnt: sql<number>`COUNT(*)::int` }).from(ordersTable)
-          .where(and(
-            eq(ordersTable.source, "wildberries"),
-            eq(ordersTable.status, "cancelled"),
-            eq(ordersTable.organizationId, orgId)
-          ));
-        const cancelledCount = countRow?.cnt ?? 0;
-        if (cancelledCount > 0) {
-          console.log(`[wb-cancelled-backfill] org ${orgId}: ${cancelledCount} отменённых уже в БД, пропускаем`);
-          continue;
-        }
         const wbOrgSettings = wbSettingsAll.filter(s => s.organizationId === orgId);
         const { updated, created } = await runWbCancelledBackfillForOrg(orgId, wbOrgSettings);
         totalUpdated += updated;
         totalCreated += created;
       }
-      console.log(`[wb-cancelled-backfill] Завершено: обновлено ${totalUpdated}, создано ${totalCreated}`);
+      if (totalUpdated > 0 || totalCreated > 0) {
+        console.log(`[wb-cancelled-backfill] Завершено: обновлено ${totalUpdated}, создано ${totalCreated}`);
+      }
     } catch (e: any) {
       console.error("[wb-cancelled-backfill] Error:", e.message);
     }
-  }, 30000);
+  };
+
+  setTimeout(runWbCancelledBackfillAll, 30000);
+  setInterval(runWbCancelledBackfillAll, 2 * 60 * 60 * 1000);
+  console.log("[wb-cancelled-backfill] Scheduled every 2h, first run in 30s");
 
   // ==================== WB FBS MANAGEMENT ENDPOINTS ====================
 
@@ -5175,7 +5269,7 @@ export async function registerRoutes(
           case "archive":
             return ["delivered", "sold", "receive", "returned", "closed", "sorted", "waiting_for_cancel"].includes(ws);
           case "cancelled":
-            return ["cancel", "user_cancel", "declined", "cancelled", "cancel_ignore", "defect"].includes(ws) || (o.status === "cancelled");
+            return ["cancel", "user_cancel", "declined", "cancelled", "cancel_ignore", "defect", "declined_by_client"].includes(ws) || (o.status === "cancelled");
           default:
             return true;
         }
@@ -5693,7 +5787,7 @@ export async function registerRoutes(
         SELECT
           COUNT(CASE WHEN wb_status IN ('new','waiting') AND wb_supply_id IS NULL
             AND created_at >= NOW() - INTERVAL '72 hours' THEN 1 END) as new_count,
-          COUNT(CASE WHEN (wb_status IN ('cancel','user_cancel','declined','cancelled','cancel_ignore')
+          COUNT(CASE WHEN (wb_status IN ('cancel','user_cancel','declined','cancelled','cancel_ignore','defect','declined_by_client')
             OR status = 'cancelled') THEN 1 END) as cancelled_count,
           COUNT(CASE WHEN wb_status IN ('delivered','sold','receive','returned','sorted','waiting_for_cancel') THEN 1 END) as archive_count
         FROM orders

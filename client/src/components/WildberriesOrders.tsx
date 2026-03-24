@@ -1259,22 +1259,6 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
       {/* ===== ВКЛАДКА ОТМЕНЁННЫЕ ===== */}
       {activeTab === "cancelled" && (
         <div className="space-y-3" data-testid="wb-cancelled-orders">
-          <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 mb-4 flex items-center justify-between text-sm text-blue-700">
-            <span>
-              ℹ️ Остаток у отменённого товара не прибавится автоматически. Измените его вручную во вкладке «Остатки», если товар вернулся на склад.
-            </span>
-            <Link href="/products">
-              <Button
-                variant="outline"
-                size="sm"
-                className="ml-4 text-[#7631ff] border-[#7631ff] hover:bg-violet-50 shrink-0"
-                data-testid="button-go-inventory"
-              >
-                Перейти в остатки
-              </Button>
-            </Link>
-          </div>
-
           <div className="rounded-xl border overflow-hidden bg-white dark:bg-background">
             <Table>
               <TableHeader>
