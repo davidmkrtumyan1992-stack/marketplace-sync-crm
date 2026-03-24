@@ -1,0 +1,130 @@
+Прочитай CLAUDE.md для контекста.
+
+Диагностика и исправление: почему в CRM показывается 18 поставок
+«На сборке» хотя в ЛК WB раздел пустой.
+Данные должны совпадать 100% — зеркальное отображение.
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.
+
+ШАГ 1 — SQL диагностика:
+
+SELECT supply_id, name, status, store_id,
+  created_at, closed_at, organization_id
+FROM wb_supplies
+WHERE status = 'open'
+ORDER BY created_at DESC;
+
+Покажи результат в таблице — нужно видеть все 18 поставок
+и особенно значения store_id (NULL или число?).
+
+ШАГ 2 — Проверить код cleanup в syncWbSuppliesForOrg:
+
+Найди функцию syncWbSuppliesForOrg в server/routes.ts.
+Покажи точный код блока где:
+1. Делается запрос к WB API за ACTIVE поставками
+2. Собирается activeSupplyIds
+3. Выполняется UPDATE status='closed' для устаревших
+
+Особенно проверь:
+- Есть ли проверка if (resolvedStoreId === null) → пропустить cleanup
+- Это самая вероятная причина бага
+
+ШАГ 3 — Прямой тест WB API:
+
+Сделай прямой запрос к WB API для store_id=45:
+GET https://marketplace-api.wildberries.ru/api/v3/supplies
+?limit=1000&next=0&status=ACTIVE
+Headers: { Authorization: cleanApiKey из marketplace_settings }
+
+Покажи:
+- HTTP статус ответа
+- Сколько поставок вернул API
+- Их supply_id если есть
+
+ШАГ 4 — Сравни и найди причину:
+
+Сравни результаты ШАГ 1 и ШАГ 3:
+- Если WB вернул 0 поставок но в БД 18 open → cleanup не срабатывает
+- Найди ТОЧНУЮ причину почему:
+
+Проверь каждую из этих причин:
+a) resolvedStoreId = null → cleanup пропускается (самая вероятная!)
+b) supply_id в БД в формате WB-GI-xxx но API возвращает просто число
+c) WB API возвращает ошибку → cleanup пропускается по защите
+d) syncWbSuppliesForOrg не вызывается в автосинке
+
+ШАГ 5 — Исправить проблему:
+
+На основе найденной причины исправить логику cleanup.
+
+Если причина (a) — resolvedStoreId = null:
+Добавить fallback cleanup по organizationId:
+
+// Закрывать поставки по orgId если storeId неизвестен:
+if (activeSupplyIds !== null && activeSupplyIds.size === 0) {
+  // WB вернул пустой список — закрыть все open поставки этой орг:
+  await db.execute(sql`
+    UPDATE wb_supplies
+    SET status = 'closed', closed_at = NOW()
+    WHERE status = 'open'
+    AND organization_id = ${orgId}
+  `);
+  console.log('[wb-supply-sync] Закрыто все open поставки — WB вернул 0 активных');
+}
+
+// Если WB вернул поставки — закрыть только отсутствующие:
+if (activeSupplyIds !== null && activeSupplyIds.size > 0) {
+  const openRows = await db.execute(sql`
+    SELECT supply_id FROM wb_supplies
+    WHERE status = 'open'
+    AND organization_id = ${orgId}
+  `);
+  const openSupplies = (openRows as any).rows || openRows;
+  const toClose = openSupplies
+    .map((r: any) => r.supply_id)
+    .filter((id: string) => !activeSupplyIds!.has(id));
+  for (const supplyId of toClose) {
+    await db.execute(sql`
+      UPDATE wb_supplies
+      SET status = 'closed', closed_at = NOW()
+      WHERE supply_id = ${supplyId}
+      AND organization_id = ${orgId}
+    `);
+  }
+  console.log(`[wb-supply-sync] Закрыто устаревших: ${toClose.length}`);
+}
+
+Если причина (b) — формат supply_id не совпадает:
+Нормализовать supply_id при сравнении — убрать префикс WB-GI-
+или добавить его при необходимости.
+
+ШАГ 6 — Принудительно запустить cleanup прямо сейчас:
+
+После исправления кода запусти syncWbSuppliesForOrg
+для всех WB магазинов.
+
+Затем выполни SQL и покажи результат:
+
+SELECT status, COUNT(*) as cnt
+FROM wb_supplies
+WHERE organization_id = (
+  SELECT organization_id FROM marketplace_settings
+  WHERE marketplace = 'wildberries' LIMIT 1
+)
+GROUP BY status;
+
+Ожидаемый результат: status='open' → 0
+(так как WB показывает 0 активных поставок)
+
+ШАГ 7 — Исправить нестабильность отображения:
+
+Нестабильность («поставки то появляются то исчезают») —
+это признак конфликта между кэшем React Query и автосинком.
+
+В WildberriesOrders.tsx найди useQuery для поставок
+(GET /api/wb/supplies).
+Убедись что refetchInterval установлен:
+- refetchInterval: 120000 (2 минуты) — синхронно с автосинком
+- staleTime: 0 — всегда считать данные устаревшими
+- refetchOnWindowFocus: true — обновлять при фокусе окна
+
+Если эти параметры не установлены — добавить.
