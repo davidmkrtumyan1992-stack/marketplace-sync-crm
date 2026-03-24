@@ -1,0 +1,94 @@
+Прочитай CLAUDE.md для контекста.
+
+Проблема: «Архив» в CRM показывает заказы только до 8 марта,
+хотя в ЛК WB уже есть заказы до 21 марта.
+Данные устарели — нужна синхронизация актуальных статусов.
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.
+
+ШАГ 1 — Диагностика:
+
+SELECT wb_order_id, wb_status, status, created_at,
+  created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow' as msk_time
+FROM orders
+WHERE source = 'wildberries'
+AND wb_status IN ('delivered','sold','receive','returned')
+ORDER BY created_at DESC
+LIMIT 10;
+
+SELECT wb_status, COUNT(*) as cnt
+FROM orders
+WHERE source = 'wildberries'
+AND wb_status IN ('delivered','sold','receive','returned')
+GROUP BY wb_status;
+
+Покажи результаты.
+
+ШАГ 2 — Подтянуть актуальные статусы из WB API:
+
+Сделай запрос к WB API за последние 30 дней:
+GET https://marketplace-api.wildberries.ru/api/v3/orders
+?limit=1000&next=0&dateFrom={30 дней назад unix timestamp}
+Headers: { Authorization: cleanApiKey }
+
+Из ответа найти заказы со статусами:
+delivered, sold, receive, returned,
+cancelled, cancel, user_cancel, declined
+
+Для каждого такого заказа:
+1. Найти в БД по wb_order_id
+2. Если есть — обновить wb_status и status
+3. Если нет — создать новую запись
+
+Показать сколько заказов обновлено и создано.
+
+ШАГ 3 — Добавить расширенный автосинк статусов:
+
+В autoSyncWbOrders добавить второй запрос
+за последние 30 дней для обновления статусов
+уже существующих заказов:
+
+const archiveSince = Math.floor(
+  (Date.now() - 30 * 24 * 3600 * 1000) / 1000
+);
+
+GET /api/v3/orders?limit=1000&next=0
+  &dateFrom=${archiveSince}
+
+Для каждого заказа из ответа:
+- Найти в БД: WHERE wb_order_id = wbOrder.id
+  AND source = 'wildberries'
+- Если статус изменился — обновить wb_status и status
+- Если заказа нет в БД — пропустить (не создавать)
+
+ВАЖНО: запускать этот расширенный синк
+1 раз в час (не каждые 2 минуты)
+чтобы не перегружать WB API.
+Использовать отдельный setInterval:
+setInterval(syncWbArchiveStatuses, 60 * 60 * 1000);
+setTimeout(syncWbArchiveStatuses, 30000); // первый запуск через 30 сек
+
+ШАГ 4 — Проверить фильтр «Архив» в GET /api/wb/orders:
+
+Найди в server/routes.ts GET /api/wb/orders
+фильтр для status=archive.
+Убедись что включены ВСЕ финальные статусы WB:
+
+wb_status IN (
+  'delivered', 'sold', 'receive', 'returned',
+  'sorted', 'waiting_for_cancel'
+)
+
+Если каких-то статусов нет — добавить.
+
+ШАГ 5 — Финальная проверка:
+
+SELECT wb_status, COUNT(*) as cnt,
+  MAX(created_at AT TIME ZONE 'UTC'
+    AT TIME ZONE 'Europe/Moscow') as latest_msk
+FROM orders
+WHERE source = 'wildberries'
+AND wb_status IN ('delivered','sold','receive','returned')
+GROUP BY wb_status
+ORDER BY cnt DESC;
+
+Ожидаемый результат: появятся заказы до 21 марта.
