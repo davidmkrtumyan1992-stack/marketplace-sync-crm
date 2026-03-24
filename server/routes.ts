@@ -5148,8 +5148,7 @@ export async function registerRoutes(
           }
           totalSynced++;
 
-          // Only fetch orders for newly inserted supplies (existing ones already linked)
-          if (!existing) try {
+          try {
             const ordersResult = await wbFetchJson(
               `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`,
               authHeaders,
@@ -5299,8 +5298,9 @@ export async function registerRoutes(
     // ── BACKFILL: синхронизация флага wb_synced_as_closed ────────────────────────
     // Per spec: ALL supplies from WB CLOSED → wb_synced_as_closed=true;
     // all other closed supplies (closed by our cleanup, not returned by WB CLOSED) → false.
-    if (anyActiveFetchSucceeded && allWbClosedIds.size > 0) {
-      // Step 1: set true for any closed DB supplies in allWbClosedIds not yet flagged
+    // Runs whenever active fetch succeeded, even if WB CLOSED returned zero supplies.
+    if (anyActiveFetchSucceeded) {
+      // Step 1: set true for any DB supplies in allWbClosedIds not yet flagged
       for (const sid of allWbClosedIds) {
         await db.execute(sql`
           UPDATE wb_supplies SET wb_synced_as_closed = true
