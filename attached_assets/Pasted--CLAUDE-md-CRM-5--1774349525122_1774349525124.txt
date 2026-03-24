@@ -1,0 +1,136 @@
+Прочитай CLAUDE.md для контекста.
+
+КРИТИЧЕСКАЯ ПРОБЛЕМА: В CRM показывается 5 поставок «На сборке»
+хотя в ЛК WB раздел пустой (0 поставок).
+Нужна полная зачистка и логика «Total Mirror».
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.
+
+ШАГ 1 — SQL диагностика прямо сейчас:
+
+SELECT supply_id, name, status, store_id,
+  created_at, closed_at
+FROM wb_supplies
+WHERE status = 'open'
+ORDER BY created_at DESC;
+
+SELECT status, store_id, COUNT(*) as cnt
+FROM wb_supplies
+GROUP BY status, store_id
+ORDER BY status, store_id;
+
+Покажи оба результата в таблице.
+
+ШАГ 2 — Прямой запрос к WB API:
+
+Для каждого WB магазина сделай запрос:
+GET https://marketplace-api.wildberries.ru/api/v3/supplies
+?limit=1000&next=0&status=ACTIVE
+Headers: { Authorization: cleanApiKey.trim() }
+
+Покажи HTTP статус и точный список supply_id из ответа.
+
+ШАГ 3 — Немедленная SQL зачистка:
+
+Если WB API вернул 0 активных поставок —
+закрыть ВСЕ open поставки организации без исключений:
+
+UPDATE wb_supplies
+SET status = 'closed', closed_at = NOW()
+WHERE status = 'open'
+AND organization_id = (
+  SELECT organization_id FROM marketplace_settings
+  WHERE marketplace = 'wildberries' LIMIT 1
+);
+
+Покажи сколько строк обновлено.
+
+ШАГ 4 — Исправить syncWbSuppliesForOrg на «Total Mirror»:
+
+Найди в server/routes.ts функцию syncWbSuppliesForOrg.
+Покажи текущий код блока MIRROR CLEANUP.
+
+ПРОБЛЕМА: Сейчас cleanup разбит на два блока:
+- if (resolvedStoreId !== null) → cleanup для известного store
+- отдельный блок для store_id IS NULL
+
+Это создаёт race condition — поставки «воскресают»
+потому что upsert логика может вернуть им status='open'.
+
+ЗАМЕНИТЬ оба блока на единый «Total Mirror»:
+
+// TOTAL MIRROR — единственная логика (убрать все if по store_id):
+// Срабатывает всегда при успешном ответе от WB API (status 200)
+if (activeSupplyIds !== null) {
+  // Получить ВСЕ open поставки этой организации:
+  const allOpenRows = await db.execute(sql`
+    SELECT supply_id FROM wb_supplies
+    WHERE status = 'open'
+    AND organization_id = ${orgId}
+  `);
+  const allOpen: any[] = (allOpenRows as any).rows || allOpenRows;
+
+  // Закрыть те которых нет в WB API ответе:
+  const toClose = allOpen
+    .map((r: any) => String(r.supply_id))
+    .filter((id: string) => !activeSupplyIds!.has(id));
+
+  if (toClose.length > 0) {
+    for (const sid of toClose) {
+      await db.execute(sql`
+        UPDATE wb_supplies
+        SET status = 'closed', closed_at = NOW()
+        WHERE supply_id = ${sid}
+        AND status = 'open'
+        AND organization_id = ${orgId}
+      `);
+    }
+    console.log(
+      `[wb-supply-sync] ${displayName}: закрыто устаревших: ${toClose.length}`
+    );
+  }
+
+  console.log(
+    `[wb-supply-sync] ${displayName}: ` +
+    `${activeSupplyIds.size} активных в WB, ` +
+    `закрыто: ${toClose.length}`
+  );
+}
+
+ВАЖНО: удалить старые блоки
+if (resolvedStoreId !== null) { ... cleanup ... }
+и блок for store_id IS NULL.
+Оставить только один Total Mirror блок выше.
+
+ШАГ 5 — Проверить upsert логику:
+
+В той же функции syncWbSuppliesForOrg найди место
+где делается INSERT или UPDATE поставки из CLOSED списка WB.
+
+Проверь — не устанавливается ли там status='open' по ошибке:
+
+// ПРАВИЛЬНО:
+const dbStatus = supplyStatus === "ACTIVE" ? "open" : "closed";
+
+// В UPDATE должно быть:
+SET status = ${dbStatus}
+
+// НЕ должно быть хардкода status='open' для CLOSED поставок!
+
+Если ошибка найдена — исправить.
+
+ШАГ 6 — Принудительный запуск syncWbSuppliesForOrg:
+
+После всех исправлений перезапустить сервер и
+подождать первый цикл автосинка (2 минуты).
+
+Показать логи содержащие [wb-supply-sync].
+
+Затем выполнить финальный SQL:
+SELECT status, store_id, COUNT(*) as cnt
+FROM wb_supplies
+GROUP BY status, store_id
+ORDER BY status;
+
+Ожидаемый результат:
+- status='open' → 0 строк (если WB пустой)
+- В логах: закрыто устаревших > 0
