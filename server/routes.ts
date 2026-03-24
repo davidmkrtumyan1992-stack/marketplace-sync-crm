@@ -5082,6 +5082,7 @@ export async function registerRoutes(
     const allActiveSupplyIds = new Set<string>();
     let anyActiveFetchSucceeded = false;
     let anyClosedFetchSucceeded = false;
+    let allClosedFetchesSucceeded = true; // becomes false if any account's CLOSED fetch fails
 
     for (const wbSetting of wbSettings) {
       const cleanKey = wbSetting.apiKey!.trim();
@@ -5229,6 +5230,7 @@ export async function registerRoutes(
         );
         if (closedResult.status < 200 || closedResult.status >= 300) {
           errors.push(`[CLOSED] WB API ${closedResult.status}`);
+          allClosedFetchesSucceeded = false;
         } else {
           anyClosedFetchSucceeded = true;
           const supplyData = closedResult.json;
@@ -5292,6 +5294,7 @@ export async function registerRoutes(
           console.log(`[wb-supply-sync] ${displayName2}: уникальных CLOSED (не в ACTIVE): ${closedOnlyCount}`);
         }
       } catch (e: any) {
+        allClosedFetchesSucceeded = false;
         errors.push(`[CLOSED] Error: ${e.message}`);
         console.error(`[wb-supplies-sync] CLOSED error:`, e.message);
       }
@@ -5300,26 +5303,31 @@ export async function registerRoutes(
     // ── BACKFILL: синхронизация флага wb_synced_as_closed ────────────────────────
     // Per spec: ALL supplies from WB CLOSED → wb_synced_as_closed=true;
     // all other closed supplies (closed by our cleanup, not returned by WB CLOSED) → false.
-    // Runs whenever any CLOSED fetch succeeded (independent of ACTIVE success).
+    // Step 1 (set true) runs whenever any CLOSED fetch succeeded.
+    // Step 2 (reset false) only runs when ALL CLOSED fetches succeeded to avoid partial-failure
+    // incorrectly clearing flags for supplies from a failed account.
     if (anyClosedFetchSucceeded) {
       if (allWbClosedIds.size > 0) {
-        // Step 1: set true for ALL DB supplies returned by WB CLOSED (regardless of current value)
         const closedIdList = Array.from(allWbClosedIds);
+        // Step 1: set true for ALL DB supplies returned by WB CLOSED (regardless of current value)
         await db.execute(sql`
           UPDATE wb_supplies SET wb_synced_as_closed = true
           WHERE supply_id = ANY(${closedIdList}::text[])
             AND organization_id = ${orgId}
         `);
-        // Step 2: reset to false all closed DB supplies NOT in WB CLOSED
-        await db.execute(sql`
-          UPDATE wb_supplies SET wb_synced_as_closed = false
-          WHERE status = 'closed'
-            AND organization_id = ${orgId}
-            AND NOT (supply_id = ANY(${closedIdList}::text[]))
-        `);
         console.log(`[wb-supply-sync] Backfill: wb_synced_as_closed=true у ${allWbClosedIds.size} WB CLOSED поставок`);
-      } else {
-        // WB CLOSED returned zero — reset all closed supplies to false
+        // Step 2: reset to false all closed DB supplies NOT in WB CLOSED
+        // Only runs when ALL accounts' CLOSED fetches succeeded to prevent partial-failure data loss
+        if (allClosedFetchesSucceeded) {
+          await db.execute(sql`
+            UPDATE wb_supplies SET wb_synced_as_closed = false
+            WHERE status = 'closed'
+              AND organization_id = ${orgId}
+              AND NOT (supply_id = ANY(${closedIdList}::text[]))
+          `);
+        }
+      } else if (allClosedFetchesSucceeded) {
+        // WB CLOSED returned zero for all accounts — reset all closed supplies to false
         await db.execute(sql`
           UPDATE wb_supplies SET wb_synced_as_closed = false
           WHERE status = 'closed'
