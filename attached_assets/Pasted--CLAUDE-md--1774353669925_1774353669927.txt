@@ -1,0 +1,90 @@
+Прочитай CLAUDE.md для контекста.
+
+СРОЧНОЕ ИСПРАВЛЕНИЕ: После синхронизации «На сборке» показывает 
+152 поставки хотя в ЛК WB их 0.
+
+Проблема: WB API возвращает ВСЕ открытые поставки включая
+пустые (без заказов). ЛК WB в разделе «На сборке» показывает
+только поставки у которых есть заказы ожидающие сборки.
+
+ШАГ 1 — Диагностика:
+
+-- Сколько поставок имеют реальные заказы:
+SELECT 
+  ws.supply_id,
+  ws.status,
+  COUNT(o.id) as orders_count
+FROM wb_supplies ws
+LEFT JOIN orders o ON o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status NOT IN ('cancel','user_cancel','declined','cancelled')
+WHERE ws.status = 'open'
+GROUP BY ws.supply_id, ws.status
+ORDER BY orders_count DESC
+LIMIT 20;
+
+-- Сколько поставок пустые (нет заказов):
+SELECT COUNT(*) as empty_supplies
+FROM wb_supplies ws
+WHERE ws.status = 'open'
+AND NOT EXISTS (
+  SELECT 1 FROM orders o 
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+);
+
+Покажи результаты.
+
+ШАГ 2 — Исправить GET /api/wb/supplies в server/routes.ts:
+
+Для вкладки «На сборке» (status=open) добавить
+фильтр — показывать только поставки с активными заказами:
+
+В SQL запросе GET /api/wb/supplies добавить:
+${status === 'open' ? sql`
+  AND EXISTS (
+    SELECT 1 FROM orders o
+    WHERE o.wb_supply_id = ws.supply_id
+    AND o.source = 'wildberries'
+    AND o.wb_status NOT IN (
+      'cancel','user_cancel','declined','cancelled','delivered','sold'
+    )
+  )
+` : sql``}
+
+ШАГ 3 — Исправить счётчик вкладки «На сборке»:
+
+В GET /api/wb/counts в server/routes.ts
+исправить подсчёт assembly_count:
+
+-- Считать только поставки С активными заказами:
+SELECT COUNT(DISTINCT ws.supply_id) as assembly_count
+FROM wb_supplies ws
+WHERE ws.status = 'open'
+AND ws.organization_id = $orgId
+AND EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status NOT IN (
+    'cancel','user_cancel','declined','cancelled','delivered','sold'
+  )
+);
+
+ШАГ 4 — Финальная проверка:
+
+SELECT COUNT(DISTINCT ws.supply_id) as assembly_with_orders
+FROM wb_supplies ws
+WHERE ws.status = 'open'
+AND EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status NOT IN (
+    'cancel','user_cancel','declined','cancelled','delivered','sold'
+  )
+);
+
+Ожидаемый результат: 0 (как в ЛК WB).
+
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.

@@ -5182,6 +5182,13 @@ export async function registerRoutes(
         WHERE ws.organization_id = ${orgId}
           ${status !== "all" ? sql`AND ws.status = ${status}` : sql``}
           ${storeId ? sql`AND ws.store_id = ${storeId}` : sql``}
+          ${status === "open" ? sql`
+          AND EXISTS (
+            SELECT 1 FROM orders o2
+            WHERE o2.wb_supply_id = ws.supply_id
+              AND o2.source = 'wildberries'
+              AND o2.wb_status NOT IN ('cancel','user_cancel','declined','cancelled','delivered','sold')
+          )` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ws.created_at DESC
       `);
@@ -5496,9 +5503,14 @@ export async function registerRoutes(
 
       const supplyCounts = await db.execute(sql`
         SELECT
-          COUNT(CASE WHEN status = 'open' THEN 1 END) as assembly_count,
+          COUNT(DISTINCT CASE WHEN ws.status = 'open' AND EXISTS (
+            SELECT 1 FROM orders o
+            WHERE o.wb_supply_id = ws.supply_id
+              AND o.source = 'wildberries'
+              AND o.wb_status NOT IN ('cancel','user_cancel','declined','cancelled','delivered','sold')
+          ) THEN ws.supply_id END) as assembly_count,
           COUNT(CASE WHEN status = 'closed' THEN 1 END) as delivery_count
-        FROM wb_supplies
+        FROM wb_supplies ws
         WHERE organization_id = ${orgId}
       `);
 
