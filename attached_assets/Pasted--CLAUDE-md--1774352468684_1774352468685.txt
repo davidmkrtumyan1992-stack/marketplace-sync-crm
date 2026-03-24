@@ -1,0 +1,153 @@
+Прочитай CLAUDE.md для контекста.
+
+Исправить архитектуру удаления магазинов — при удалении магазина
+должны удаляться ВСЕ связанные данные. Система как единый организм.
+Не трогать: логику sync, аутентификацию, RBAC.
+
+ШАГ 1 — Диагностика текущего состояния:
+
+SELECT id, name, marketplace, client_id, is_active
+FROM stores ORDER BY marketplace, name;
+
+SELECT ms.id, ms.marketplace, ms.store_id, ms.is_active,
+  s.name as store_name
+FROM marketplace_settings ms
+LEFT JOIN stores s ON ms.store_id = s.id
+WHERE s.id IS NULL;
+
+SELECT ws.supply_id, ws.status, ws.store_id
+FROM wb_supplies ws
+LEFT JOIN stores s ON ws.store_id = s.id
+WHERE (ws.store_id NOT IN (SELECT id FROM stores)
+   OR ws.store_id IS NULL)
+AND ws.status = 'open';
+
+SELECT o.source, COUNT(*) as orphan_orders
+FROM orders o
+LEFT JOIN stores s ON o.store_id = s.id
+WHERE s.id IS NULL
+GROUP BY o.source;
+
+Покажи все результаты в таблицах.
+
+ШАГ 2 — Исправить CASCADE DELETE в схеме БД:
+
+В shared/schema.ts проверь FK constraints для всех таблиц:
+- marketplace_settings → store_id → stores
+- wb_supplies → store_id → stores
+- orders → store_id → stores
+- product_marketplace_links → store_id → stores
+- sync_history → store_id → stores (если есть)
+
+Для каждой добавить { onDelete: "cascade" } если не стоит.
+После: npm run db:push
+
+ШАГ 3 — Исправить эндпоинт DELETE /api/stores/:id:
+
+Найди эндпоинт удаления магазина в server/routes.ts.
+Заменить на новую логику:
+
+app.delete("/api/stores/:id", isAuthenticated,
+  requireRole("owner"), async (req, res) => {
+  const storeId = Number(req.params.id);
+  const orgId = getOrgId(req);
+
+  const store = await storage.getStore(storeId);
+  if (!store) return res.status(404).json({ message: "Магазин не найден" });
+
+  // 1 — ПЕРВЫМ удалить API ключи:
+  await db.delete(marketplaceSettingsTable)
+    .where(eq(marketplaceSettingsTable.storeId, storeId));
+  console.log(`[store-delete] API ключи магазина ${storeId} удалены`);
+
+  // 2 — Закрыть открытые поставки WB:
+  await db.update(wbSuppliesTable)
+    .set({ status: 'closed', closedAt: new Date() })
+    .where(and(
+      eq(wbSuppliesTable.storeId, storeId),
+      eq(wbSuppliesTable.status, 'open')
+    ));
+
+  // 3 — Удалить product_marketplace_links:
+  await db.delete(productMarketplaceLinksTable)
+    .where(eq(productMarketplaceLinksTable.storeId, storeId));
+
+  // 4 — Удалить сам магазин (CASCADE удалит orders):
+  await storage.deleteStore(storeId);
+
+  console.log(`[store-delete] Магазин ${store.name} (${storeId}) полностью удалён`);
+  return res.json({
+    success: true,
+    message: `Магазин «${store.name}» и все связанные данные удалены`
+  });
+});
+
+ШАГ 4 — Добавить проверку активности в автосинк:
+
+В autoSyncWbOrders и autoSyncOzonStatuses добавить
+проверку перед обработкой каждого магазина:
+
+if (resolvedStoreId) {
+  const storeExists = await db.select()
+    .from(storesTable)
+    .where(eq(storesTable.id, resolvedStoreId))
+    .limit(1);
+  if (!storeExists.length) {
+    console.log(`[auto-sync] Магазин ${resolvedStoreId} удалён — пропускаем`);
+    continue;
+  }
+}
+
+ШАГ 5 — Инвалидация кэша React Query после удаления:
+
+В client/src/ найди где вызывается DELETE для магазина.
+После успешного удаления добавить:
+
+queryClient.invalidateQueries({ queryKey: ['/api/stores'] });
+queryClient.invalidateQueries({ queryKey: ['/api/wb/supplies'] });
+queryClient.invalidateQueries({ queryKey: ['/api/wb/orders'] });
+queryClient.invalidateQueries({ queryKey: ['/api/wb/counts'] });
+queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+queryClient.invalidateQueries({ queryKey: ['/api/kpi'] });
+
+ШАГ 6 — Очистить призраки прямо сейчас:
+
+-- Удалить осиротевшие marketplace_settings:
+DELETE FROM marketplace_settings
+WHERE store_id NOT IN (SELECT id FROM stores);
+
+-- Закрыть осиротевшие wb_supplies:
+UPDATE wb_supplies
+SET status = 'closed', closed_at = NOW()
+WHERE store_id NOT IN (SELECT id FROM stores)
+AND status = 'open';
+
+-- Удалить осиротевшие product_marketplace_links:
+DELETE FROM product_marketplace_links
+WHERE store_id NOT IN (SELECT id FROM stores);
+
+-- ВАЖНО: удалить осиротевшие заказы без магазина:
+DELETE FROM orders
+WHERE store_id NOT IN (SELECT id FROM stores)
+OR store_id IS NULL;
+
+Покажи сколько строк затронуто каждым запросом.
+
+ШАГ 7 — Проверить динамичность автосинка:
+
+Убедись что autoSyncWbOrders и autoSyncOzonStatuses
+берут список магазинов только из БД:
+await storage.getMarketplaceSettings(orgId)
+Нет захардкоженных client_id или store_id.
+
+ШАГ 8 — Обновить CLAUDE.md:
+
+Добавить в раздел "Архитектурные правила":
+
+## Жизненный цикл магазина
+- Удаление магазина = ПЕРВЫМ удаляются API ключи
+- CASCADE: orders, order_items, wb_supplies,
+  product_marketplace_links удаляются автоматически
+- Автосинк проверяет существование магазина перед запросом
+- store_id IS NULL = баг → немедленно архивировать
+- Нет захардкоженных ID магазинов в коде
