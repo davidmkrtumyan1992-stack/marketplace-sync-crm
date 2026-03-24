@@ -1,0 +1,109 @@
+Прочитай CLAUDE.md для контекста.
+
+В CRM показывается 8 поставок «На сборке» хотя в ЛК WB → 0.
+Поставки от марта 2026: WB-GI-224019292, WB-GI-223701104,
+WB-GI-223495720, WB-GI-223075210, WB-GI-223017523,
+WB-GI-222103577, WB-GI-221929822, WB-GI-221430486
+
+Эти поставки висят потому что заказы внутри них
+имеют устаревшие статусы в БД — нужна принудительная синхронизация.
+
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.
+
+ШАГ 1 — Проверить статусы заказов в этих поставках:
+
+SELECT 
+  o.wb_supply_id,
+  o.wb_order_id,
+  o.wb_status,
+  o.status,
+  COUNT(*) as cnt
+FROM orders o
+WHERE o.wb_supply_id IN (
+  'WB-GI-224019292','WB-GI-223701104','WB-GI-223495720',
+  'WB-GI-223075210','WB-GI-223017523','WB-GI-222103577',
+  'WB-GI-221929822','WB-GI-221430486'
+)
+GROUP BY o.wb_supply_id, o.wb_order_id, o.wb_status, o.status
+ORDER BY o.wb_supply_id;
+
+Покажи результат — нужно видеть реальные wb_status заказов.
+
+ШАГ 2 — Принудительная синхронизация статусов заказов из WB API:
+
+Получить wb_order_id всех заказов из этих 8 поставок:
+
+SELECT wb_order_id FROM orders
+WHERE wb_supply_id IN (
+  'WB-GI-224019292','WB-GI-223701104','WB-GI-223495720',
+  'WB-GI-223075210','WB-GI-223017523','WB-GI-222103577',
+  'WB-GI-221929822','WB-GI-221430486'
+)
+AND wb_order_id IS NOT NULL;
+
+Затем для каждого wb_order_id получить актуальный статус из WB API:
+GET https://marketplace-api.wildberries.ru/api/v3/orders
+?limit=1000&next=0&dateFrom={60 дней назад unix}
+Headers: { Authorization: cleanApiKey }
+
+Найти эти заказы в ответе и обновить их wb_status в БД:
+
+UPDATE orders 
+SET wb_status = {реальный статус из WB API},
+    status = CASE
+      WHEN {wb_status} IN ('delivered','sold','receive') THEN 'completed'
+      WHEN {wb_status} IN ('cancel','user_cancel','declined') THEN 'cancelled'
+      WHEN {wb_status} IN ('delivering','indelivery') THEN 'shipped'
+      ELSE status
+    END
+WHERE wb_order_id = {id}
+AND source = 'wildberries';
+
+ШАГ 3 — Проверить есть ли эти поставки в WB ACTIVE:
+
+GET https://marketplace-api.wildberries.ru/api/v3/supplies
+?limit=1000&next=0&status=ACTIVE
+Headers: { Authorization: cleanApiKey }
+
+Если этих 8 поставок НЕТ в ACTIVE списке —
+закрыть их принудительно:
+
+UPDATE wb_supplies
+SET status = 'closed', closed_at = NOW()
+WHERE supply_id IN (
+  'WB-GI-224019292','WB-GI-223701104','WB-GI-223495720',
+  'WB-GI-223075210','WB-GI-223017523','WB-GI-222103577',
+  'WB-GI-221929822','WB-GI-221430486'
+);
+
+ШАГ 4 — Исправить фильтр «На сборке» в GET /api/wb/supplies:
+
+Уточнить EXISTS фильтр — показывать только поставки
+где заказы реально ожидают сборки (новые или в процессе):
+
+AND EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status IN ('new', 'waiting', 'confirm')
+)
+
+Заменить текущий фильтр который проверяет
+NOT IN ('cancel','user_cancel'...) на этот более точный.
+
+Также обновить GET /api/wb/counts assembly_count
+с тем же фильтром wb_status IN ('new','waiting','confirm').
+
+ШАГ 5 — Финальная проверка:
+
+SELECT COUNT(*) as assembly_count
+FROM wb_supplies ws
+WHERE ws.status = 'open'
+AND EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status IN ('new', 'waiting', 'confirm')
+);
+
+Ожидаемый результат: 0 (совпадает с ЛК WB)
