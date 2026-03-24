@@ -504,4 +504,5 @@ export const wbSupplies = pgTable("wb_supplies", {
   status: text("status").default("open"),
   createdAt: timestamp("created_at").defaultNow(),
   closedAt: timestamp("closed_at"),
+  wbSyncedAsClosed: boolean("wb_synced_as_closed").default(false),
 });

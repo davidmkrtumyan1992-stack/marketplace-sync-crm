@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import * as https from "node:https";
 import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
 import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, fixWbPhotos, syncProductToOzon, syncProductToWb } from "./marketplace-import";
@@ -17,6 +18,52 @@ import mammoth from "mammoth";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
+
+function wbFetchJson(url: string, headers: Record<string, string>, timeoutMs = 25000): Promise<{ status: number; json: any }> {
+  console.log(`[wbFetchJson] START url=${url} timeout=${timeoutMs}ms`);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const parsed = new URL(url);
+    const req = https.request({
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method: "GET",
+      headers,
+    }, (res) => {
+      let body = "";
+      res.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+      res.on("end", () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
+        try {
+          resolve({ status: res.statusCode ?? 0, json: JSON.parse(body) });
+        } catch {
+          reject(new Error("WB response is not valid JSON"));
+        }
+      });
+      res.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
+        reject(err);
+      });
+    });
+    req.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      reject(err);
+    });
+    const deadline = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      req.destroy(new Error(`WB supplies fetch timeout (${timeoutMs}ms)`));
+      reject(new Error(`WB supplies fetch timeout (${timeoutMs}ms)`));
+    }, timeoutMs);
+    req.end();
+  });
+}
 
 async function fetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
   for (let i = 0; i < retries; i++) {
@@ -5016,11 +5063,13 @@ export async function registerRoutes(
   }
 
   async function syncWbSuppliesForOrg(orgId: string, storeId: number | null = null): Promise<{synced: number, errors: string[]}> {
+    console.log(`[wb-supply-sync] STARTED for org ${orgId}, storeId=${storeId}`);
     const allSettings = await storage.getMarketplaceSettings(orgId);
     const wbSettings = allSettings.filter(s =>
       s.marketplace === "wildberries" && s.isActive && s.apiKey &&
       (storeId === null || s.storeId === storeId)
     );
+    console.log(`[wb-supply-sync] Found ${wbSettings.length} WB settings (total settings: ${allSettings.length})`);
     if (wbSettings.length === 0) return { synced: 0, errors: [] };
 
     let totalSynced = 0;
@@ -5040,19 +5089,28 @@ export async function registerRoutes(
       const displayName = resolvedStoreId ? `store ${resolvedStoreId}` : `org ${orgId}`;
 
       try {
-        const activeRes = await fetch(
-          `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=ACTIVE`,
-          { headers: authHeaders }
-        );
-        if (activeRes.status !== 200) {
-          const errText = await activeRes.text().catch(() => "");
-          errors.push(`[ACTIVE] WB API ${activeRes.status}: ${errText.slice(0, 100)}`);
-          console.warn(`[wb-supply-sync] API error for ${displayName} (${activeRes.status}), skipping`);
+        console.log(`[wb-supply-sync] Fetching ACTIVE supplies for ${displayName}...`);
+        let activeResult: { status: number; json: any };
+        try {
+          activeResult = await wbFetchJson(
+            `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=ACTIVE`,
+            authHeaders,
+            25000
+          );
+          console.log(`[wb-supply-sync] ACTIVE result for ${displayName}: status=${activeResult.status}`);
+        } catch (fetchErr: any) {
+          console.error(`[wb-supply-sync] ACTIVE fetch error for ${displayName}:`, fetchErr.message);
+          errors.push(`[ACTIVE] Error: ${fetchErr.message}`);
+          continue;
+        }
+        if (activeResult!.status !== 200) {
+          errors.push(`[ACTIVE] WB API ${activeResult.status}`);
+          console.warn(`[wb-supply-sync] API error for ${displayName} (${activeResult.status}), skipping`);
           continue;
         }
 
         anyActiveFetchSucceeded = true;
-        const supplyData = await activeRes.json();
+        const supplyData = activeResult.json;
         const supplies: any[] = supplyData.supplies || supplyData.list || [];
 
         for (const supply of supplies) {
@@ -5090,15 +5148,15 @@ export async function registerRoutes(
           }
           totalSynced++;
 
-          // Attach orders to this supply
-          try {
-            const ordersRes = await fetch(
+          // Only fetch orders for newly inserted supplies (existing ones already linked)
+          if (!existing) try {
+            const ordersResult = await wbFetchJson(
               `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`,
-              { headers: authHeaders }
+              authHeaders,
+              15000
             );
-            if (ordersRes.ok) {
-              const ordersData = await ordersRes.json();
-              const supplyOrders: any[] = ordersData.orders || [];
+            if (ordersResult.status >= 200 && ordersResult.status < 300) {
+              const supplyOrders: any[] = ordersResult.json?.orders || [];
               for (const so of supplyOrders) {
                 const wbOrderId = String(so.id || so.wbOrderId || "");
                 if (!wbOrderId) continue;
@@ -5139,7 +5197,7 @@ export async function registerRoutes(
       for (const sid of toClose) {
         await db.execute(sql`
           UPDATE wb_supplies
-          SET status = 'closed', closed_at = NOW()
+          SET status = 'closed', closed_at = NOW(), wb_synced_as_closed = true
           WHERE supply_id = ${sid}
             AND status = 'open'
             AND organization_id = ${orgId}
@@ -5159,16 +5217,18 @@ export async function registerRoutes(
       const resolvedStoreId = wbSetting.storeId ?? null;
 
       try {
-        const closedRes = await fetch(
+        const closedResult = await wbFetchJson(
           `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=CLOSED`,
-          { headers: authHeaders }
+          authHeaders,
+          25000
         );
-        if (!closedRes.ok) {
-          const errText = await closedRes.text().catch(() => "");
-          errors.push(`[CLOSED] WB API ${closedRes.status}: ${errText.slice(0, 100)}`);
+        if (closedResult.status < 200 || closedResult.status >= 300) {
+          errors.push(`[CLOSED] WB API ${closedResult.status}`);
         } else {
-          const supplyData = await closedRes.json();
+          const supplyData = closedResult.json;
           const supplies: any[] = supplyData.supplies || supplyData.list || [];
+          const displayName2 = wbSetting.storeId ? `store ${wbSetting.storeId}` : `org ${orgId}`;
+          console.log(`[wb-supply-sync] ${displayName2}: ${supplies.length} закрытых в WB (status=CLOSED)`);
 
           for (const supply of supplies) {
             const rawId = supply.id || supply.supplyId || supply.supply_id || "";
@@ -5194,7 +5254,8 @@ export async function registerRoutes(
                 UPDATE wb_supplies SET
                   name = ${supplyName},
                   status = 'closed',
-                  closed_at = ${closedAtTs}
+                  closed_at = ${closedAtTs},
+                  wb_synced_as_closed = true
                 WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
               `);
             } else {
@@ -5206,6 +5267,7 @@ export async function registerRoutes(
                 status: "closed",
                 createdAt: createdAtTs,
                 closedAt: closedAtTs ?? undefined,
+                wbSyncedAsClosed: true,
               } as any);
             }
             totalSynced++;
@@ -5476,7 +5538,7 @@ export async function registerRoutes(
               AND o2.source = 'wildberries'
               AND o2.wb_status IN ('new', 'waiting', 'confirm')
           )` : sql``}
-          ${status === "closed" ? sql`AND ws.closed_at >= NOW() - INTERVAL '90 days'` : sql``}
+          ${status === "closed" ? sql`AND ws.wb_synced_as_closed = true` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ${status === "closed" ? sql`ws.closed_at DESC NULLS LAST` : sql`ws.created_at DESC`}
       `);
@@ -5797,7 +5859,7 @@ export async function registerRoutes(
               AND o.source = 'wildberries'
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
-          COUNT(DISTINCT CASE WHEN ws.status = 'closed' AND ws.closed_at >= NOW() - INTERVAL '90 days' THEN ws.supply_id END) as delivery_count
+          COUNT(DISTINCT CASE WHEN ws.status = 'closed' AND ws.wb_synced_as_closed = true THEN ws.supply_id END) as delivery_count
         FROM wb_supplies ws
         WHERE organization_id = ${orgId}
       `);
