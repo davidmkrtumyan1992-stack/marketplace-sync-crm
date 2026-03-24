@@ -4604,44 +4604,56 @@ export async function registerRoutes(
             const cleanApiKey = wbSetting.apiKey!.trim();
             const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
 
-            const res = await fetch(
-              `${WB_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${archiveSince}`,
-              { method: "GET", headers: authHeaders }
-            );
-            if (!res.ok) continue;
+            // Paginate through all orders (cursor-based pagination via next)
+            let nextCursor = 0;
+            let pageErrors = 0;
+            while (true) {
+              const res = await fetch(
+                `${WB_BASE}/api/v3/orders?limit=1000&next=${nextCursor}&dateFrom=${archiveSince}`,
+                { method: "GET", headers: authHeaders }
+              );
+              if (!res.ok) break;
 
-            const data = await res.json();
-            const orders: any[] = data?.orders || [];
+              const data = await res.json();
+              const orders: any[] = data?.orders || [];
+              nextCursor = data?.next ?? 0;
 
-            for (const wbOrder of orders) {
-              try {
-                const wbOrderId = String(wbOrder.id);
-                const wbStatus = wbOrder.wbStatus || wbOrder.status || "";
-                if (!wbStatus) continue;
+              for (const wbOrder of orders) {
+                try {
+                  const wbOrderId = String(wbOrder.id);
+                  const wbStatus = wbOrder.wbStatus || wbOrder.status || "";
+                  if (!wbStatus) continue;
 
-                const existingRows = await db.execute(sql`
-                  SELECT id, wb_status FROM orders
-                  WHERE wb_order_id = ${wbOrderId}
-                    AND source = 'wildberries'
-                    AND organization_id = ${orgId}
-                  LIMIT 1
-                `);
-                const existing = ((existingRows as any).rows || existingRows)[0];
-                if (!existing) continue;
+                  const existingRows = await db.execute(sql`
+                    SELECT id, wb_status FROM orders
+                    WHERE wb_order_id = ${wbOrderId}
+                      AND source = 'wildberries'
+                      AND organization_id = ${orgId}
+                    LIMIT 1
+                  `);
+                  const existing = ((existingRows as any).rows || existingRows)[0];
+                  if (!existing) continue;
 
-                if (existing.wb_status === wbStatus) continue;
+                  if (existing.wb_status === wbStatus) continue;
 
-                const internalStatus = wbStatusToInternal(wbStatus);
-                const createdAtRaw = wbOrder.createdAt;
-                const createdAtTs = createdAtRaw
-                  ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
-                  : new Date();
+                  const internalStatus = wbStatusToInternal(wbStatus);
+                  const createdAtRaw = wbOrder.createdAt;
+                  const createdAtTs = createdAtRaw
+                    ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+                    : new Date();
 
-                await storage.updateOrderWbStatus(existing.id, wbStatus, internalStatus, createdAtTs);
-                totalUpdated++;
-              } catch (e: any) {
-                // skip individual order errors
+                  await storage.updateOrderWbStatus(existing.id, wbStatus, internalStatus, createdAtTs);
+                  totalUpdated++;
+                } catch (e: any) {
+                  pageErrors++;
+                }
               }
+
+              if (!nextCursor || orders.length < 1000) break;
+            }
+
+            if (pageErrors > 0) {
+              console.warn(`[wb-archive-status-sync] Org ${orgId}: пропущено ошибок ${pageErrors}`);
             }
           } catch (e: any) {
             console.error(`[wb-archive-status-sync] Error for org ${orgId}:`, e.message);
