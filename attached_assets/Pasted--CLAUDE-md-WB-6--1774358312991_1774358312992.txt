@@ -1,0 +1,109 @@
+Прочитай CLAUDE.md для контекста.
+
+Проблема: вкладка «В доставке» пустая хотя в ЛК WB есть 6 поставок.
+Эти поставки были закрыты нами принудительно и их заказам
+проставили wb_status='delivered' — но они реально ещё едут к клиенту.
+
+Поставки которые должны быть «В доставке»:
+WB-GI-218151720 (19.02.2026) — в обработке
+WB-GI-223017523 (12.03.2026) — в обработке
+WB-GI-223075210 (12.03.2026) — в обработке
+WB-GI-223495720 (14.03.2026) — в обработке
+WB-GI-223701104 (15.03.2026) — в обработке
+WB-GI-224019292 (16.03.2026) — в обработке
+
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.
+
+ШАГ 1 — Диагностика текущего состояния:
+
+SELECT supply_id, name, status, closed_at
+FROM wb_supplies
+WHERE supply_id IN (
+  'WB-GI-218151720','WB-GI-223017523','WB-GI-223075210',
+  'WB-GI-223495720','WB-GI-223701104','WB-GI-224019292'
+);
+
+SELECT wb_supply_id, wb_status, status, COUNT(*) as cnt
+FROM orders
+WHERE wb_supply_id IN (
+  'WB-GI-218151720','WB-GI-223017523','WB-GI-223075210',
+  'WB-GI-223495720','WB-GI-223701104','WB-GI-224019292'
+)
+GROUP BY wb_supply_id, wb_status, status;
+
+Покажи оба результата.
+
+ШАГ 2 — Исправить статусы заказов в этих поставках:
+
+Заказы внутри этих поставок едут к клиенту —
+им нужен статус 'delivering' не 'delivered':
+
+UPDATE orders
+SET wb_status = 'delivering',
+    status = 'shipped'
+WHERE wb_supply_id IN (
+  'WB-GI-218151720','WB-GI-223017523','WB-GI-223075210',
+  'WB-GI-223495720','WB-GI-223701104','WB-GI-224019292'
+)
+AND source = 'wildberries'
+AND wb_status = 'delivered';
+
+Покажи сколько строк обновлено.
+
+ШАГ 3 — Проверить фильтр «В доставке»:
+
+В server/routes.ts найди GET /api/wb/supplies.
+Покажи точный SQL фильтр для status=closed.
+Если есть ограничение по дате — убрать или расширить
+до начала текущего года:
+ws.closed_at >= DATE_TRUNC('year', NOW())
+
+ШАГ 4 — Прямой запрос к WB API:
+
+GET https://marketplace-api.wildberries.ru/api/v3/supplies
+?limit=1000&next=0&status=CLOSED
+Headers: { Authorization: cleanApiKey }
+
+Есть ли эти 6 поставок в CLOSED списке WB?
+Если да — убедиться что они есть в нашей БД
+со status='closed'.
+
+ШАГ 5 — Исправить фильтр и сортировку «В доставке»:
+
+В GET /api/wb/supplies для status=closed
+показывать поставки закрытые в текущем году:
+
+${status === 'closed' ? sql`
+  AND ws.closed_at >= DATE_TRUNC('year', NOW())
+` : sql``}
+
+Убедиться что сортировка идёт от новых к старым:
+ORDER BY ws.closed_at DESC NULLS LAST
+
+Поставки от марта должны быть выше поставки от февраля.
+
+ШАГ 6 — Обновить счётчик delivery_count в /api/wb/counts:
+
+Исправить подсчёт «В доставке» — считать только
+поставки закрытые в текущем году:
+
+COUNT(DISTINCT CASE WHEN ws.status = 'closed'
+  AND ws.closed_at >= DATE_TRUNC('year', NOW())
+THEN ws.supply_id END) as delivery_count
+
+ШАГ 7 — Финальная проверка:
+
+SELECT supply_id, name, status, closed_at
+FROM wb_supplies
+WHERE supply_id IN (
+  'WB-GI-218151720','WB-GI-223017523','WB-GI-223075210',
+  'WB-GI-223495720','WB-GI-223701104','WB-GI-224019292'
+)
+ORDER BY closed_at DESC;
+
+SELECT COUNT(*) as delivery_count
+FROM wb_supplies
+WHERE status = 'closed'
+AND closed_at >= DATE_TRUNC('year', NOW());
+
+Ожидаемый результат: 6 поставок в «В доставке»
