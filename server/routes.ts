@@ -4796,8 +4796,10 @@ export async function registerRoutes(
           }
 
           // ── MIRROR CLEANUP: close stale open supplies not present in WB ─────
-          // Only runs when ACTIVE fetch succeeded (200 OK) and store is known
+          // Only runs when ACTIVE fetch succeeded (200 OK)
           let closedCount = 0;
+
+          // 1. Cleanup for known storeId (unchanged)
           if (resolvedStoreId !== null) {
             const openRows = await db.execute(sql`
               SELECT supply_id FROM wb_supplies
@@ -4822,6 +4824,35 @@ export async function registerRoutes(
             }
             closedCount = toClose.length;
           }
+
+          // 2. Cleanup for store_id=null entries (legacy supplies imported without store context)
+          // These were synced before the store was linked and are never returned by WB API.
+          // Since WB returned an explicit ACTIVE list, anything NOT in it must be closed.
+          const nullStoreRows = await db.execute(sql`
+            SELECT supply_id FROM wb_supplies
+            WHERE status = 'open'
+              AND store_id IS NULL
+              AND organization_id = ${orgId}
+          `);
+          const nullStoreSupplies: any[] = (nullStoreRows as any).rows || nullStoreRows;
+          const nullToClose = nullStoreSupplies
+            .map((r: any) => String(r.supply_id))
+            .filter((id: string) => !activeSupplyIds!.has(id));
+
+          for (const sid of nullToClose) {
+            await db.execute(sql`
+              UPDATE wb_supplies
+              SET status = 'closed', closed_at = NOW()
+              WHERE supply_id = ${sid}
+                AND status = 'open'
+                AND store_id IS NULL
+                AND organization_id = ${orgId}
+            `);
+          }
+          if (nullToClose.length > 0) {
+            console.log(`[wb-supply-sync] ${displayName}: закрыто устаревших (store_id=null): ${nullToClose.length}`);
+          }
+          closedCount += nullToClose.length;
 
           console.log(`[wb-supply-sync] ${displayName}: ${activeSupplyIds.size} активных в WB, закрыто устаревших: ${closedCount}`);
         }

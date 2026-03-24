@@ -829,7 +829,9 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
       return res.json();
     },
     enabled: isSuppliesTab,
-    refetchInterval: 60000,
+    refetchInterval: 120000,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
   });
 
   const orders: any[] = ordersQuery.data || [];
