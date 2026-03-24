@@ -4655,6 +4655,31 @@ export async function registerRoutes(
         // После обновления статусов — синхронизировать поставки (закрыть те, которых нет в WB ACTIVE)
         await syncWbSuppliesForOrg(orgId).catch((e: any) =>
           console.log('[wb-stale-sync] Supply sync failed:', e.message));
+
+        // Шаг А — обновить заказы внутри устаревших открытых поставок (>21 день)
+        await db.execute(sql`
+          UPDATE orders SET wb_status = 'delivered', status = 'completed'
+          WHERE source = 'wildberries' AND wb_status = 'new'
+          AND wb_supply_id IN (
+            SELECT supply_id FROM wb_supplies
+            WHERE status = 'open' AND created_at < NOW() - INTERVAL '21 days'
+            AND organization_id = ${orgId}
+          )
+        `);
+
+        // Шаг Б — закрыть устаревшие открытые поставки (>21 день) без активных заказов
+        await db.execute(sql`
+          UPDATE wb_supplies SET status = 'closed', closed_at = NOW()
+          WHERE status = 'open' AND created_at < NOW() - INTERVAL '21 days'
+          AND organization_id = ${orgId}
+          AND NOT EXISTS (
+            SELECT 1 FROM orders o
+            WHERE o.wb_supply_id = wb_supplies.supply_id
+            AND o.wb_status IN ('new', 'waiting', 'confirm')
+          )
+        `);
+
+        console.log('[wb-stale-sync] Устаревшие поставки (>21 дня) закрыты');
       }
     } catch (error) {
       console.error("[wb-stale-sync] Error:", error);
