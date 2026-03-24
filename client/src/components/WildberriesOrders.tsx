@@ -55,14 +55,14 @@ function timeAgo(dateInput: string | Date | null | undefined): string {
 }
 
 function getTimeAgoBadgeClass(dateInput: string | Date | null | undefined): string {
-  if (!dateInput) return 'bg-green-100 text-green-700 border-green-200';
+  if (!dateInput) return 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400';
   const date = typeof dateInput === 'string'
     ? new Date(dateInput.endsWith('Z') ? dateInput : dateInput + 'Z')
     : dateInput;
   const diffH = (Date.now() - date.getTime()) / 3600000;
-  if (diffH > 47) return 'bg-red-200 text-red-800 border-red-300';
-  if (diffH > 24) return 'bg-red-100 text-red-700 border-red-200';
-  return 'bg-green-100 text-green-700 border-green-200';
+  if (diffH > 47) return 'bg-red-200 text-red-800 border-red-300 dark:bg-red-900/40 dark:text-red-400';
+  if (diffH > 24) return 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400';
+  return 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400';
 }
 
 function pluralOrders(n: number): string {
