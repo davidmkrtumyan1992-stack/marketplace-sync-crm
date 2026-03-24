@@ -235,7 +235,11 @@ function CompanyCard({ company, onEdit, onDelete }: { company: Company; onEdit: 
       queryClient.invalidateQueries({ queryKey: ["/api/companies", company.id, "stores"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stores"] });
       queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
-      toast({ title: "Удалено", description: "Магазин удалён" });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/supplies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/counts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      toast({ title: "Удалено", description: "Магазин и все связанные данные удалены" });
       setDeletingStore(null);
     },
     onError: (error: Error) => {

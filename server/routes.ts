@@ -353,15 +353,31 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/stores/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/stores/:id", isAuthenticated, requireRole("owner"), async (req, res) => {
     try {
-      const id = Number(req.params.id);
-      const existing = await storage.getStore(id);
-      if (!existing) return res.status(404).json({ message: "Магазин не найден" });
-      const company = await storage.getCompany(existing.companyId);
+      const storeId = Number(req.params.id);
+      const store = await storage.getStore(storeId);
+      if (!store) return res.status(404).json({ message: "Магазин не найден" });
+      const company = await storage.getCompany(store.companyId);
       if (!company || company.organizationId !== getOrgId(req)) return res.status(403).json({ message: "Доступ запрещён" });
-      await storage.deleteStore(id);
-      res.json({ success: true });
+
+      // 1 — Удалить API ключи первым (безопасная остановка синка)
+      await db.delete(marketplaceSettingsTable).where(eq(marketplaceSettingsTable.storeId, storeId));
+      console.log(`[store-delete] API ключи магазина ${storeId} удалены`);
+
+      // 2 — Закрыть открытые поставки WB перед удалением
+      await db.update(wbSuppliesTable)
+        .set({ status: "closed", closedAt: new Date() })
+        .where(and(eq(wbSuppliesTable.storeId, storeId), eq(wbSuppliesTable.status, "open")));
+
+      // 3 — Удалить ссылки товаров на магазин
+      await db.delete(productMarketplaceLinks).where(eq(productMarketplaceLinks.storeId, storeId));
+
+      // 4 — Удалить магазин (CASCADE удалит orders, order_items, wb_supplies, sync_history)
+      await storage.deleteStore(storeId);
+
+      console.log(`[store-delete] Магазин «${store.name}» (id=${storeId}) полностью удалён`);
+      return res.json({ success: true, message: `Магазин «${store.name}» и все связанные данные удалены` });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -4118,6 +4134,14 @@ export async function registerRoutes(
 
         const { storeId: resolvedStoreId, companyId: resolvedCompanyId, storeName: resolvedStoreName } = await resolveStoreForSetting(setting);
 
+        if (resolvedStoreId) {
+          const storeExists = await storage.getStore(resolvedStoreId);
+          if (!storeExists) {
+            console.log(`[auto-sync] Магазин ${resolvedStoreId} удалён — пропускаем`);
+            continue;
+          }
+        }
+
         const allStoreOrders = await db.select().from(ordersTable)
           .where(and(
             eq(ordersTable.organizationId, orgId),
@@ -4451,7 +4475,11 @@ export async function registerRoutes(
           let resolvedStoreName: string | null = null;
           if (resolvedStoreId) {
             const store = await storage.getStore(resolvedStoreId);
-            if (store) resolvedStoreName = store.name;
+            if (!store) {
+              console.log(`[auto-sync] Магазин ${resolvedStoreId} удалён — пропускаем`);
+              continue;
+            }
+            resolvedStoreName = store.name;
           }
 
           try {
