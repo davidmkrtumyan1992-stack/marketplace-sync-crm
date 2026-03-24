@@ -1,0 +1,94 @@
+Прочитай CLAUDE.md для контекста.
+
+Принудительно закрыть 8 устаревших поставок марта 2026
+которые висят в «На сборке» хотя в ЛК WB их нет.
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.
+
+ШАГ 1 — Закрыть поставки напрямую в БД:
+
+UPDATE wb_supplies
+SET status = 'closed', closed_at = NOW()
+WHERE supply_id IN (
+  'WB-GI-224019292','WB-GI-223701104','WB-GI-223495720',
+  'WB-GI-223075210','WB-GI-223017523','WB-GI-222103577',
+  'WB-GI-221929822','WB-GI-221430486'
+);
+
+Покажи сколько строк обновлено.
+
+ШАГ 2 — Обновить статусы заказов внутри этих поставок:
+
+UPDATE orders
+SET wb_status = 'delivered',
+    status = 'completed'
+WHERE wb_supply_id IN (
+  'WB-GI-224019292','WB-GI-223701104','WB-GI-223495720',
+  'WB-GI-223075210','WB-GI-223017523','WB-GI-222103577',
+  'WB-GI-221929822','WB-GI-221430486'
+)
+AND source = 'wildberries'
+AND wb_status = 'new';
+
+Покажи сколько строк обновлено.
+
+ШАГ 3 — Финальная проверка:
+
+SELECT COUNT(*) as assembly_count
+FROM wb_supplies ws
+WHERE ws.status = 'open'
+AND EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status IN ('new', 'waiting', 'confirm')
+);
+
+Ожидаемый результат: 0
+
+ШАГ 4 — Предотвратить повторение в будущем:
+
+В функции syncWbStaleOrdersAll в server/routes.ts
+добавить в конец функции два cleanup шага:
+
+// Шаг A — обновить заказы внутри устаревших поставок:
+await db.execute(sql`
+  UPDATE orders
+  SET wb_status = 'delivered',
+      status = 'completed'
+  WHERE source = 'wildberries'
+  AND wb_status = 'new'
+  AND wb_supply_id IN (
+    SELECT supply_id FROM wb_supplies
+    WHERE status = 'open'
+    AND created_at < NOW() - INTERVAL '21 days'
+    AND organization_id = ${orgId}
+  )
+`);
+
+// Шаг Б — закрыть устаревшие поставки:
+await db.execute(sql`
+  UPDATE wb_supplies
+  SET status = 'closed', closed_at = NOW()
+  WHERE status = 'open'
+  AND created_at < NOW() - INTERVAL '21 days'
+  AND organization_id = ${orgId}
+  AND EXISTS (
+    SELECT 1 FROM orders o
+    WHERE o.wb_supply_id = wb_supplies.supply_id
+    AND o.wb_status = 'new'
+  )
+`);
+
+console.log('[wb-stale-sync] Устаревшие поставки (>21 дня) закрыты');
+
+Важно: Шаг А выполнять ПЕРЕД Шагом Б —
+сначала обновить статусы заказов потом закрыть поставки.
+Иначе заказы останутся как незавершённые в статистике.
+
+ШАГ 5 — Обновить CLAUDE.md:
+
+Добавить в "Статус разработки":
+✓ syncWbStaleOrdersAll — автоочистка устаревших поставок
+  (>21 дня с wb_status='new' → completed + поставка closed)
+✓ Поставки «На сборке» = только с активными заказами
+  (wb_status IN 'new','waiting','confirm')
