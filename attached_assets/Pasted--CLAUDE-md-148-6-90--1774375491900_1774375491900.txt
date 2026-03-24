@@ -1,0 +1,79 @@
+Прочитай CLAUDE.md для контекста.
+
+«В доставке» показывает 148 поставок вместо 6.
+Фильтр 90 дней не помогает — все 148 закрыты в 2026 году.
+Нужно кардинально другое решение.
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.
+
+ШАГ 1 — Диагностика:
+
+-- Когда были закрыты 148 поставок:
+SELECT 
+  DATE(closed_at) as close_date,
+  COUNT(*) as cnt
+FROM wb_supplies
+WHERE status = 'closed'
+AND closed_at >= NOW() - INTERVAL '90 days'
+GROUP BY DATE(closed_at)
+ORDER BY close_date DESC;
+
+Покажи результат — когда именно закрывались поставки.
+
+ШАГ 2 — Правильное решение:
+
+Проблема в том что наш cleanup закрыл 142 старые поставки
+все с одной датой (сегодня 24 марта). Поэтому фильтр
+по дате не работает.
+
+Правильный подход — показывать только поставки
+которые WB API реально вернул как CLOSED.
+
+В syncWbSuppliesForOrg в Phase 3 (CLOSED поставки)
+добавить флаг wb_synced_as_closed = true:
+
+В shared/schema.ts добавить поле в wbSupplies:
+wbSyncedAsClosed: boolean("wb_synced_as_closed")
+  .default(false)
+
+После npm run db:push:
+
+В Phase 3 syncWbSuppliesForOrg при upsert CLOSED поставки:
+SET wb_synced_as_closed = true
+
+В Phase 2 (cleanup — закрываем поставки которых нет в ACTIVE):
+SET wb_synced_as_closed = false
+(эти поставки закрыты нами принудительно а не WB)
+
+В GET /api/wb/supplies для status=closed:
+AND ws.wb_synced_as_closed = true
+
+В GET /api/wb/counts:
+delivery_count = closed поставки WHERE wb_synced_as_closed = true
+
+ШАГ 3 — Обновить текущие данные:
+
+Сделай прямой запрос к WB API:
+GET https://marketplace-api.wildberries.ru/api/v3/supplies
+?limit=1000&next=0&status=CLOSED
+Headers: { Authorization: cleanApiKey }
+
+Обновить в БД только те поставки которые WB вернул:
+UPDATE wb_supplies
+SET wb_synced_as_closed = true
+WHERE supply_id IN (...список из WB CLOSED API...)
+AND organization_id = $orgId;
+
+Всем остальным:
+UPDATE wb_supplies
+SET wb_synced_as_closed = false
+WHERE wb_synced_as_closed IS NULL;
+
+ШАГ 4 — Финальная проверка:
+
+SELECT COUNT(*) as delivery_count
+FROM wb_supplies
+WHERE status = 'closed'
+AND wb_synced_as_closed = true;
+
+Ожидаемый результат: совпадает с количеством
+поставок в WB CLOSED API (должно быть ~6).
