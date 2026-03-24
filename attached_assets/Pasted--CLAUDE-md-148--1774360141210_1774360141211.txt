@@ -1,0 +1,93 @@
+Прочитай CLAUDE.md для контекста.
+
+СРОЧНО: вкладка «В доставке» снова показывает 148 поставок.
+Фикс с EXISTS фильтром не работает или был перезаписан.
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.
+
+ШАГ 1 — Показать текущий код GET /api/wb/supplies:
+
+Найди в server/routes.ts эндпоинт GET /api/wb/supplies.
+Покажи ВЕСЬ код этого эндпоинта — особенно
+SQL фильтр для status=closed.
+
+Есть ли там EXISTS фильтр по статусам заказов?
+
+ШАГ 2 — SQL диагностика прямо сейчас:
+
+-- Сколько closed поставок с активными заказами в пути:
+SELECT COUNT(DISTINCT ws.supply_id) as should_show
+FROM wb_supplies ws
+WHERE ws.status = 'closed'
+AND EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status IN (
+    'delivering','indelivery','shipped','confirm','complete'
+  )
+);
+
+-- Сколько всего closed поставок:
+SELECT COUNT(*) as total_closed
+FROM wb_supplies
+WHERE status = 'closed';
+
+Покажи оба числа.
+
+ШАГ 3 — Исправить GET /api/wb/supplies:
+
+Убедись что для status=closed стоит EXISTS фильтр.
+Если его нет — добавить прямо сейчас:
+
+Найди в GET /api/wb/supplies строку где формируется
+WHERE условие для статуса поставки.
+
+Добавить после условия на status:
+
+${status === 'closed' ? sql`
+  AND EXISTS (
+    SELECT 1 FROM orders o
+    WHERE o.wb_supply_id = ws.supply_id
+    AND o.source = 'wildberries'
+    AND o.wb_status IN (
+      'delivering', 'indelivery', 'shipped',
+      'confirm', 'complete'
+    )
+  )
+` : sql``}
+
+ШАГ 4 — Исправить GET /api/wb/counts:
+
+Найди в server/routes.ts GET /api/wb/counts.
+Покажи текущий код подсчёта delivery_count.
+
+Заменить на:
+COUNT(DISTINCT CASE 
+  WHEN ws.status = 'closed' AND EXISTS (
+    SELECT 1 FROM orders o2
+    WHERE o2.wb_supply_id = ws.supply_id
+    AND o2.source = 'wildberries'
+    AND o2.wb_status IN (
+      'delivering','indelivery','shipped','confirm','complete'
+    )
+  ) THEN ws.supply_id END
+) as delivery_count
+
+ШАГ 5 — Перезапустить сервер и проверить:
+
+После изменений перезапустить сервер.
+
+Выполни SQL:
+SELECT COUNT(DISTINCT ws.supply_id) as delivery_count
+FROM wb_supplies ws
+WHERE ws.status = 'closed'
+AND EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status IN (
+    'delivering','indelivery','shipped','confirm','complete'
+  )
+);
+
+Ожидаемый результат: 5 или 6.
