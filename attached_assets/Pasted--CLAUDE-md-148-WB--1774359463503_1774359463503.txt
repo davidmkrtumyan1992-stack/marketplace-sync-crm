@@ -1,0 +1,93 @@
+Прочитай CLAUDE.md для контекста.
+
+Проблема: «В доставке» показывает 148 поставок хотя в ЛК WB только 6.
+Решение: показывать только поставки у которых есть заказы
+в статусах доставки (едут к клиенту).
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.
+
+ШАГ 1 — Диагностика:
+
+-- Сколько closed поставок имеют заказы в пути:
+SELECT COUNT(DISTINCT ws.supply_id) as delivery_with_orders
+FROM wb_supplies ws
+WHERE ws.status = 'closed'
+AND EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status IN ('delivering', 'indelivery', 'shipped',
+                       'confirm', 'complete')
+);
+
+-- Для сверки — наши 6 поставок:
+SELECT ws.supply_id, ws.status,
+  COUNT(o.id) as orders_count,
+  STRING_AGG(DISTINCT o.wb_status, ', ') as statuses
+FROM wb_supplies ws
+LEFT JOIN orders o ON o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+WHERE ws.supply_id IN (
+  'WB-GI-218151720','WB-GI-223017523','WB-GI-223075210',
+  'WB-GI-223495720','WB-GI-223701104','WB-GI-224019292'
+)
+GROUP BY ws.supply_id, ws.status;
+
+Покажи оба результата.
+
+ШАГ 2 — Исправить GET /api/wb/supplies для status=closed:
+
+В server/routes.ts в GET /api/wb/supplies
+для status=closed добавить фильтр EXISTS:
+
+Показывать закрытую поставку во вкладке «В доставке»
+ТОЛЬКО если внутри есть заказы которые едут к клиенту:
+
+${status === 'closed' ? sql`
+  AND EXISTS (
+    SELECT 1 FROM orders o
+    WHERE o.wb_supply_id = ws.supply_id
+    AND o.source = 'wildberries'
+    AND o.wb_status IN (
+      'delivering', 'indelivery', 'shipped',
+      'confirm', 'complete'
+    )
+  )
+` : sql``}
+
+Убрать или оставить фильтр по дате года —
+теперь EXISTS является источником истины.
+
+ШАГ 3 — Обновить GET /api/wb/counts:
+
+delivery_count = closed поставки с активными заказами в пути:
+
+SELECT COUNT(DISTINCT ws.supply_id) as delivery_count
+FROM wb_supplies ws
+WHERE ws.status = 'closed'
+AND ws.organization_id = $orgId
+AND EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status IN (
+    'delivering', 'indelivery', 'shipped',
+    'confirm', 'complete'
+  )
+);
+
+ШАГ 4 — Финальная проверка:
+
+SELECT COUNT(DISTINCT ws.supply_id) as delivery_count
+FROM wb_supplies ws
+WHERE ws.status = 'closed'
+AND EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+  AND o.wb_status IN (
+    'delivering', 'indelivery', 'shipped',
+    'confirm', 'complete'
+  )
+);
+
+Ожидаемый результат: 6 (совпадает с ЛК WB)
