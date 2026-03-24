@@ -37,10 +37,13 @@ const WB_TABS = [
 
 type WbTab = (typeof WB_TABS)[number]["key"];
 
-function timeAgo(dateStr: string | null | undefined): string {
-  if (!dateStr) return "";
-  const date = new Date(dateStr);
+function timeAgo(dateInput: string | Date | null | undefined): string {
+  if (!dateInput) return "";
+  const date = typeof dateInput === 'string'
+    ? new Date(dateInput.endsWith('Z') ? dateInput : dateInput + 'Z')
+    : dateInput;
   const diffMs = Date.now() - date.getTime();
+  if (diffMs < 0) return "0 мин назад";
   const diffH = Math.floor(diffMs / 3600000);
   const diffM = Math.floor((diffMs % 3600000) / 60000);
   if (diffH >= 24) {
@@ -49,6 +52,17 @@ function timeAgo(dateStr: string | null | undefined): string {
   }
   if (diffH > 0) return `${diffH} ч ${diffM} мин назад`;
   return `${diffM} мин назад`;
+}
+
+function getTimeAgoBadgeClass(dateInput: string | Date | null | undefined): string {
+  if (!dateInput) return 'bg-green-100 text-green-700 border-green-200';
+  const date = typeof dateInput === 'string'
+    ? new Date(dateInput.endsWith('Z') ? dateInput : dateInput + 'Z')
+    : dateInput;
+  const diffH = (Date.now() - date.getTime()) / 3600000;
+  if (diffH > 47) return 'bg-red-200 text-red-800 border-red-300';
+  if (diffH > 24) return 'bg-red-100 text-red-700 border-red-200';
+  return 'bg-green-100 text-green-700 border-green-200';
 }
 
 function pluralOrders(n: number): string {
@@ -110,7 +124,7 @@ function OrderNumCell({ order }: { order: any }) {
       )}
       <div className="flex gap-1 flex-wrap">
         {ago && (
-          <Badge className="text-[10px] px-1.5 py-0 h-4 bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 font-normal">
+          <Badge className={`text-[10px] px-1.5 py-0 h-4 ${getTimeAgoBadgeClass(order.created_at)} font-normal`}>
             {ago}
           </Badge>
         )}
