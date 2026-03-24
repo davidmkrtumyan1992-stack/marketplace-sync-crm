@@ -1,0 +1,96 @@
+Прочитай CLAUDE.md для контекста.
+
+«В доставке» снова пустая. Эти 6 поставок должны отображаться:
+WB-GI-218151720, WB-GI-223017523, WB-GI-223075210,
+WB-GI-223495720, WB-GI-223701104, WB-GI-224019292
+
+Не трогать: Ozon, Яндекс, аутентификацию, RBAC.
+
+ШАГ 1 — Полная диагностика этих 6 поставок:
+
+SELECT ws.supply_id, ws.status, ws.store_id,
+  ws.created_at, ws.closed_at,
+  COUNT(o.id) as orders_count,
+  STRING_AGG(DISTINCT o.wb_status, ', ') as order_statuses
+FROM wb_supplies ws
+LEFT JOIN orders o ON o.wb_supply_id = ws.supply_id
+  AND o.source = 'wildberries'
+WHERE ws.supply_id IN (
+  'WB-GI-218151720','WB-GI-223017523','WB-GI-223075210',
+  'WB-GI-223495720','WB-GI-223701104','WB-GI-224019292'
+)
+GROUP BY ws.supply_id, ws.status, ws.store_id,
+  ws.created_at, ws.closed_at
+ORDER BY ws.created_at DESC;
+
+Покажи результат — нужно видеть статус поставок
+и статусы заказов внутри.
+
+ШАГ 2 — Проверить текущий фильтр GET /api/wb/supplies:
+
+Покажи точный SQL код эндпоинта GET /api/wb/supplies
+в server/routes.ts — особенно WHERE условие
+для status=closed.
+
+Есть ли там EXISTS фильтр?
+Какие статусы заказов проверяются?
+
+ШАГ 3 — На основе диагностики исправить:
+
+ВАРИАНТ А — если поставки status=open:
+syncWbSuppliesForOrg снова открыл их.
+Нужно закрыть и защитить:
+
+UPDATE wb_supplies
+SET status = 'closed', closed_at = NOW()
+WHERE supply_id IN (
+  'WB-GI-218151720','WB-GI-223017523','WB-GI-223075210',
+  'WB-GI-223495720','WB-GI-223701104','WB-GI-224019292'
+);
+
+И найти где в syncWbSuppliesForOrg эти поставки
+возвращаются в open — исправить окончательно.
+
+ВАРИАНТ Б — если поставки status=closed но
+заказы внутри имеют wb_status='delivered' или 'completed':
+EXISTS фильтр их не показывает потому что
+'delivered' не входит в список активных статусов.
+
+Расширить список статусов в EXISTS фильтре:
+AND o.wb_status IN (
+  'delivering', 'indelivery', 'shipped',
+  'confirm', 'complete',
+  'delivered'  -- добавить!
+)
+
+ВАРИАНТ В — если заказов внутри поставок нет вообще:
+Подтянуть заказы из WB API для этих поставок:
+GET https://marketplace-api.wildberries.ru/api/v3/supplies
+/{supply_id}/orders
+Headers: { Authorization: cleanApiKey }
+
+ШАГ 4 — Постоянное решение:
+
+После исправления добавить в syncWbSuppliesForOrg
+защиту для поставок «В доставке» — не открывать
+поставки которые WB API вернул в CLOSED списке:
+
+В Phase 1 (ACTIVE upsert) добавить проверку:
+перед UPDATE проверить — нет ли этой поставки
+в WB CLOSED списке. Если есть — не открывать.
+
+ШАГ 5 — Финальная проверка:
+
+SELECT ws.supply_id, ws.status,
+  COUNT(o.id) as orders,
+  STRING_AGG(DISTINCT o.wb_status, ', ') as statuses
+FROM wb_supplies ws
+LEFT JOIN orders o ON o.wb_supply_id = ws.supply_id
+WHERE ws.supply_id IN (
+  'WB-GI-218151720','WB-GI-223017523','WB-GI-223075210',
+  'WB-GI-223495720','WB-GI-223701104','WB-GI-224019292'
+)
+GROUP BY ws.supply_id, ws.status;
+
+После исправления открой «В доставке» —
+должны отображаться 5-6 поставок.
