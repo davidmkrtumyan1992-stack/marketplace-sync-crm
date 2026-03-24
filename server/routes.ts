@@ -5476,12 +5476,6 @@ export async function registerRoutes(
               AND o2.source = 'wildberries'
               AND o2.wb_status IN ('new', 'waiting', 'confirm')
           )` : sql``}
-          ${status === "closed" ? sql`AND EXISTS (
-            SELECT 1 FROM orders o2
-            WHERE o2.wb_supply_id = ws.supply_id
-              AND o2.source = 'wildberries'
-              AND o2.wb_status IN ('delivering', 'indelivery', 'shipped', 'confirm', 'complete')
-          )` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ${status === "closed" ? sql`ws.closed_at DESC NULLS LAST` : sql`ws.created_at DESC`}
       `);
@@ -5802,12 +5796,7 @@ export async function registerRoutes(
               AND o.source = 'wildberries'
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
-          COUNT(DISTINCT CASE WHEN ws.status = 'closed' AND EXISTS (
-            SELECT 1 FROM orders o2
-            WHERE o2.wb_supply_id = ws.supply_id
-              AND o2.source = 'wildberries'
-              AND o2.wb_status IN ('delivering', 'indelivery', 'shipped', 'confirm', 'complete')
-          ) THEN ws.supply_id END) as delivery_count
+          COUNT(DISTINCT CASE WHEN ws.status = 'closed' THEN ws.supply_id END) as delivery_count
         FROM wb_supplies ws
         WHERE organization_id = ${orgId}
       `);
