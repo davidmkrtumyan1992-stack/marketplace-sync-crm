@@ -5161,12 +5161,53 @@ export async function registerRoutes(
               for (const so of supplyOrders) {
                 const wbOrderId = String(so.id || so.wbOrderId || "");
                 if (!wbOrderId) continue;
-                await db.execute(sql`
-                  UPDATE orders SET wb_supply_id = ${supplyId}
+
+                // Обновляем существующий заказ: ставим supply_id и переводим new/waiting → confirm
+                const updateResult = await db.execute(sql`
+                  UPDATE orders SET
+                    wb_supply_id = ${supplyId},
+                    wb_status = CASE
+                      WHEN wb_status IN ('new', 'waiting') THEN 'confirm'
+                      ELSE wb_status
+                    END
                   WHERE wb_order_id = ${wbOrderId}
                     AND organization_id = ${orgId}
-                    AND (wb_supply_id IS NULL OR wb_supply_id != ${supplyId})
+                  RETURNING id
                 `);
+                const updatedRows: any[] = (updateResult as any).rows || [];
+
+                // Если заказа нет в БД — создаём stub чтобы поставка появилась в «На сборке»
+                // autoSyncWbOrders обновит цену и детали при следующем прогоне
+                if (updatedRows.length === 0) {
+                  try {
+                    const article = String(so.article || so.supplierArticle || "");
+                    let productId: number | null = null;
+                    if (article) {
+                      const [dbProduct] = await db.select().from(productsTable)
+                        .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
+                      if (dbProduct) productId = dbProduct.id;
+                    }
+                    await storage.createOrder({
+                      orderNumber: `WB-${wbOrderId}`,
+                      status: "processing",
+                      totalAmount: "0.00",
+                      source: "wildberries",
+                      externalId: wbOrderId,
+                      wbOrderId,
+                      wbStatus: "confirm",
+                      wbSupplyId: supplyId,
+                      storeId: resolvedStoreId ?? undefined,
+                      organizationId: orgId,
+                    } as any, productId
+                      ? [{ productId, quantity: 1, price: 0 }]
+                      : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: "WB товар", quantity: 1, price: 0 }]);
+                    console.log(`[wb-supplies-sync] Создан stub-заказ WB-${wbOrderId} для поставки ${supplyId}`);
+                  } catch (createErr: any) {
+                    if (!createErr.message?.includes("unique") && !createErr.message?.includes("duplicate")) {
+                      console.warn(`[wb-supplies-sync] Не удалось создать stub-заказ ${wbOrderId}:`, createErr.message);
+                    }
+                  }
+                }
               }
             }
           } catch (e: any) {
@@ -5596,7 +5637,14 @@ export async function registerRoutes(
               AND o2.source = 'wildberries'
               AND o2.wb_status IN ('new', 'waiting', 'confirm')
           )` : sql``}
-          ${status === "closed" ? sql`AND ws.wb_synced_as_closed = true` : sql``}
+          ${status === "closed" ? sql`
+          AND ws.wb_synced_as_closed = true
+          AND EXISTS (
+            SELECT 1 FROM orders o3
+            WHERE o3.wb_supply_id = ws.supply_id
+              AND o3.source = 'wildberries'
+              AND o3.wb_status IN ('confirm', 'complete', 'indelivery', 'delivering')
+          )` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ${status === "closed" ? sql`ws.closed_at DESC NULLS LAST` : sql`ws.created_at DESC`}
       `);
@@ -5917,7 +5965,12 @@ export async function registerRoutes(
               AND o.source = 'wildberries'
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
-          COUNT(DISTINCT CASE WHEN ws.status = 'closed' AND ws.wb_synced_as_closed = true THEN ws.supply_id END) as delivery_count
+          COUNT(DISTINCT CASE WHEN ws.status = 'closed' AND ws.wb_synced_as_closed = true AND EXISTS (
+            SELECT 1 FROM orders o3
+            WHERE o3.wb_supply_id = ws.supply_id
+              AND o3.source = 'wildberries'
+              AND o3.wb_status IN ('confirm', 'complete', 'indelivery', 'delivering')
+          ) THEN ws.supply_id END) as delivery_count
         FROM wb_supplies ws
         WHERE organization_id = ${orgId}
       `);
