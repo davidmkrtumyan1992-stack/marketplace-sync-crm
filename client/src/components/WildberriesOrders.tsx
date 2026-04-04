@@ -447,7 +447,7 @@ function SupplyDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-5xl" data-testid="dialog-supply-detail">
+      <DialogContent className="max-w-4xl w-full" data-testid="dialog-supply-detail">
         <DialogHeader>
           <DialogTitle>
             {supplyId} — {pluralOrders(orders.length)}
@@ -456,9 +456,9 @@ function SupplyDetailDialog({
             <p className="text-sm text-muted-foreground mt-1">{supplyName}</p>
           )}
         </DialogHeader>
-        <div className="flex gap-4">
+        <div className="flex gap-4 overflow-hidden">
           {/* Левая часть: таблица заказов */}
-          <div className="flex-1 min-w-0 flex flex-col gap-2">
+          <div className="flex-1 min-w-0 flex flex-col gap-2 overflow-hidden">
             {isLoading ? (
               <div className="flex justify-center py-10">
                 <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -560,7 +560,7 @@ function SupplyDetailDialog({
           </div>
           {/* Правая панель: Этапы сборки */}
           {isAssembly && (
-            <div className="w-52 flex-shrink-0 border rounded-xl p-4 flex flex-col gap-3 bg-background">
+            <div className="w-44 flex-shrink-0 border rounded-xl p-4 flex flex-col gap-3 bg-background self-start">
               <div className="font-semibold text-sm">Этапы сборки</div>
               <div className="flex flex-col gap-3 text-sm flex-1">
                 <div className="flex items-center gap-2" style={{ color: WB_COLOR }}>

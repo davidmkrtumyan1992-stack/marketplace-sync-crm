@@ -5134,7 +5134,8 @@ export async function registerRoutes(
           if (existing) {
             await db.execute(sql`
               UPDATE wb_supplies SET
-                name = ${supplyName}
+                name = ${supplyName},
+                wb_synced_as_closed = false
               WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
                 AND status = 'open'
             `);
@@ -5406,7 +5407,7 @@ export async function registerRoutes(
           AND o.organization_id = ${orgId}
           ${storeId ? sql`AND o.store_id = ${storeId}` : sql``}
           ${supplyIdFilter ? sql`AND o.wb_supply_id = ${supplyIdFilter}` : sql``}
-          ${status === "new" && !supplyIdFilter ? sql`AND o.created_at >= NOW() - INTERVAL '72 hours'` : sql``}
+          ${status === "new" && !supplyIdFilter ? sql`AND o.created_at >= NOW() - INTERVAL '7 days'` : sql``}
         ORDER BY o.id, o.created_at DESC
       `);
 
@@ -5631,11 +5632,14 @@ export async function registerRoutes(
           ${status !== "all" ? sql`AND ws.status = ${status}` : sql``}
           ${storeId ? sql`AND ws.store_id = ${storeId}` : sql``}
           ${status === "open" ? sql`
-          AND EXISTS (
-            SELECT 1 FROM orders o2
-            WHERE o2.wb_supply_id = ws.supply_id
-              AND o2.source = 'wildberries'
-              AND o2.wb_status IN ('new', 'waiting', 'confirm')
+          AND (
+            EXISTS (
+              SELECT 1 FROM orders o2
+              WHERE o2.wb_supply_id = ws.supply_id
+                AND o2.source = 'wildberries'
+                AND o2.wb_status IN ('new', 'waiting', 'confirm')
+            )
+            OR ws.created_at >= NOW() - INTERVAL '14 days'
           )` : sql``}
           ${status === "closed" ? sql`
           AND ws.wb_synced_as_closed = true
