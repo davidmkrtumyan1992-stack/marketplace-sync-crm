@@ -3964,6 +3964,7 @@ export async function registerRoutes(
       case "cancel":
       case "user_cancel":
       case "declined":
+      case "declined_by_client":
       case "cancel_ignore":
       case "defect":
       case "cancelled":
