@@ -5385,6 +5385,110 @@ export async function registerRoutes(
       }
     }
 
+    // ── ФАЗА 4: 30-дневный бэкфилл — создаём заказы в поставках которых нет в БД ─
+    // Нужен т.к. /api/v3/supplies/{id}/orders возвращает 404 для этого мерчанта.
+    // Фетчим все заказы за 30 дней и создаём/линкуем те, которые привязаны к поставке.
+    for (const wbSetting of wbSettings) {
+      const cleanKey = wbSetting.apiKey!.trim();
+      const authHeaders = { "Authorization": cleanKey, "Content-Type": "application/json" };
+      const resolvedStoreId = wbSetting.storeId ?? null;
+      const resolvedCompanyId = wbSetting.companyId ?? null;
+      let resolvedStoreName: string | null = null;
+      if (resolvedStoreId) {
+        const store = await storage.getStore(resolvedStoreId);
+        if (store) resolvedStoreName = store.name;
+      }
+
+      try {
+        const dateFrom30 = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
+        let cursor30 = 0;
+        let created30 = 0, linked30 = 0;
+
+        for (let page = 0; page < 5; page++) {
+          const ordersRes = await wbFetchJson(
+            `${WB_MARKETPLACE_BASE}/api/v3/orders?limit=1000&next=${cursor30}&dateFrom=${dateFrom30}`,
+            authHeaders, 20000
+          );
+          if (ordersRes.status !== 200) break;
+          const orders30: any[] = ordersRes.json?.orders || [];
+          if (orders30.length === 0) break;
+          cursor30 = ordersRes.json?.next ?? 0;
+
+          for (const o of orders30) {
+            const wbOrderId = String(o.id || "");
+            const wbSupplyId = o.supplyId ? String(o.supplyId) : null;
+            if (!wbOrderId) continue;
+
+            const existing = await storage.getOrderByExternalId(wbOrderId, orgId);
+            if (existing) {
+              // Обновляем supply link если изменился
+              if (wbSupplyId && existing.wbSupplyId !== wbSupplyId) {
+                await db.execute(sql`
+                  UPDATE orders SET
+                    wb_supply_id = ${wbSupplyId},
+                    wb_status = CASE WHEN wb_status IN ('new','waiting') THEN 'confirm' ELSE wb_status END
+                  WHERE id = ${existing.id}
+                `);
+                linked30++;
+              }
+            } else if (wbSupplyId) {
+              // Заказ в поставке, но нет в БД — создаём
+              try {
+                const article = String(o.article || o.supplierArticle || "");
+                const qty = o.quantity || 1;
+                const totalAmount = (o.totalPrice || o.convertedPrice || 0) / 100;
+                const wbStatus = o.wbStatus || o.status || "confirm";
+                const wbRid = o.rid ? String(o.rid) : null;
+                const createdAtRaw = o.createdAt;
+                const createdAtTs = createdAtRaw
+                  ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+                  : new Date();
+                let productId: number | null = null;
+                if (article) {
+                  const [dbProduct] = await db.select().from(productsTable)
+                    .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
+                  if (dbProduct) productId = dbProduct.id;
+                }
+                await storage.createOrder({
+                  orderNumber: `WB-${wbOrderId}`,
+                  status: wbStatusToInternal(wbStatus),
+                  totalAmount: totalAmount.toFixed(2),
+                  source: "wildberries",
+                  externalId: wbOrderId,
+                  postingNumber: null,
+                  ozonStatus: null,
+                  yandexStatus: null,
+                  wbOrderId,
+                  wbStatus,
+                  wbRid,
+                  wbSupplyId,
+                  fulfillmentType: "FBS",
+                  storeId: resolvedStoreId ?? undefined,
+                  sourceStoreName: resolvedStoreName ?? undefined,
+                  companyId: resolvedCompanyId ?? undefined,
+                  organizationId: orgId,
+                  createdAt: createdAtTs,
+                } as any, productId
+                  ? [{ productId, quantity: qty, price: totalAmount }]
+                  : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: "WB товар", quantity: qty, price: totalAmount }]);
+                created30++;
+              } catch (createErr: any) {
+                if (!createErr.message?.includes("unique") && !createErr.message?.includes("duplicate")) {
+                  console.warn(`[wb-supply-backfill] Не удалось создать заказ ${wbOrderId}:`, createErr.message);
+                }
+              }
+            }
+          }
+          if (!cursor30 || orders30.length < 1000) break;
+        }
+        if (created30 > 0 || linked30 > 0) {
+          console.log(`[wb-supply-backfill] store ${resolvedStoreId}: создано ${created30}, прилинковано ${linked30} заказов`);
+        }
+      } catch (e: any) {
+        console.warn(`[wb-supply-backfill] Error for store ${resolvedStoreId}:`, e.message);
+      }
+    }
+
     console.log(`[wb-supplies-sync] org ${orgId}: Синхронизировано ${totalSynced} поставок`);
     return { synced: totalSynced, errors };
   }
