@@ -5690,6 +5690,114 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/wb/supplies/:id/sync-orders — принудительно создать заказы поставки из WB API
+  app.post("/api/wb/supplies/:id/sync-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const supplyId = req.params.id; // e.g. "WB-GI-227974273"
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const wbSettings = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey);
+      if (wbSettings.length === 0) return res.status(400).json({ message: "Нет активных WB-магазинов" });
+
+      let created = 0, linked = 0, errors = 0;
+
+      for (const wbSetting of wbSettings) {
+        const cleanKey = wbSetting.apiKey!.trim();
+        const authHeaders = { "Authorization": cleanKey, "Content-Type": "application/json" };
+        const resolvedStoreId = wbSetting.storeId ?? null;
+        const resolvedCompanyId = wbSetting.companyId ?? null;
+        let resolvedStoreName: string | null = null;
+        if (resolvedStoreId) {
+          const store = await storage.getStore(resolvedStoreId);
+          if (store) resolvedStoreName = store.name;
+        }
+
+        const dateFrom = Math.floor((Date.now() - 90 * 24 * 3600 * 1000) / 1000);
+        let cursor = 0;
+
+        for (let page = 0; page < 10; page++) {
+          const r = await fetch(
+            `${WB_MARKETPLACE_BASE}/api/v3/orders?limit=1000&next=${cursor}&dateFrom=${dateFrom}`,
+            { method: "GET", headers: authHeaders }
+          );
+          if (!r.ok) break;
+          const data = await r.json();
+          const orders: any[] = data?.orders || [];
+          if (orders.length === 0) break;
+          cursor = data?.next ?? 0;
+
+          for (const o of orders) {
+            const wbOrderId = String(o.id || "");
+            const wbSupId = o.supplyId ? String(o.supplyId) : null;
+            if (!wbOrderId) continue;
+            if (wbSupId !== supplyId) continue; // только заказы этой поставки
+
+            try {
+              const existing = await storage.getOrderByExternalId(wbOrderId, orgId);
+              if (existing) {
+                if (existing.wbSupplyId !== supplyId) {
+                  await db.execute(sql`UPDATE orders SET wb_supply_id = ${supplyId} WHERE id = ${existing.id}`);
+                  linked++;
+                }
+                if (resolvedStoreId && !existing.storeId) {
+                  await db.execute(sql`UPDATE orders SET store_id = ${resolvedStoreId}, source_store_name = ${resolvedStoreName} WHERE id = ${existing.id}`);
+                }
+              } else {
+                const article = String(o.article || o.supplierArticle || "");
+                const qty = o.quantity || 1;
+                const totalAmount = (o.totalPrice || o.convertedPrice || 0) / 100;
+                const wbStatus = o.wbStatus || o.status || "confirm";
+                const wbRid = o.rid ? String(o.rid) : null;
+                const createdAtRaw = o.createdAt;
+                const createdAtTs = createdAtRaw
+                  ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+                  : new Date();
+                let productId: number | null = null;
+                if (article) {
+                  const [dbProduct] = await db.select().from(productsTable)
+                    .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
+                  if (dbProduct) productId = dbProduct.id;
+                }
+                await storage.createOrder({
+                  orderNumber: `WB-${wbOrderId}`,
+                  status: wbStatusToInternal(wbStatus),
+                  totalAmount: totalAmount.toFixed(2),
+                  source: "wildberries",
+                  externalId: wbOrderId,
+                  postingNumber: null,
+                  ozonStatus: null,
+                  yandexStatus: null,
+                  wbOrderId,
+                  wbStatus,
+                  wbRid,
+                  wbSupplyId: supplyId,
+                  fulfillmentType: "FBS",
+                  storeId: resolvedStoreId ?? undefined,
+                  sourceStoreName: resolvedStoreName ?? undefined,
+                  companyId: resolvedCompanyId ?? undefined,
+                  organizationId: orgId,
+                  createdAt: createdAtTs,
+                } as any, productId
+                  ? [{ productId, quantity: qty, price: totalAmount }]
+                  : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: "WB товар", quantity: qty, price: totalAmount }]);
+                created++;
+              }
+            } catch (e: any) {
+              if (!e.message?.includes("unique") && !e.message?.includes("duplicate")) errors++;
+            }
+          }
+          if (!cursor || orders.length < 1000) break;
+        }
+      }
+
+      console.log(`[wb-supply-sync-orders] supply ${supplyId}: создано ${created}, прилинковано ${linked}, ошибок ${errors}`);
+      res.json({ supplyId, created, linked, errors });
+    } catch (error: any) {
+      console.error("[wb-supply-sync-orders] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // POST /api/wb/sync-cancelled — бэкфилл отменённых заказов за 30 дней из WB API
   app.post("/api/wb/sync-cancelled", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {

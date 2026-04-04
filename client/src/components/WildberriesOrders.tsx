@@ -392,6 +392,23 @@ function SupplyDetailDialog({
     });
   };
 
+  const [isSyncingOrders, setIsSyncingOrders] = useState(false);
+
+  const handleSyncSupplyOrders = async () => {
+    setIsSyncingOrders(true);
+    try {
+      const res = await apiRequest("POST", `/api/wb/supplies/${supplyId}/sync-orders`, {});
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.message || "Ошибка синхронизации");
+      toast({ title: `Синхронизация завершена: создано ${result.created}, прилинковано ${result.linked}` });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/orders", "supplyDetail", supplyId] });
+    } catch (e: any) {
+      toast({ title: "Ошибка синхронизации заказов", description: e.message, variant: "destructive" });
+    } finally {
+      setIsSyncingOrders(false);
+    }
+  };
+
   const handleCloseSupply = async () => {
     setIsClosingSupply(true);
     try {
@@ -576,6 +593,16 @@ function SupplyDetailDialog({
                   <span>Передайте в доставку</span>
                 </div>
               </div>
+              <Button
+                onClick={handleSyncSupplyOrders}
+                disabled={isSyncingOrders}
+                variant="outline"
+                size="sm"
+                className="w-full text-xs"
+              >
+                {isSyncingOrders ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null}
+                Синхр. заказы
+              </Button>
               <Button
                 onClick={handleCloseSupply}
                 disabled={isClosingSupply}
