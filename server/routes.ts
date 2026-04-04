@@ -4564,10 +4564,16 @@ export async function registerRoutes(
                   : new Date();
                 const totalAmount = (wbOrder.totalPrice || wbOrder.convertedPrice || 0) / 100;
 
-                const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId, resolvedStoreId);
+                // Ищем без фильтра по storeId — order мог быть создан с store_id=NULL
+                const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId);
                 if (existingOrder) {
-                  if (existingOrder.wbStatus !== wbStatus) {
+                  const statusChanged = existingOrder.wbStatus !== wbStatus;
+                  const storeMissing = resolvedStoreId && !existingOrder.storeId;
+                  if (statusChanged || storeMissing) {
                     await storage.updateOrderWbStatus(existingOrder.id, wbStatus, wbStatusToInternal(wbStatus), createdAtTs);
+                    if (storeMissing) {
+                      await db.execute(sql`UPDATE orders SET store_id = ${resolvedStoreId}, source_store_name = ${resolvedStoreName} WHERE id = ${existingOrder.id}`);
+                    }
                     storeUpdated++;
                   }
                 } else {
@@ -5953,7 +5959,7 @@ export async function registerRoutes(
       const orderCounts = await db.execute(sql`
         SELECT
           COUNT(CASE WHEN wb_status IN ('new','waiting') AND wb_supply_id IS NULL
-            AND created_at >= NOW() - INTERVAL '72 hours' THEN 1 END) as new_count,
+            AND created_at >= NOW() - INTERVAL '7 days' THEN 1 END) as new_count,
           COUNT(CASE WHEN (wb_status IN ('cancel','user_cancel','declined','cancelled','cancel_ignore','defect','declined_by_client')
             OR status = 'cancelled') THEN 1 END) as cancelled_count,
           COUNT(CASE WHEN wb_status IN ('delivered','sold','receive','returned','sorted','waiting_for_cancel') THEN 1 END) as archive_count
