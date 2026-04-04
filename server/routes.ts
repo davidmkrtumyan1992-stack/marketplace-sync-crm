@@ -4567,6 +4567,10 @@ export async function registerRoutes(
                 // Ищем без фильтра по storeId — order мог быть создан с store_id=NULL
                 const existingOrder = await storage.getOrderByExternalId(wbOrderId, orgId);
                 if (existingOrder) {
+                  // Не реактивировать вручную отменённые заказы
+                  if (existingOrder.status === 'cancelled' && wbStatusToInternal(wbStatus) !== 'cancelled') {
+                    continue;
+                  }
                   const statusChanged = existingOrder.wbStatus !== wbStatus;
                   const storeMissing = resolvedStoreId && !existingOrder.storeId;
                   if (statusChanged || storeMissing) {
@@ -5421,12 +5425,20 @@ export async function registerRoutes(
 
             const existing = await storage.getOrderByExternalId(wbOrderId, orgId);
             if (existing) {
-              // Обновляем supply link если изменился
-              if (wbSupplyId && existing.wbSupplyId !== wbSupplyId) {
+              const supplyChanged = wbSupplyId && existing.wbSupplyId !== wbSupplyId;
+              const storeMissing30 = resolvedStoreId && !existing.storeId;
+              if (supplyChanged) {
                 await db.execute(sql`
                   UPDATE orders SET
                     wb_supply_id = ${wbSupplyId},
                     wb_status = CASE WHEN wb_status IN ('new','waiting') THEN 'confirm' ELSE wb_status END
+                  WHERE id = ${existing.id}
+                `);
+                linked30++;
+              }
+              if (storeMissing30) {
+                await db.execute(sql`
+                  UPDATE orders SET store_id = ${resolvedStoreId}, source_store_name = ${resolvedStoreName}
                   WHERE id = ${existing.id}
                 `);
                 linked30++;
