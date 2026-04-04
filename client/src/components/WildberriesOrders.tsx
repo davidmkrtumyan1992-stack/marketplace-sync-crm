@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
@@ -344,12 +344,20 @@ function SupplyDetailDialog({
   open,
   supply,
   onClose,
+  isAssembly = false,
 }: {
   open: boolean;
   supply: any;
   onClose: () => void;
+  isAssembly?: boolean;
 }) {
   const supplyId = supply?.supply_id;
+  const storeId = supply?.store_id || null;
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
+  const [isClosingSupply, setIsClosingSupply] = useState(false);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
   const { data: orders = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/wb/orders", "supplyDetail", supplyId],
     queryFn: async () => {
@@ -361,79 +369,225 @@ function SupplyDetailDialog({
     enabled: open && !!supplyId,
   });
 
+  useEffect(() => {
+    if (!open) setSelectedOrderIds(new Set());
+  }, [open, supplyId]);
+
+  const allSelected = orders.length > 0 && orders.every((o: any) => selectedOrderIds.has(String(o.wb_order_id || o.id)));
+  const hasSelection = selectedOrderIds.size > 0;
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedOrderIds(new Set(orders.map((o: any) => String(o.wb_order_id || o.id))));
+    } else {
+      setSelectedOrderIds(new Set());
+    }
+  };
+
+  const handleSelectOrder = (orderId: string, checked: boolean) => {
+    setSelectedOrderIds(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(orderId); else next.delete(orderId);
+      return next;
+    });
+  };
+
+  const handleCloseSupply = async () => {
+    setIsClosingSupply(true);
+    try {
+      const res = await apiRequest("POST", `/api/wb/supplies/${supplyId}/close`, { storeId });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Ошибка закрытия поставки" }));
+        throw new Error(err.message);
+      }
+      toast({ title: `✓ Поставка ${supplyId} передана в доставку` });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/supplies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/counts"] });
+      onClose();
+    } catch (e: any) {
+      toast({ title: "Ошибка закрытия поставки", description: e.message, variant: "destructive" });
+    } finally {
+      setIsClosingSupply(false);
+    }
+  };
+
+  const handlePrintSelectedStickers = async () => {
+    const selectedOrders = orders.filter((o: any) => selectedOrderIds.has(String(o.wb_order_id || o.id)));
+    const wbOrderIds = selectedOrders.map((o: any) => Number(o.wb_order_id)).filter(Boolean);
+    if (wbOrderIds.length === 0) {
+      toast({ title: "Нет заказов с WB ID", variant: "destructive" });
+      return;
+    }
+    try {
+      const data = await apiRequest("POST", "/api/wb/stickers", { storeId, wbOrderIds });
+      const result = await data.json();
+      const stickers: { orderId: number; file: string }[] = result.stickers || [];
+      if (stickers.length === 0) {
+        toast({ title: "Стикеры не получены от WB API", variant: "destructive" });
+        return;
+      }
+      const printHTML = `<html><head><style>
+        @page { size: 58mm 40mm; margin: 0; }
+        body { margin: 0; padding: 0; }
+        img { width: 58mm; height: 40mm; display: block; page-break-after: always; }
+      </style></head><body>
+        ${stickers.map((s) => `<img src="data:image/png;base64,${s.file}" />`).join("")}
+      </body></html>`;
+      const win = window.open("", "_blank");
+      if (win) { win.document.write(printHTML); win.document.close(); win.print(); win.close(); }
+    } catch (e: any) {
+      toast({ title: "Ошибка печати стикеров", description: e.message, variant: "destructive" });
+    }
+  };
+
   const supplyName = supply?.name || (supply?.created_at
     ? `Поставка от ${format(new Date(supply.created_at), "dd.MM.yyyy", { locale: ru })}`
     : supplyId);
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl" data-testid="dialog-supply-detail">
+      <DialogContent className="max-w-5xl" data-testid="dialog-supply-detail">
         <DialogHeader>
           <DialogTitle>
-            Поставка {supplyId} — {orders.length} {orders.length === 1 ? "заказ" : orders.length >= 2 && orders.length <= 4 ? "заказа" : "заказов"}
+            {supplyId} — {pluralOrders(orders.length)}
           </DialogTitle>
           {supplyName !== supplyId && (
             <p className="text-sm text-muted-foreground mt-1">{supplyName}</p>
           )}
         </DialogHeader>
-        {isLoading ? (
-          <div className="flex justify-center py-10">
-            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        <div className="flex gap-4">
+          {/* Левая часть: таблица заказов */}
+          <div className="flex-1 min-w-0 flex flex-col gap-2">
+            {isLoading ? (
+              <div className="flex justify-center py-10">
+                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="max-h-[50vh] overflow-y-auto rounded border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/30">
+                      {isAssembly && (
+                        <TableHead className="w-10">
+                          <Checkbox
+                            checked={allSelected}
+                            onCheckedChange={(c) => handleSelectAll(!!c)}
+                          />
+                        </TableHead>
+                      )}
+                      <TableHead>Заказ WB</TableHead>
+                      <TableHead>Товар</TableHead>
+                      <TableHead>Артикул</TableHead>
+                      <TableHead>Баркод</TableHead>
+                      <TableHead>Кол-во</TableHead>
+                      <TableHead>Сумма</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {orders.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={isAssembly ? 7 : 6} className="p-0">
+                          <EmptyState text="Заказы для этой поставки не найдены" />
+                        </TableCell>
+                      </TableRow>
+                    ) : orders.map((order: any) => {
+                      const orderId = String(order.wb_order_id || order.id);
+                      const isSelected = selectedOrderIds.has(orderId);
+                      return (
+                        <TableRow
+                          key={order.id}
+                          className={isAssembly && isSelected ? "bg-violet-50 dark:bg-violet-900/10" : ""}
+                          data-testid={`row-detail-order-${order.id}`}
+                        >
+                          {isAssembly && (
+                            <TableCell className="w-10">
+                              <Checkbox
+                                checked={isSelected}
+                                onCheckedChange={(c) => handleSelectOrder(orderId, !!c)}
+                              />
+                            </TableCell>
+                          )}
+                          <TableCell>
+                            <span className="font-mono text-sm">{order.wb_order_id || order.order_number || order.id}</span>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <ProductPhoto imageUrl={order.image_url} sku={order.sku || ""} size={32} />
+                              <span className="text-sm truncate max-w-[160px]">{order.product_name || "WB товар"}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <span className="font-mono text-xs text-muted-foreground">{order.sku || "—"}</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="font-mono text-xs text-muted-foreground">{order.barcode || "—"}</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="font-medium">{order.quantity || 1}</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm">{formatCurrency(Number(order.total_amount))}</span>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            {/* Нижняя панель выбора (только на сборке) */}
+            {isAssembly && hasSelection && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-muted/60">
+                <span className="text-sm font-medium flex-1">Выбрано {pluralOrders(selectedOrderIds.size)}</span>
+                <Button size="sm" variant="outline" onClick={handlePrintSelectedStickers}>
+                  <Printer className="w-4 h-4 mr-1.5" />
+                  Напечатать стикеры
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelectedOrderIds(new Set())}>
+                  <XCircle className="w-4 h-4" />
+                </Button>
+              </div>
+            )}
+            {!isAssembly && (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-sm text-muted-foreground">
+                  {orders.length > 0 ? pluralOrders(orders.length) : ""}
+                </span>
+                <Button variant="outline" onClick={onClose} data-testid="button-close-detail-dialog">Закрыть</Button>
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="max-h-[60vh] overflow-y-auto rounded border">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/30">
-                  <TableHead>Заказ WB</TableHead>
-                  <TableHead>Товар</TableHead>
-                  <TableHead>Артикул</TableHead>
-                  <TableHead>Баркод</TableHead>
-                  <TableHead>Кол-во</TableHead>
-                  <TableHead>Сумма</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {orders.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="p-0">
-                      <EmptyState text="Заказы для этой поставки не найдены" />
-                    </TableCell>
-                  </TableRow>
-                ) : orders.map((order: any) => (
-                  <TableRow key={order.id} data-testid={`row-detail-order-${order.id}`}>
-                    <TableCell>
-                      <span className="font-mono text-sm">{order.wb_order_id || order.order_number || order.id}</span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <ProductPhoto imageUrl={order.image_url} sku={order.sku || ""} size={32} />
-                        <span className="text-sm truncate max-w-[180px]">{order.product_name || "WB товар"}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-mono text-xs text-muted-foreground">{order.sku || "—"}</span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-mono text-xs text-muted-foreground">{order.barcode || "—"}</span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-medium">{order.quantity || 1}</span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm">{formatCurrency(Number(order.total_amount))}</span>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-        <div className="flex items-center justify-between pt-1">
-          <span className="text-sm text-muted-foreground">
-            {orders.length > 0 ? pluralOrders(orders.length) : ""}
-          </span>
-          <Button variant="outline" onClick={onClose} data-testid="button-close-detail-dialog">Закрыть</Button>
+          {/* Правая панель: Этапы сборки */}
+          {isAssembly && (
+            <div className="w-52 flex-shrink-0 border rounded-xl p-4 flex flex-col gap-3 bg-background">
+              <div className="font-semibold text-sm">Этапы сборки</div>
+              <div className="flex flex-col gap-3 text-sm flex-1">
+                <div className="flex items-center gap-2" style={{ color: WB_COLOR }}>
+                  <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: WB_COLOR }} />
+                  <span>Соберите заказы</span>
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <div className="w-2 h-2 rounded-full flex-shrink-0 bg-muted-foreground/30" />
+                  <span>Создайте грузоместа</span>
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <div className="w-2 h-2 rounded-full flex-shrink-0 bg-muted-foreground/30" />
+                  <span>Передайте в доставку</span>
+                </div>
+              </div>
+              <Button
+                onClick={handleCloseSupply}
+                disabled={isClosingSupply}
+                style={{ backgroundColor: WB_COLOR }}
+                className="text-white w-full mt-2"
+                data-testid="button-supply-deliver"
+              >
+                {isClosingSupply ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                Далее →
+              </Button>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -640,10 +794,11 @@ function AssemblySupplyRow({
 
   return (
     <TableRow
-      className={isSelected ? "bg-violet-50 dark:bg-violet-900/10" : ""}
+      className={`${isSelected ? "bg-violet-50 dark:bg-violet-900/10" : ""} cursor-pointer hover:bg-muted/40`}
+      onClick={() => onOpenDetail(supply)}
       data-testid={`row-wb-assembly-supply-${supply.supply_id}`}
     >
-      <TableCell className="w-10">
+      <TableCell className="w-10" onClick={(e) => e.stopPropagation()}>
         <Checkbox
           checked={isSelected}
           onCheckedChange={(c) => onSelect(supply.supply_id, !!c)}
@@ -674,7 +829,7 @@ function AssemblySupplyRow({
       <TableCell>
         <span className="text-sm text-muted-foreground">{supply.store_name || "—"}</span>
       </TableCell>
-      <TableCell>
+      <TableCell onClick={(e) => e.stopPropagation()}>
         <SupplyActionsMenu
           supply={supply}
           onPrintStickers={actions.handlePrintStickers}
@@ -769,6 +924,10 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
   const [singleOrderForSupply, setSingleOrderForSupply] = useState<any | null>(null);
   const [renameSupply, setRenameSupply] = useState<any | null>(null);
   const [detailSupply, setDetailSupply] = useState<any | null>(null);
+  const [detailIsAssembly, setDetailIsAssembly] = useState(false);
+
+  const openDetailAssembly = (supply: any) => { setDetailSupply(supply); setDetailIsAssembly(true); };
+  const openDetailDelivery = (supply: any) => { setDetailSupply(supply); setDetailIsAssembly(false); };
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -1106,7 +1265,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
                       supply={supply}
                       isSelected={selectedSupplyIds.has(supply.supply_id)}
                       onSelect={handleSelectSupply}
-                      onOpenDetail={setDetailSupply}
+                      onOpenDetail={openDetailAssembly}
                     />
                   ))}
                 </TableBody>
@@ -1171,7 +1330,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
                       supply={supply}
                       isSelected={selectedSupplyIds.has(supply.supply_id)}
                       onSelect={handleSelectSupply}
-                      onOpenDetail={setDetailSupply}
+                      onOpenDetail={openDetailDelivery}
                     />
                   ))}
                 </TableBody>
@@ -1338,6 +1497,7 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
           open={!!detailSupply}
           supply={detailSupply}
           onClose={() => setDetailSupply(null)}
+          isAssembly={detailIsAssembly}
         />
       )}
     </div>
