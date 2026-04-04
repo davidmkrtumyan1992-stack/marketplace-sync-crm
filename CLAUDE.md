@@ -78,6 +78,16 @@ organizations → companies → stores → marketplace_settings
 - Систему аутентификации и сессий
 - RBAC middleware (isAuthenticated, requireRole)
 
+### Синхронизация заказов WB — Золотой стандарт:
+- Единственный активный WB магазин: **store_id=45** (Бушуева - WB, ИП Бабушева А.Ю., WB seller ID 250056193)
+- `marketplace_settings` id=4 (store_id=NULL) — **ОТКЛЮЧЁН** (is_active=false). Это был API ключ от удалённого аккаунта. НЕ включать!
+- `autoSyncWbOrders` — каждые 2 мин, окно: вчера 21:00 UTC до сегодня 21:00 UTC + `/api/v3/orders/new`
+- `syncWbSuppliesForOrg` — вызывается после каждого autoSyncWbOrders; Phase 4: 30-дневный бэкфилл создаёт заказы в поставках которых нет в БД
+- **wbStatusToInternal** — полный маппинг: new/waiting→pending; confirm/complete/indelivery/delivering→shipped; delivered/receive→completed; cancel/user_cancel/declined/declined_by_client/cancel_ignore/defect/cancelled→cancelled; default→pending
+- **Защита от реактивации**: если `orders.status='cancelled'` И новый wbStatus не 'cancelled' — autoSyncWbOrders ПРОПУСКАЕТ обновление (continue). Не трогать!
+- Вкладка "Новые": фильтр `wb_status IN ('new','waiting') AND wb_supply_id IS NULL AND created_at >= NOW() - 7 days`
+- Призрачные заказы от старых/удалённых аккаунтов: отключить API ключ в marketplace_settings, удалить заказы через SQL
+
 ### Синхронизация заказов Ozon — Золотой стандарт:
 - since = предыдущий день 21:00:00 UTC (= 00:00:00 МСК текущего дня)
 - to = текущий день 21:00:00 UTC (= 00:00:00 МСК следующего дня)
@@ -146,6 +156,7 @@ npm run build        # production сборка
 ✓ WB «В доставке» — защита от повторного открытия: ACTIVE upsert НЕ сбрасывает status в 'open' если поставка уже 'closed' (WHERE status='open' в UPDATE); GET /api/wb/supplies?status=closed фильтрует по EXISTS (orders с wb_status IN ('delivering','indelivery','shipped','confirm','complete')) — только поставки с заказами реально в пути; сортировка closed_at DESC NULLS LAST; delivery_count в /api/wb/counts тоже через EXISTS-фильтр (COUNT DISTINCT supply_id)
 ✓ WB Архив: syncWbArchiveStatuses — каждый час (+ через 30с при старте) запрашивает WB API за последние 30 дней, обновляет wb_status+status для СУЩЕСТВУЮЩИХ заказов которые изменили статус; НЕ создаёт новые записи; решает проблему «заказы 8-21 марта есть в БД но статус не обновлён» (autoSyncWbOrders берёт только вчерашний день); архивный фильтр расширен: added 'sorted','waiting_for_cancel'; archive_count тоже расширен
 ✓ WB вкладка «Отменённые» — исправлены все три проблемы: (1) оранжевый блок заменён на синий информационный с кнопкой «Перейти в остатки» → /products; (2) wbStatusToInternal расширен: cancel_ignore + defect + cancelled → "cancelled"; (3) фильтр GET /api/wb/orders?status=cancelled включает defect; POST /api/wb/sync-cancelled — бэкфилл за 30 дней; startup авто-запуск бэкфилла если 0 cancelled WB заказов в БД
+✓ WB призрачные заказы — исправлено: отключён marketplace_settings id=4 (null-store, старый аккаунт); autoSyncWbOrders не реактивирует cancelled заказы (защита по status='cancelled'); wbStatusToInternal добавлен declined_by_client→cancelled; Phase 4 backfill в syncWbSuppliesForOrg создаёт пропущенные заказы поставок за 30 дней + исправляет store_id=NULL
 📋 Синхронизация цены Яндекс Маркет — планируется
 
 ## Жизненный цикл магазина
