@@ -447,7 +447,7 @@ function SupplyDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl w-full" data-testid="dialog-supply-detail">
+      <DialogContent className="max-w-6xl w-full" data-testid="dialog-supply-detail">
         <DialogHeader>
           <DialogTitle>
             {supplyId} — {pluralOrders(orders.length)}
@@ -464,7 +464,7 @@ function SupplyDetailDialog({
                 <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
               </div>
             ) : (
-              <div className="max-h-[50vh] overflow-y-auto rounded border">
+              <div className="max-h-[65vh] overflow-y-auto rounded border">
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/30">
