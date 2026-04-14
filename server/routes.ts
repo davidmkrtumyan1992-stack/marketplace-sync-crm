@@ -4773,10 +4773,20 @@ export async function registerRoutes(
                   totalCreated++;
                 } else {
                   // Обновляем статус если изменился (не реактивируем отменённые)
-                  if (existing.wb_status === wbStatus) continue;
+                  const newWbSupplyId = meta.supplyId ? String(meta.supplyId) : null;
+                  const statusChanged = existing.wb_status !== wbStatus;
+                  const supplyMissing = newWbSupplyId && !existing.wb_supply_id;
+                  if (!statusChanged && !supplyMissing) continue;
                   if (existing.status === "cancelled" && wbStatusToInternal(wbStatus) !== "cancelled") continue;
                   const internalStatus = wbStatusToInternal(wbStatus);
                   await storage.updateOrderWbStatus(existing.id, wbStatus, internalStatus, createdAtTs);
+                  // Фиксируем wb_supply_id если отсутствует (API вернул supplyId)
+                  if (supplyMissing) {
+                    await db.execute(sql`
+                      UPDATE orders SET wb_supply_id = ${newWbSupplyId}
+                      WHERE id = ${existing.id} AND wb_supply_id IS NULL
+                    `);
+                  }
                   totalUpdated++;
                 }
               } catch (e: any) {
@@ -6090,18 +6100,8 @@ export async function registerRoutes(
           )` : sql``}
           ${status === "closed" ? sql`
           AND ws.status = 'closed'
-          AND EXISTS (
-            SELECT 1 FROM orders o3
-            WHERE o3.wb_supply_id = ws.supply_id
-              AND o3.source = 'wildberries'
-              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped', 'ready_for_pickup', 'confirm')
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM orders o4
-            WHERE o4.wb_supply_id = ws.supply_id
-              AND o4.source = 'wildberries'
-              AND o4.wb_status IN ('new', 'waiting')
-          )` : sql``}
+          AND ws.wb_synced_as_closed = true
+          AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '30 days'` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ${status === "closed" ? sql`ws.closed_at DESC NULLS LAST` : sql`ws.created_at DESC`}
       `);
@@ -6422,17 +6422,10 @@ export async function registerRoutes(
               AND o.source = 'wildberries'
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
-          COUNT(DISTINCT CASE WHEN ws.status = 'closed' AND EXISTS (
-            SELECT 1 FROM orders o3
-            WHERE o3.wb_supply_id = ws.supply_id
-              AND o3.source = 'wildberries'
-              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped', 'ready_for_pickup', 'confirm')
-          ) AND NOT EXISTS (
-            SELECT 1 FROM orders o4
-            WHERE o4.wb_supply_id = ws.supply_id
-              AND o4.source = 'wildberries'
-              AND o4.wb_status IN ('new', 'waiting')
-          ) THEN ws.supply_id END) as delivery_count
+          COUNT(DISTINCT CASE WHEN ws.status = 'closed'
+            AND ws.wb_synced_as_closed = true
+            AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '30 days'
+          THEN ws.supply_id END) as delivery_count
         FROM wb_supplies ws
         WHERE organization_id = ${orgId}
       `);
