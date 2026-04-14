@@ -5188,11 +5188,17 @@ export async function registerRoutes(
                 `);
                 const updatedRows: any[] = (updateResult as any).rows || [];
 
-                // Если заказа нет в БД — создаём stub чтобы поставка появилась в «На сборке»
-                // autoSyncWbOrders обновит цену и детали при следующем прогоне
+                // Если заказа нет в БД — создаём заказ с реальными данными из WB API
                 if (updatedRows.length === 0) {
                   try {
                     const article = String(so.article || so.supplierArticle || "");
+                    const soWbStatus = so.wbStatus || so.status || "confirm";
+                    const soTotalAmount = (so.totalPrice || so.convertedPrice || 0) / 100;
+                    const soRid = so.rid ? String(so.rid) : null;
+                    const soCreatedAtRaw = so.createdAt;
+                    const soCreatedAt = soCreatedAtRaw
+                      ? (typeof soCreatedAtRaw === "number" ? new Date(soCreatedAtRaw * 1000) : new Date(soCreatedAtRaw))
+                      : new Date();
                     let productId: number | null = null;
                     if (article) {
                       const [dbProduct] = await db.select().from(productsTable)
@@ -5201,19 +5207,25 @@ export async function registerRoutes(
                     }
                     await storage.createOrder({
                       orderNumber: `WB-${wbOrderId}`,
-                      status: "processing",
-                      totalAmount: "0.00",
+                      status: wbStatusToInternal(soWbStatus),
+                      totalAmount: soTotalAmount.toFixed(2),
                       source: "wildberries",
                       externalId: wbOrderId,
+                      postingNumber: null,
+                      ozonStatus: null,
+                      yandexStatus: null,
                       wbOrderId,
-                      wbStatus: "confirm",
+                      wbStatus: soWbStatus,
+                      wbRid: soRid,
                       wbSupplyId: supplyId,
+                      fulfillmentType: "FBS",
                       storeId: resolvedStoreId ?? undefined,
                       organizationId: orgId,
+                      createdAt: soCreatedAt,
                     } as any, productId
-                      ? [{ productId, quantity: 1, price: 0 }]
-                      : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: "WB товар", quantity: 1, price: 0 }]);
-                    console.log(`[wb-supplies-sync] Создан stub-заказ WB-${wbOrderId} для поставки ${supplyId}`);
+                      ? [{ productId, quantity: so.quantity || 1, price: soTotalAmount }]
+                      : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: so.subject || "WB товар", quantity: so.quantity || 1, price: soTotalAmount }]);
+                    console.log(`[wb-supplies-sync] Создан заказ WB-${wbOrderId} (${soWbStatus}) для поставки ${supplyId}`);
                   } catch (createErr: any) {
                     if (!createErr.message?.includes("unique") && !createErr.message?.includes("duplicate")) {
                       console.warn(`[wb-supplies-sync] Не удалось создать stub-заказ ${wbOrderId}:`, createErr.message);
@@ -5403,10 +5415,12 @@ export async function registerRoutes(
       resolvedStoreName = store.name;
 
       try {
-        // Берём все открытые поставки этого магазина из БД
+        // Берём все открытые + недавно закрытые поставки этого магазина из БД
         const openSupplies = await db.execute(sql`
           SELECT supply_id FROM wb_supplies
-          WHERE store_id = ${resolvedStoreId} AND status = 'open'
+          WHERE store_id = ${resolvedStoreId}
+            AND (status = 'open'
+                 OR (status = 'closed' AND COALESCE(closed_at, created_at) >= NOW() - INTERVAL '30 days'))
         `);
         const supplyRows: any[] = (openSupplies as any).rows || openSupplies;
         let created30 = 0, linked30 = 0;
@@ -5416,26 +5430,24 @@ export async function registerRoutes(
           if (!supplyId) continue;
 
           // Пробуем /api/v3/supplies/{id}/orders напрямую
-          const supplyOrdersRes = await wbFetchJson(
-            `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`,
-            authHeaders, 15000
-          );
+          let supplyOrdersRes: { status: number; json: any };
+          try {
+            supplyOrdersRes = await wbFetchJson(
+              `${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`,
+              authHeaders, 15000
+            );
+          } catch (fetchErr: any) {
+            console.warn(`[wb-supply-backfill] Supply ${supplyId} fetch error:`, fetchErr.message);
+            continue;
+          }
 
           let supplyOrders: any[] = [];
           if (supplyOrdersRes.status === 200) {
             supplyOrders = supplyOrdersRes.json?.orders || [];
           } else {
-            // Fallback: фильтруем из 30-дневного окна по supplyId
-            const dateFrom30 = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
-            const fallbackRes = await wbFetchJson(
-              `${WB_MARKETPLACE_BASE}/api/v3/orders?limit=1000&next=0&dateFrom=${dateFrom30}`,
-              authHeaders, 20000
-            );
-            if (fallbackRes.status === 200) {
-              supplyOrders = (fallbackRes.json?.orders || []).filter((o: any) =>
-                o.supplyId && String(o.supplyId) === supplyId
-              );
-            }
+            // WB вернул не 200 — пропускаем поставку, попробуем в следующем цикле
+            console.warn(`[wb-supply-backfill] Supply ${supplyId}: WB API вернул ${supplyOrdersRes.status}, пропускаем`);
+            continue;
           }
 
           for (const o of supplyOrders) {
@@ -5870,25 +5882,34 @@ export async function registerRoutes(
         LEFT JOIN stores s ON ws.store_id = s.id
         LEFT JOIN orders o ON o.wb_supply_id = ws.supply_id AND o.organization_id = ws.organization_id
         WHERE ws.organization_id = ${orgId}
-          ${status !== "all" ? sql`AND ws.status = ${status}` : sql``}
+          ${status === "open" ? sql`AND ws.status = 'open'` : sql``}
+          ${status !== "all" && status !== "open" && status !== "closed" ? sql`AND ws.status = ${status}` : sql``}
           ${storeId ? sql`AND ws.store_id = ${storeId}` : sql``}
           ${status === "open" ? sql`
-          AND (
-            EXISTS (
-              SELECT 1 FROM orders o2
-              WHERE o2.wb_supply_id = ws.supply_id
-                AND o2.source = 'wildberries'
-                AND o2.wb_status IN ('new', 'waiting', 'confirm')
-            )
-            OR ws.created_at >= NOW() - INTERVAL '14 days'
+          AND EXISTS (
+            SELECT 1 FROM orders o2
+            WHERE o2.wb_supply_id = ws.supply_id
+              AND o2.source = 'wildberries'
+              AND o2.wb_status IN ('new', 'waiting', 'confirm')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM orders o_del
+            WHERE o_del.wb_supply_id = ws.supply_id
+              AND o_del.source = 'wildberries'
+              AND o_del.wb_status IN ('indelivery', 'delivering', 'shipped')
           )` : sql``}
           ${status === "closed" ? sql`
-          AND ws.wb_synced_as_closed = true
           AND EXISTS (
             SELECT 1 FROM orders o3
             WHERE o3.wb_supply_id = ws.supply_id
               AND o3.source = 'wildberries'
-              AND o3.wb_status IN ('confirm', 'complete', 'indelivery', 'delivering')
+              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM orders o4
+            WHERE o4.wb_supply_id = ws.supply_id
+              AND o4.source = 'wildberries'
+              AND o4.wb_status IN ('new', 'waiting')
           )` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ${status === "closed" ? sql`ws.closed_at DESC NULLS LAST` : sql`ws.created_at DESC`}
@@ -6210,11 +6231,16 @@ export async function registerRoutes(
               AND o.source = 'wildberries'
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
-          COUNT(DISTINCT CASE WHEN ws.status = 'closed' AND ws.wb_synced_as_closed = true AND EXISTS (
+          COUNT(DISTINCT CASE WHEN EXISTS (
             SELECT 1 FROM orders o3
             WHERE o3.wb_supply_id = ws.supply_id
               AND o3.source = 'wildberries'
-              AND o3.wb_status IN ('confirm', 'complete', 'indelivery', 'delivering')
+              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped')
+          ) AND NOT EXISTS (
+            SELECT 1 FROM orders o4
+            WHERE o4.wb_supply_id = ws.supply_id
+              AND o4.source = 'wildberries'
+              AND o4.wb_status IN ('new', 'waiting')
           ) THEN ws.supply_id END) as delivery_count
         FROM wb_supplies ws
         WHERE organization_id = ${orgId}
