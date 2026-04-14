@@ -3957,12 +3957,16 @@ export async function registerRoutes(
       case "complete":
       case "indelivery":
       case "delivering":
+      case "ready_for_pickup":  // WB: готов к выдаче / передан курьеру
         return "shipped";
       case "delivered":
       case "receive":
+      case "sold":              // WB: выдан покупателю
         return "completed";
       case "cancel":
+      case "canceled":          // WB API реально возвращает canceled (не cancel)
       case "user_cancel":
+      case "canceled_by_client": // WB API реально возвращает canceled_by_client
       case "declined":
       case "declined_by_client":
       case "cancel_ignore":
@@ -5899,6 +5903,102 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/wb/repair-supply-orders — принудительно создаёт заказы для поставки из WB API
+  app.post("/api/wb/repair-supply-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { supplyId, storeId } = req.body;
+      if (!supplyId) return res.status(400).json({ message: "supplyId обязателен" });
+
+      const cleanApiKey = await getWbApiKeyForStore(orgId, storeId ? Number(storeId) : null);
+      if (!cleanApiKey) return res.status(400).json({ message: "WB API-ключ не найден" });
+      const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
+
+      let ordersRes: { status: number; json: any };
+      try {
+        ordersRes = await wbFetchJson(`${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders`, authHeaders, 20000);
+      } catch (e: any) {
+        return res.status(502).json({ message: `WB API недоступен: ${e.message}` });
+      }
+
+      if (ordersRes.status !== 200) {
+        return res.status(502).json({ message: `WB API вернул ${ordersRes.status}`, raw: ordersRes.json });
+      }
+
+      const orders: any[] = ordersRes.json?.orders || [];
+      const result = { total: orders.length, created: 0, updated: 0, skipped: 0, wbStatuses: [] as string[], errors: [] as string[] };
+
+      for (const o of orders) {
+        const wbOrderId = String(o.id || o.wbOrderId || "");
+        if (!wbOrderId) { result.skipped++; continue; }
+        const wbStatus = o.wbStatus || o.status || "confirm";
+        (result.wbStatuses as string[]).push(wbStatus);
+
+        try {
+          const existing = await storage.getOrderByExternalId(wbOrderId, orgId);
+          if (existing) {
+            const newInternal = wbStatusToInternal(wbStatus);
+            if (existing.status !== "cancelled") {
+              await db.execute(sql`
+                UPDATE orders SET
+                  wb_supply_id = ${supplyId},
+                  wb_status = ${wbStatus},
+                  status = ${newInternal}
+                WHERE id = ${existing.id}
+              `);
+              result.updated++;
+            } else {
+              result.skipped++;
+            }
+          } else {
+            const article = String(o.article || o.supplierArticle || "");
+            const totalAmount = (o.totalPrice || o.convertedPrice || 0) / 100;
+            const wbRid = o.rid ? String(o.rid) : null;
+            const createdAtRaw = o.createdAt;
+            const createdAtTs = createdAtRaw
+              ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
+              : new Date();
+            let productId: number | null = null;
+            if (article) {
+              const [dbProduct] = await db.select().from(productsTable)
+                .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
+              if (dbProduct) productId = dbProduct.id;
+            }
+            await storage.createOrder({
+              orderNumber: `WB-${wbOrderId}`,
+              status: wbStatusToInternal(wbStatus),
+              totalAmount: totalAmount.toFixed(2),
+              source: "wildberries",
+              externalId: wbOrderId,
+              postingNumber: null,
+              ozonStatus: null,
+              yandexStatus: null,
+              wbOrderId,
+              wbStatus,
+              wbRid,
+              wbSupplyId: supplyId,
+              fulfillmentType: "FBS",
+              storeId: storeId ? Number(storeId) : undefined,
+              organizationId: orgId,
+              createdAt: createdAtTs,
+            } as any, productId
+              ? [{ productId, quantity: o.quantity || 1, price: totalAmount }]
+              : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: o.subject || "WB товар", quantity: o.quantity || 1, price: totalAmount }]);
+            result.created++;
+          }
+        } catch (e: any) {
+          result.errors.push(`${wbOrderId}: ${e.message}`);
+        }
+      }
+
+      console.log(`[wb-repair] Supply ${supplyId}: total=${result.total} created=${result.created} updated=${result.updated}`);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[wb-repair] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // GET /api/wb/supplies — список поставок из таблицы wb_supplies с количеством заказов
   app.get("/api/wb/supplies", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
@@ -5935,14 +6035,14 @@ export async function registerRoutes(
             SELECT 1 FROM orders o_del
             WHERE o_del.wb_supply_id = ws.supply_id
               AND o_del.source = 'wildberries'
-              AND o_del.wb_status IN ('indelivery', 'delivering', 'shipped')
+              AND o_del.wb_status IN ('indelivery', 'delivering', 'shipped', 'ready_for_pickup', 'sold', 'complete', 'delivered', 'receive')
           )` : sql``}
           ${status === "closed" ? sql`
           AND EXISTS (
             SELECT 1 FROM orders o3
             WHERE o3.wb_supply_id = ws.supply_id
               AND o3.source = 'wildberries'
-              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped')
+              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped', 'ready_for_pickup')
           )
           AND NOT EXISTS (
             SELECT 1 FROM orders o4
@@ -6255,9 +6355,9 @@ export async function registerRoutes(
         SELECT
           COUNT(CASE WHEN wb_status IN ('new','waiting') AND wb_supply_id IS NULL
             AND created_at >= NOW() - INTERVAL '7 days' THEN 1 END) as new_count,
-          COUNT(CASE WHEN (wb_status IN ('cancel','user_cancel','declined','cancelled','cancel_ignore','defect','declined_by_client')
+          COUNT(CASE WHEN (wb_status IN ('cancel','canceled','user_cancel','canceled_by_client','declined','cancelled','cancel_ignore','defect','declined_by_client')
             OR status = 'cancelled') THEN 1 END) as cancelled_count,
-          COUNT(CASE WHEN wb_status IN ('delivered','sold','receive','returned','sorted','waiting_for_cancel') THEN 1 END) as archive_count
+          COUNT(CASE WHEN wb_status IN ('delivered','sold','receive','returned','sorted','waiting_for_cancel','ready_for_pickup') THEN 1 END) as archive_count
         FROM orders
         WHERE source = 'wildberries' AND organization_id = ${orgId}
       `);
@@ -6274,7 +6374,7 @@ export async function registerRoutes(
             SELECT 1 FROM orders o3
             WHERE o3.wb_supply_id = ws.supply_id
               AND o3.source = 'wildberries'
-              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped')
+              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped', 'ready_for_pickup')
           ) AND NOT EXISTS (
             SELECT 1 FROM orders o4
             WHERE o4.wb_supply_id = ws.supply_id
