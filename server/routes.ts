@@ -4660,11 +4660,18 @@ export async function registerRoutes(
       for (const orgId of orgIds) {
         const wbSettings = wbSettingsAll.filter(s => s.organizationId === orgId);
         let totalUpdated = 0;
+        let totalCreated = 0;
 
         for (const wbSetting of wbSettings) {
+          if (!wbSetting.storeId) continue; // только магазины с явным store_id
           try {
             const cleanApiKey = wbSetting.apiKey!.trim();
             const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
+            const resolvedStoreId = wbSetting.storeId;
+            const resolvedCompanyId = wbSetting.companyId ?? null;
+            const store = await storage.getStore(resolvedStoreId);
+            if (!store) continue;
+            const resolvedStoreName = store.name;
 
             // Шаг 1: собрать все ID заказов за 30 дней постранично
             const allOrderMeta: any[] = [];
@@ -4685,7 +4692,7 @@ export async function registerRoutes(
             if (allOrderMeta.length === 0) continue;
 
             // Шаг 2: запросить реальные статусы через POST /api/v3/orders/status
-            const statusMap: Record<string, { wbStatus: string; meta: any }> = {};
+            const statusMap: Record<string, string> = {};
             for (let i = 0; i < allOrderMeta.length; i += 1000) {
               const batch = allOrderMeta.slice(i, i + 1000);
               try {
@@ -4698,8 +4705,7 @@ export async function registerRoutes(
                   const statusData = await statusRes.json();
                   for (const s of statusData?.orders || []) {
                     if (s.id && s.wbStatus) {
-                      const meta = allOrderMeta.find((o: any) => o.id === s.id) || {};
-                      statusMap[String(s.id)] = { wbStatus: s.wbStatus, meta };
+                      statusMap[String(s.id)] = s.wbStatus;
                     }
                   }
                 }
@@ -4708,30 +4714,75 @@ export async function registerRoutes(
               }
             }
 
-            // Шаг 3: обновить существующие записи с изменившимся статусом
+            // Шаг 3: обновить существующие записи и создать отсутствующие
             let pageErrors = 0;
-            for (const [wbOrderId, { wbStatus, meta }] of Object.entries(statusMap)) {
+            for (const meta of allOrderMeta) {
+              const wbOrderId = String(meta.id || "");
+              if (!wbOrderId) continue;
+              // Актуальный статус: из batch-запроса или из мета
+              const wbStatus = statusMap[wbOrderId] || meta.wbStatus || meta.status || "confirm";
               try {
                 const existingRows = await db.execute(sql`
-                  SELECT id, wb_status FROM orders
+                  SELECT id, wb_status, status FROM orders
                   WHERE wb_order_id = ${wbOrderId}
                     AND source = 'wildberries'
                     AND organization_id = ${orgId}
                   LIMIT 1
                 `);
                 const existing = ((existingRows as any).rows || existingRows)[0];
-                if (!existing) continue;
-                if (existing.wb_status === wbStatus) continue;
-
-                const internalStatus = wbStatusToInternal(wbStatus);
                 const createdAtRaw = meta.createdAt;
                 const createdAtTs = createdAtRaw
                   ? (typeof createdAtRaw === "number" ? new Date(createdAtRaw * 1000) : new Date(createdAtRaw))
                   : new Date();
-                await storage.updateOrderWbStatus(existing.id, wbStatus, internalStatus, createdAtTs);
-                totalUpdated++;
+
+                if (!existing) {
+                  // Создаём отсутствующий заказ
+                  const article = String(meta.article || meta.supplierArticle || "");
+                  const qty = meta.quantity || 1;
+                  const totalAmount = (meta.totalPrice || meta.convertedPrice || 0) / 100;
+                  const wbSupplyId = meta.supplyId ? String(meta.supplyId) : null;
+                  const wbRid = meta.rid ? String(meta.rid) : null;
+                  let productId: number | null = null;
+                  if (article) {
+                    const [dbProduct] = await db.select().from(productsTable)
+                      .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
+                    if (dbProduct) productId = dbProduct.id;
+                  }
+                  await storage.createOrder({
+                    orderNumber: `WB-${wbOrderId}`,
+                    status: wbStatusToInternal(wbStatus),
+                    totalAmount: totalAmount.toFixed(2),
+                    source: "wildberries",
+                    externalId: wbOrderId,
+                    postingNumber: null,
+                    ozonStatus: null,
+                    yandexStatus: null,
+                    wbOrderId,
+                    wbStatus,
+                    wbRid,
+                    wbSupplyId,
+                    fulfillmentType: "FBS",
+                    storeId: resolvedStoreId,
+                    sourceStoreName: resolvedStoreName,
+                    companyId: resolvedCompanyId ?? undefined,
+                    organizationId: orgId,
+                    createdAt: createdAtTs,
+                  } as any, productId
+                    ? [{ productId, quantity: qty, price: totalAmount }]
+                    : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: meta.subject || "WB товар", quantity: qty, price: totalAmount }]);
+                  totalCreated++;
+                } else {
+                  // Обновляем статус если изменился (не реактивируем отменённые)
+                  if (existing.wb_status === wbStatus) continue;
+                  if (existing.status === "cancelled" && wbStatusToInternal(wbStatus) !== "cancelled") continue;
+                  const internalStatus = wbStatusToInternal(wbStatus);
+                  await storage.updateOrderWbStatus(existing.id, wbStatus, internalStatus, createdAtTs);
+                  totalUpdated++;
+                }
               } catch (e: any) {
-                pageErrors++;
+                if (!e.message?.includes("unique") && !e.message?.includes("duplicate")) {
+                  pageErrors++;
+                }
               }
             }
 
@@ -4743,8 +4794,8 @@ export async function registerRoutes(
           }
         }
 
-        if (totalUpdated > 0) {
-          console.log(`[wb-archive-status-sync] Org ${orgId}: обновлено статусов ${totalUpdated}`);
+        if (totalUpdated > 0 || totalCreated > 0) {
+          console.log(`[wb-archive-status-sync] Org ${orgId}: обновлено ${totalUpdated}, создано ${totalCreated}`);
         }
       }
     } catch (error: any) {
