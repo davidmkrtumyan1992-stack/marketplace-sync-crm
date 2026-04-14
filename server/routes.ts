@@ -5868,6 +5868,37 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/wb/debug-supplies — диагностика: показывает реальное состояние поставок и заказов в БД
+  app.get("/api/wb/debug-supplies", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const rows = await db.execute(sql`
+        SELECT
+          ws.supply_id,
+          ws.status as supply_status,
+          ws.closed_at,
+          ws.wb_synced_as_closed,
+          ws.store_id,
+          COUNT(o.id) as total_orders,
+          COUNT(CASE WHEN o.wb_status IN ('new','waiting') THEN 1 END) as new_waiting,
+          COUNT(CASE WHEN o.wb_status = 'confirm' THEN 1 END) as confirm,
+          COUNT(CASE WHEN o.wb_status IN ('indelivery','delivering','complete','shipped') THEN 1 END) as delivery,
+          COUNT(CASE WHEN o.wb_status IN ('cancel','cancelled','user_cancel','declined') THEN 1 END) as cancelled,
+          COUNT(CASE WHEN o.wb_status IS NULL OR o.wb_status NOT IN ('new','waiting','confirm','indelivery','delivering','complete','shipped','cancel','cancelled','user_cancel','declined') THEN 1 END) as other,
+          STRING_AGG(DISTINCT o.wb_status, ', ') as all_statuses
+        FROM wb_supplies ws
+        LEFT JOIN orders o ON o.wb_supply_id = ws.supply_id AND o.organization_id = ws.organization_id
+        WHERE ws.organization_id = ${orgId}
+        GROUP BY ws.supply_id, ws.status, ws.closed_at, ws.wb_synced_as_closed, ws.store_id
+        ORDER BY ws.supply_id DESC
+        LIMIT 20
+      `);
+      res.json((rows as any).rows || rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // GET /api/wb/supplies — список поставок из таблицы wb_supplies с количеством заказов
   app.get("/api/wb/supplies", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
