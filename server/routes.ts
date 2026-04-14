@@ -4654,7 +4654,7 @@ export async function registerRoutes(
       if (wbSettingsAll.length === 0) return;
 
       const WB_BASE = "https://marketplace-api.wildberries.ru";
-      const archiveSince = Math.floor((Date.now() - 30 * 24 * 3600 * 1000) / 1000);
+      const archiveSince = Math.floor((Date.now() - 45 * 24 * 3600 * 1000) / 1000);
       const orgIds = [...new Set(wbSettingsAll.map(s => s.organizationId))];
 
       for (const orgId of orgIds) {
@@ -6089,11 +6089,12 @@ export async function registerRoutes(
               AND o_del.wb_status IN ('indelivery', 'delivering', 'shipped', 'ready_for_pickup', 'sold', 'complete', 'delivered', 'receive')
           )` : sql``}
           ${status === "closed" ? sql`
+          AND ws.status = 'closed'
           AND EXISTS (
             SELECT 1 FROM orders o3
             WHERE o3.wb_supply_id = ws.supply_id
               AND o3.source = 'wildberries'
-              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped', 'ready_for_pickup')
+              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped', 'ready_for_pickup', 'confirm')
           )
           AND NOT EXISTS (
             SELECT 1 FROM orders o4
@@ -6421,11 +6422,11 @@ export async function registerRoutes(
               AND o.source = 'wildberries'
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
-          COUNT(DISTINCT CASE WHEN EXISTS (
+          COUNT(DISTINCT CASE WHEN ws.status = 'closed' AND EXISTS (
             SELECT 1 FROM orders o3
             WHERE o3.wb_supply_id = ws.supply_id
               AND o3.source = 'wildberries'
-              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped', 'ready_for_pickup')
+              AND o3.wb_status IN ('indelivery', 'delivering', 'complete', 'shipped', 'ready_for_pickup', 'confirm')
           ) AND NOT EXISTS (
             SELECT 1 FROM orders o4
             WHERE o4.wb_supply_id = ws.supply_id
