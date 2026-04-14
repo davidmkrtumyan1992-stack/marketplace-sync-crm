@@ -5377,15 +5377,24 @@ export async function registerRoutes(
             const supplyId = String(rawId);
             if (!supplyId || supplyId === "undefined" || supplyId === "null") continue;
 
-            // Track ALL WB CLOSED IDs for backfill
-            allWbClosedIds.add(supplyId);
+            // Свежесть: только поставки, закрытые WB ≤ 20 дней назад, управляют wb_synced_as_closed
+            const twentyDaysAgo = Date.now() - 20 * 24 * 3600 * 1000;
+            const closedAtRaw = supply.closedAt || supply.closed_at;
+            const closedAtMs = closedAtRaw ? new Date(closedAtRaw).getTime() : Date.now();
+            const isRecent = closedAtMs >= twentyDaysAgo;
+
+            if (isRecent) {
+              allWbClosedIds.add(supplyId);
+            }
 
             if (allActiveSupplyIds.has(supplyId)) {
-              // Supply is also in ACTIVE: keep status='open' but set wb_synced_as_closed=true
-              await db.execute(sql`
-                UPDATE wb_supplies SET wb_synced_as_closed = true
-                WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
-              `);
+              // Supply is also in ACTIVE: keep status='open', wb_synced_as_closed только для свежих
+              if (isRecent) {
+                await db.execute(sql`
+                  UPDATE wb_supplies SET wb_synced_as_closed = true
+                  WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+                `);
+              }
               continue;
             }
             closedOnlyCount++;
@@ -5398,7 +5407,7 @@ export async function registerRoutes(
             const supplyName = supply.name || null;
             const createdAtRaw = supply.createdAt || supply.created_at;
             const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
-            const closedAtRaw = supply.closedAt || supply.closed_at;
+            // closedAtRaw уже объявлен выше (для isRecent)
             const closedAtTs = closedAtRaw ? new Date(closedAtRaw) : null;
 
             if (existing) {
@@ -5407,7 +5416,7 @@ export async function registerRoutes(
                   name = ${supplyName},
                   status = 'closed',
                   closed_at = ${closedAtTs},
-                  wb_synced_as_closed = true
+                  wb_synced_as_closed = ${isRecent}
                 WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
               `);
             } else {
@@ -5419,7 +5428,7 @@ export async function registerRoutes(
                 status: "closed",
                 createdAt: createdAtTs,
                 closedAt: closedAtTs ?? undefined,
-                wbSyncedAsClosed: true,
+                wbSyncedAsClosed: isRecent,
               } as any);
             }
             totalSynced++;
