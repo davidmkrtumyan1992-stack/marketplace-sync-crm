@@ -83,10 +83,55 @@ organizations → companies → stores → marketplace_settings
 - `marketplace_settings` id=4 (store_id=NULL) — **ОТКЛЮЧЁН** (is_active=false). Это был API ключ от удалённого аккаунта. НЕ включать!
 - `autoSyncWbOrders` — каждые 2 мин, окно: вчера 21:00 UTC до сегодня 21:00 UTC + `/api/v3/orders/new`
 - `syncWbSuppliesForOrg` — вызывается после каждого autoSyncWbOrders; Phase 4: 30-дневный бэкфилл создаёт заказы в поставках которых нет в БД
-- **wbStatusToInternal** — полный маппинг: new/waiting→pending; confirm/complete/indelivery/delivering→shipped; delivered/receive→completed; cancel/user_cancel/declined/declined_by_client/cancel_ignore/defect/cancelled→cancelled; default→pending
 - **Защита от реактивации**: если `orders.status='cancelled'` И новый wbStatus не 'cancelled' — autoSyncWbOrders ПРОПУСКАЕТ обновление (continue). Не трогать!
-- Вкладка "Новые": фильтр `wb_status IN ('new','waiting') AND wb_supply_id IS NULL AND created_at >= NOW() - 7 days`
 - Призрачные заказы от старых/удалённых аккаунтов: отключить API ключ в marketplace_settings, удалить заказы через SQL
+
+### WB FBS — маппинг статусов и фильтры вкладок (ЭТАЛОН — НЕ ИЗМЕНЯТЬ):
+
+**wbStatusToInternal** (routes.ts, ~line 3951) — единственный источник истины:
+```
+new / waiting                                                     → pending   (Новые)
+confirm / complete / indelivery / delivering / ready_for_pickup   → shipped   (На сборке / В пути)
+delivered / receive / sold                                        → completed (Выполнен)
+cancel / canceled / user_cancel / canceled_by_client /
+  declined / declined_by_client / cancel_ignore / defect / cancelled → cancelled
+(всё остальное)                                                   → pending
+```
+
+**Эталонные SQL-фильтры вкладок** (GET /api/wb/orders, GET /api/wb/supplies, GET /api/wb/counts):
+
+**Новые** — заказы без поставки, последние 7 дней:
+```sql
+wb_status IN ('new','waiting') AND wb_supply_id IS NULL AND created_at >= NOW() - INTERVAL '7 days'
+```
+
+**На сборке** — открытые поставки с активными заказами (не ушедшими дальше confirm):
+```sql
+ws.status = 'open'
+AND EXISTS     (SELECT 1 FROM orders o WHERE o.wb_status IN ('new','waiting','confirm') AND o.wb_supply_id = ws.supply_id)
+AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.wb_status IN ('indelivery','delivering','shipped','ready_for_pickup','sold','complete','delivered','receive') AND o.wb_supply_id = ws.supply_id)
+```
+
+**В доставке** ⚠️ КРИТИЧНО — фильтр по дате закрытия ПОСТАВКИ, НЕ по статусам заказов:
+```sql
+ws.status = 'closed'
+AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
+```
+НЕ добавлять EXISTS/фильтр по wb_status заказов! Поставка остаётся «В доставке» ~20 дней
+после сканирования WB, даже если все заказы внутри уже имеют статус delivered/receive.
+WB LS использует логику уровня поставки (дата закрытия), а не уровня заказов.
+Старые поставки (2025, ранний март) имеют closed_at из своего реального времени → исключаются автоматически.
+
+**Архив** — заказы с финальными статусами:
+```sql
+wb_status IN ('delivered','sold','receive','returned','sorted','waiting_for_cancel','ready_for_pickup')
+```
+
+**Отменённые** — все варианты отмены WB API:
+```sql
+wb_status IN ('cancel','canceled','user_cancel','canceled_by_client','declined','cancelled','cancel_ignore','defect','declined_by_client')
+OR status = 'cancelled'
+```
 
 ### Синхронизация заказов Ozon — Золотой стандарт:
 - since = предыдущий день 21:00:00 UTC (= 00:00:00 МСК текущего дня)
@@ -153,7 +198,7 @@ npm run build        # production сборка
 ✓ Зеркальная синхронизация поставок WB — syncWbSuppliesForOrg разделяет ACTIVE и CLOSED блоки; после успешного ACTIVE-фетча (200 OK) закрывает устаревшие «open»-поставки в БД (SET status='closed', closed_at=NOW()) которые отсутствуют в ответе WB API — только для записей с store_id != null; кнопки ручного «Синхронизировать поставки» удалены из UI (вкладки На сборке и В доставке); лог: [wb-supply-sync] store {id}: {N} активных в WB, закрыто устаревших: {M}
 ✓ WB «На сборке» фильтр — GET /api/wb/supplies?status=open и GET /api/wb/counts assembly_count показывают только поставки с заказами wb_status IN ('new','waiting','confirm'); пустые поставки (0 заказов) и поставки с устаревшими статусами не отображаются; syncWbStaleOrdersAll — запускается через 15 с при старте: обновляет wb_status заказов за 60 дней у которых в БД стоит 'new'/'waiting' но в WB API уже другой статус, затем вызывает syncWbSuppliesForOrg для закрытия устаревших поставок
 ✓ syncWbStaleOrdersAll автоочистка >21 дня — Шаг А: UPDATE orders SET wb_status='delivered',status='completed' для заказов 'new' в открытых поставках старше 21 дня; Шаг Б: закрывает эти поставки (NOT EXISTS активных заказов); защита от накопления устаревших данных при сбоях WB API
-✓ WB «В доставке» — защита от повторного открытия: ACTIVE upsert НЕ сбрасывает status в 'open' если поставка уже 'closed' (WHERE status='open' в UPDATE); GET /api/wb/supplies?status=closed фильтрует по EXISTS (orders с wb_status IN ('delivering','indelivery','shipped','confirm','complete')) — только поставки с заказами реально в пути; сортировка closed_at DESC NULLS LAST; delivery_count в /api/wb/counts тоже через EXISTS-фильтр (COUNT DISTINCT supply_id)
+✓ WB «В доставке» — ЭТАЛОН ЗАФИКСИРОВАН: ACTIVE upsert НЕ сбрасывает status в 'open' если поставка уже 'closed'; GET /api/wb/supplies?status=closed и delivery_count в /api/wb/counts используют ТОЛЬКО временной фильтр: COALESCE(closed_at, created_at) >= NOW() - INTERVAL '20 days' — БЕЗ EXISTS по статусам заказов; сортировка closed_at DESC NULLS LAST; старые поставки 2025 года отсечены навсегда через реальный closed_at
 ✓ WB Архив: syncWbArchiveStatuses — каждый час (+ через 30с при старте) запрашивает WB API за последние 30 дней, обновляет wb_status+status для СУЩЕСТВУЮЩИХ заказов которые изменили статус; НЕ создаёт новые записи; решает проблему «заказы 8-21 марта есть в БД но статус не обновлён» (autoSyncWbOrders берёт только вчерашний день); архивный фильтр расширен: added 'sorted','waiting_for_cancel'; archive_count тоже расширен
 ✓ WB вкладка «Отменённые» — исправлены все три проблемы: (1) оранжевый блок заменён на синий информационный с кнопкой «Перейти в остатки» → /products; (2) wbStatusToInternal расширен: cancel_ignore + defect + cancelled → "cancelled"; (3) фильтр GET /api/wb/orders?status=cancelled включает defect; POST /api/wb/sync-cancelled — бэкфилл за 30 дней; startup авто-запуск бэкфилла если 0 cancelled WB заказов в БД
 ✓ WB призрачные заказы — исправлено: отключён marketplace_settings id=4 (null-store, старый аккаунт); autoSyncWbOrders не реактивирует cancelled заказы (защита по status='cancelled'); wbStatusToInternal добавлен declined_by_client→cancelled; Phase 4 backfill в syncWbSuppliesForOrg создаёт пропущенные заказы поставок за 30 дней + исправляет store_id=NULL

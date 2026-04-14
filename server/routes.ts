@@ -3948,6 +3948,17 @@ export async function registerRoutes(
     }
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // WB FBS СТАТУСЫ — ЭТАЛОННЫЙ МАППИНГ. НЕ ИЗМЕНЯТЬ без явного указания.
+  // WB API wbStatus → internal CRM status
+  //   new / waiting                                      → pending   (вкладка Новые)
+  //   confirm / complete / indelivery / delivering /
+  //     ready_for_pickup                                 → shipped   (На сборке / в пути)
+  //   delivered / receive / sold                         → completed (Выполнен / Архив)
+  //   cancel / canceled / user_cancel / declined /
+  //     declined_by_client / cancel_ignore / defect /
+  //     cancelled / canceled_by_client                   → cancelled (Отменённые)
+  // ═══════════════════════════════════════════════════════════════════════════
   const wbStatusToInternal = (wbStatus: string): string => {
     switch (wbStatus) {
       case "new":
@@ -6108,6 +6119,9 @@ export async function registerRoutes(
               AND o_del.wb_status IN ('indelivery', 'delivering', 'shipped', 'ready_for_pickup', 'sold', 'complete', 'delivered', 'receive')
           )` : sql``}
           ${status === "closed" ? sql`
+          -- ЭТАЛОННЫЙ ФИЛЬТР «В ДОСТАВКЕ»: только по дате закрытия поставки (≤20 дней).
+          -- НЕ добавлять EXISTS/фильтр по wb_status заказов — поставка живёт 20 дней
+          -- независимо от прогресса заказов внутри (часть может быть delivered).
           AND ws.status = 'closed'
           AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
@@ -6430,6 +6444,7 @@ export async function registerRoutes(
               AND o.source = 'wildberries'
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
+          -- ЭТАЛОН: delivery_count = закрытые поставки ≤20 дней (зеркало WB LS «В доставке»)
           COUNT(DISTINCT CASE WHEN ws.status = 'closed'
             AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
           THEN ws.supply_id END) as delivery_count
