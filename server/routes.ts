@@ -6109,12 +6109,9 @@ export async function registerRoutes(
           )` : sql``}
           ${status === "closed" ? sql`
           AND ws.status = 'closed'
-          AND ws.wb_synced_as_closed = true
-          AND EXISTS (
-            SELECT 1 FROM orders o2
-            WHERE o2.wb_supply_id = ws.supply_id
-              AND o2.source = 'wildberries'
-              AND o2.wb_status IN ('confirm', 'complete', 'indelivery', 'delivering', 'shipped', 'ready_for_pickup', 'sorted', 'waiting_for_cancel')
+          AND (
+            ws.wb_synced_as_closed = true
+            OR COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
           )` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ${status === "closed" ? sql`ws.closed_at DESC NULLS LAST` : sql`ws.created_at DESC`}
@@ -6437,11 +6434,9 @@ export async function registerRoutes(
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
           COUNT(DISTINCT CASE WHEN ws.status = 'closed'
-            AND ws.wb_synced_as_closed = true
-            AND EXISTS (
-              SELECT 1 FROM orders o2
-              WHERE o2.wb_supply_id = ws.supply_id
-              AND o2.wb_status IN ('confirm', 'complete', 'indelivery', 'delivering', 'shipped', 'ready_for_pickup', 'sorted', 'waiting_for_cancel')
+            AND (
+              ws.wb_synced_as_closed = true
+              OR COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
             )
           THEN ws.supply_id END) as delivery_count
         FROM wb_supplies ws
