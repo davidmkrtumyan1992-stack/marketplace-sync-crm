@@ -6109,10 +6109,7 @@ export async function registerRoutes(
           )` : sql``}
           ${status === "closed" ? sql`
           AND ws.status = 'closed'
-          AND (
-            ws.wb_synced_as_closed = true
-            OR COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
-          )` : sql``}
+          AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ${status === "closed" ? sql`ws.closed_at DESC NULLS LAST` : sql`ws.created_at DESC`}
       `);
@@ -6434,10 +6431,7 @@ export async function registerRoutes(
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
           COUNT(DISTINCT CASE WHEN ws.status = 'closed'
-            AND (
-              ws.wb_synced_as_closed = true
-              OR COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
-            )
+            AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
           THEN ws.supply_id END) as delivery_count
         FROM wb_supplies ws
         WHERE organization_id = ${orgId}
