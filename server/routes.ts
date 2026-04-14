@@ -5143,12 +5143,15 @@ export async function registerRoutes(
           const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
 
           if (existing) {
+            // Если WB API говорит что поставка ACTIVE — всегда ставим status='open'
+            // (снимаем защиту AND status='open' — она мешала переоткрыть ошибочно закрытые поставки)
             await db.execute(sql`
               UPDATE wb_supplies SET
                 name = ${supplyName},
+                status = 'open',
+                closed_at = NULL,
                 wb_synced_as_closed = false
               WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
-                AND status = 'open'
             `);
           } else {
             await db.insert(wbSuppliesTable).values({
@@ -5247,9 +5250,9 @@ export async function registerRoutes(
     }
 
     // ── ФАЗА 2: TOTAL MIRROR CLEANUP ────────────────────────────────────────
-    // Runs only when at least one ACTIVE fetch succeeded.
-    // Uses the UNION of all accounts' ACTIVE IDs → safe for multi-account orgs.
-    if (anyActiveFetchSucceeded) {
+    // Runs only when at least one ACTIVE fetch succeeded AND WB returned non-empty list.
+    // Guard allActiveSupplyIds.size > 0 prevents closing ALL supplies when WB API returns empty.
+    if (anyActiveFetchSucceeded && allActiveSupplyIds.size > 0) {
       const openRows = await db.execute(sql`
         SELECT supply_id FROM wb_supplies
         WHERE status = 'open'
