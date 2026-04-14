@@ -5459,12 +5459,17 @@ export async function registerRoutes(
               if (existing) {
                 const supplyChanged = existing.wbSupplyId !== supplyId;
                 const storeMissing30 = !existing.storeId;
-                if (supplyChanged || storeMissing30) {
+                const newWbStatus = o.wbStatus || o.status || "confirm";
+                const statusChanged = existing.status !== "cancelled" && existing.wbStatus !== newWbStatus;
+                if (supplyChanged || storeMissing30 || statusChanged) {
+                  const newInternalStatus = wbStatusToInternal(newWbStatus);
                   await db.execute(sql`
                     UPDATE orders SET
                       wb_supply_id = COALESCE(wb_supply_id, ${supplyId}),
                       store_id = COALESCE(store_id, ${resolvedStoreId}),
-                      source_store_name = COALESCE(source_store_name, ${resolvedStoreName})
+                      source_store_name = COALESCE(source_store_name, ${resolvedStoreName}),
+                      wb_status = CASE WHEN status != 'cancelled' THEN ${newWbStatus} ELSE wb_status END,
+                      status = CASE WHEN status != 'cancelled' THEN ${newInternalStatus} ELSE status END
                     WHERE id = ${existing.id}
                   `);
                   linked30++;
