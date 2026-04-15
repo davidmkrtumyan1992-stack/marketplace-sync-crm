@@ -5285,26 +5285,42 @@ export async function registerRoutes(
           const supplyName = supply.name || null;
           const createdAtRaw = supply.createdAt || supply.created_at;
           const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
+          const closedAtRawActive = supply.closedAt || supply.closed_at;
+          const closedAtTsActive = closedAtRawActive ? new Date(closedAtRawActive) : null;
+          // closedAt из ACTIVE API → поставка уже отсканирована WB складом («В доставке»)
+          // closedAt null → поставка ещё собирается («На сборке»)
+          const isScanned = !!closedAtTsActive;
 
           if (existing) {
-            // Если WB API говорит что поставка ACTIVE — всегда ставим status='open'
-            // (снимаем защиту AND status='open' — она мешала переоткрыть ошибочно закрытые поставки)
-            await db.execute(sql`
-              UPDATE wb_supplies SET
-                name = ${supplyName},
-                status = 'open',
-                closed_at = NULL,
-                wb_synced_as_closed = false
-              WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
-            `);
+            if (isScanned) {
+              await db.execute(sql`
+                UPDATE wb_supplies SET
+                  name = ${supplyName},
+                  status = 'closed',
+                  closed_at = ${closedAtTsActive},
+                  wb_synced_as_closed = true
+                WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+              `);
+            } else {
+              await db.execute(sql`
+                UPDATE wb_supplies SET
+                  name = ${supplyName},
+                  status = 'open',
+                  closed_at = NULL,
+                  wb_synced_as_closed = false
+                WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+              `);
+            }
           } else {
             await db.insert(wbSuppliesTable).values({
               supplyId,
               storeId: resolvedStoreId ?? undefined,
               organizationId: orgId,
               name: supplyName,
-              status: "open",
+              status: isScanned ? "closed" : "open",
               createdAt: createdAtTs,
+              closedAt: closedAtTsActive ?? undefined,
+              wbSyncedAsClosed: isScanned,
             } as any);
           }
           totalSynced++;
@@ -5482,23 +5498,8 @@ export async function registerRoutes(
             }
 
             if (allActiveSupplyIds.has(supplyId)) {
-              // Supply появилась в BOTH ACTIVE и CLOSED (переходный момент).
-              // WB CLOSED API — авторитетный источник: поставка уже закрыта.
-              // Принудительно закрываем, иначе она навсегда застрянет как 'open'.
-              if (isRecent) {
-                if (closedAtTs) {
-                  await db.execute(sql`
-                    UPDATE wb_supplies SET status = 'closed', wb_synced_as_closed = true, closed_at = ${closedAtTs}
-                    WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
-                  `);
-                } else {
-                  await db.execute(sql`
-                    UPDATE wb_supplies SET status = 'closed', wb_synced_as_closed = true
-                    WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
-                  `);
-                }
-                console.log(`[wb-supply-sync] ${displayName2}: ACTIVE+CLOSED → force-closed ${supplyId}`);
-              }
+              // Supply в WB ACTIVE+CLOSED: Phase 1 уже обработал через closedAt.
+              // Не перезаписываем — пропускаем.
               continue;
             }
             closedOnlyCount++;
@@ -6217,16 +6218,27 @@ export async function registerRoutes(
               AND o_del.wb_status IN ('indelivery', 'delivering', 'shipped', 'ready_for_pickup', 'sold', 'complete', 'delivered', 'receive')
           )` : sql``}
           ${status === "closed" ? sql`
-          -- ЭТАЛОННЫЙ ФИЛЬТР «В ДОСТАВКЕ»: только по дате закрытия поставки (≤20 дней).
-          -- НЕ добавлять EXISTS/фильтр по wb_status заказов — поставка живёт 20 дней
-          -- независимо от прогресса заказов внутри (часть может быть delivered).
-          -- Дополнительно: только поставки с заказами в БД (phantom supplies без заказов исключаются).
+          -- ЭТАЛОННЫЙ ФИЛЬТР «В ДОСТАВКЕ»: по дате закрытия поставки (≤20 дней)
+          -- + хотя бы один заказ не в финальном статусе (WB убирает поставку когда все доставлены).
+          -- НЕ фильтровать по конкретным wb_status — достаточно NOT IN финальных.
+          -- Phantom supplies (0 заказов в БД) тоже исключаются.
           AND ws.status = 'closed'
           AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
           AND EXISTS (
             SELECT 1 FROM orders o_exist
             WHERE o_exist.wb_supply_id = ws.supply_id
               AND o_exist.organization_id = ws.organization_id
+          )
+          AND EXISTS (
+            SELECT 1 FROM orders o_active
+            WHERE o_active.wb_supply_id = ws.supply_id
+              AND o_active.organization_id = ws.organization_id
+              AND o_active.wb_status NOT IN (
+                'delivered','receive','sold',
+                'cancelled','canceled','user_cancel','canceled_by_client',
+                'declined','declined_by_client','cancel_ignore','defect','cancelled',
+                'returned','sorted','waiting_for_cancel'
+              )
           )` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ${status === "closed" ? sql`ws.closed_at DESC NULLS LAST` : sql`ws.created_at DESC`}
@@ -6548,13 +6560,24 @@ export async function registerRoutes(
               AND o.source = 'wildberries'
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
-          -- ЭТАЛОН: delivery_count = закрытые поставки ≤20 дней с заказами в БД (зеркало WB LS «В доставке»)
+          -- ЭТАЛОН: delivery_count = закрытые поставки ≤20 дней с хотя бы одним незавершённым заказом
           COUNT(DISTINCT CASE WHEN ws.status = 'closed'
             AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
             AND EXISTS (
               SELECT 1 FROM orders oe
               WHERE oe.wb_supply_id = ws.supply_id
                 AND oe.organization_id = ws.organization_id
+            )
+            AND EXISTS (
+              SELECT 1 FROM orders oa
+              WHERE oa.wb_supply_id = ws.supply_id
+                AND oa.organization_id = ws.organization_id
+                AND oa.wb_status NOT IN (
+                  'delivered','receive','sold',
+                  'cancelled','canceled','user_cancel','canceled_by_client',
+                  'declined','declined_by_client','cancel_ignore','defect','cancelled',
+                  'returned','sorted','waiting_for_cancel'
+                )
             )
           THEN ws.supply_id END) as delivery_count
         FROM wb_supplies ws

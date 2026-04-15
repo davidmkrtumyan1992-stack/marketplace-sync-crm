@@ -112,15 +112,22 @@ AND EXISTS     (SELECT 1 FROM orders o WHERE o.wb_status IN ('new','waiting','co
 AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.wb_status IN ('indelivery','delivering','shipped','ready_for_pickup','sold','complete','delivered','receive') AND o.wb_supply_id = ws.supply_id)
 ```
 
-**В доставке** ⚠️ КРИТИЧНО — фильтр по дате закрытия ПОСТАВКИ, НЕ по статусам заказов:
+**В доставке** ⚠️ КРИТИЧНО — фильтр по дате закрытия + хотя бы один незавершённый заказ:
 ```sql
 ws.status = 'closed'
 AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
 AND EXISTS (SELECT 1 FROM orders o WHERE o.wb_supply_id = ws.supply_id AND o.organization_id = ws.organization_id)
+AND EXISTS (
+  SELECT 1 FROM orders o WHERE o.wb_supply_id = ws.supply_id AND o.organization_id = ws.organization_id
+  AND o.wb_status NOT IN ('delivered','receive','sold','cancelled','canceled','user_cancel',
+    'canceled_by_client','declined','declined_by_client','cancel_ignore','defect','cancelled',
+    'returned','sorted','waiting_for_cancel')
+)
 ```
-НЕ добавлять EXISTS/фильтр по wb_status заказов! Поставка остаётся «В доставке» ~20 дней
-после сканирования WB, даже если все заказы внутри уже имеют статус delivered/receive.
-WB LS использует логику уровня поставки (дата закрытия), а не уровня заказов.
+WB убирает поставку из «В доставке» когда все заказы доставлены/отменены.
+Второй EXISTS — NOT IN финальных статусов (не фильтрация по конкретному wb_status).
+**Phase 1 sync**: если supply в WB ACTIVE API имеет `closedAt` → статус 'closed' (уже отсканирована).
+Если `closedAt` null → статус 'open' (ещё собирается). Phase 3 ACTIVE+CLOSED → skip (Phase 1 приоритетен).
 EXISTS без wb_status — проверка на наличие хотя бы одного заказа в БД. Phantom поставки (0 заказов
 в таблице orders) исключаются — это не нарушение правила выше, поскольку не фильтрует по wb_status.
 Старые поставки (2025, ранний март) имеют closed_at из своего реального времени → исключаются автоматически.
