@@ -82,7 +82,7 @@ organizations → companies → stores → marketplace_settings
 - Единственный активный WB магазин: **store_id=45** (Бушуева - WB, ИП Бабушева А.Ю., WB seller ID 250056193)
 - `marketplace_settings` id=4 (store_id=NULL) — **ОТКЛЮЧЁН** (is_active=false). Это был API ключ от удалённого аккаунта. НЕ включать!
 - `autoSyncWbOrders` — каждые 2 мин, окно: вчера 21:00 UTC до сегодня 21:00 UTC + `/api/v3/orders/new`
-- `syncWbSuppliesForOrg` — вызывается после каждого autoSyncWbOrders; Phase 4: 30-дневный бэкфилл создаёт заказы в поставках которых нет в БД
+- `syncWbSuppliesForOrg` — вызывается после каждого autoSyncWbOrders; Phase 4: 30-дневный бэкфилл создаёт заказы в поставках которых нет в БД; для ЗАКРЫТЫХ поставок (WB API /api/v3/supplies/{id}/orders возвращает []) — date-fallback: UPDATE orders WHERE wb_supply_id IS NULL AND created_at между -7/+3 днями от даты создания поставки
 - **Защита от реактивации**: если `orders.status='cancelled'` И новый wbStatus не 'cancelled' — autoSyncWbOrders ПРОПУСКАЕТ обновление (continue). Не трогать!
 - Призрачные заказы от старых/удалённых аккаунтов: отключить API ключ в marketplace_settings, удалить заказы через SQL
 
@@ -212,6 +212,7 @@ npm run build        # production сборка
 ✓ WB Архив: syncWbArchiveStatuses — каждый час (+ через 30с при старте) запрашивает WB API за последние 30 дней, обновляет wb_status+status для СУЩЕСТВУЮЩИХ заказов которые изменили статус; НЕ создаёт новые записи; решает проблему «заказы 8-21 марта есть в БД но статус не обновлён» (autoSyncWbOrders берёт только вчерашний день); архивный фильтр расширен: added 'sorted','waiting_for_cancel'; archive_count тоже расширен
 ✓ WB вкладка «Отменённые» — исправлены все три проблемы: (1) оранжевый блок заменён на синий информационный с кнопкой «Перейти в остатки» → /products; (2) wbStatusToInternal расширен: cancel_ignore + defect + cancelled → "cancelled"; (3) фильтр GET /api/wb/orders?status=cancelled включает defect; POST /api/wb/sync-cancelled — бэкфилл за 30 дней; startup авто-запуск бэкфилла если 0 cancelled WB заказов в БД
 ✓ WB призрачные заказы — исправлено: отключён marketplace_settings id=4 (null-store, старый аккаунт); autoSyncWbOrders не реактивирует cancelled заказы (защита по status='cancelled'); wbStatusToInternal добавлен declined_by_client→cancelled; Phase 4 backfill в syncWbSuppliesForOrg создаёт пропущенные заказы поставок за 30 дней + исправляет store_id=NULL
+✓ WB Phase 4 fallback для закрытых поставок — WB API возвращает [] для closed/processed supply; fallback: UPDATE orders SET wb_supply_id WHERE wb_supply_id IS NULL AND created_at IN [-7d, +3d] от даты создания поставки; решено: поставка WB-GI-229135903 не отображалась в «В доставке» из-за 0 заказов в БД (коммит d048423)
 📋 Синхронизация цены Яндекс Маркет — планируется
 
 ## Жизненный цикл магазина
