@@ -5640,6 +5640,35 @@ export async function registerRoutes(
             continue;
           }
 
+          // Fallback для закрытых поставок: WB API возвращает [] для closed supplies —
+          // ищем в БД заказы магазина с wb_supply_id IS NULL в диапазоне ±7/3 дней от создания поставки
+          if (supplyOrders.length === 0) {
+            const supplyMetaRows = await db.execute(sql`
+              SELECT status, created_at FROM wb_supplies
+              WHERE supply_id = ${supplyId} AND store_id = ${resolvedStoreId}
+              LIMIT 1
+            `);
+            const sm = ((supplyMetaRows as any).rows || supplyMetaRows)[0];
+            if (sm && sm.status === 'closed') {
+              const supplyCreatedAt = new Date(sm.created_at);
+              const rangeStart = new Date(supplyCreatedAt.getTime() - 7 * 24 * 3600 * 1000);
+              const rangeEnd   = new Date(supplyCreatedAt.getTime() + 3 * 24 * 3600 * 1000);
+              const fallbackResult = await db.execute(sql`
+                UPDATE orders SET wb_supply_id = ${supplyId}
+                WHERE store_id      = ${resolvedStoreId}
+                  AND organization_id = ${orgId}
+                  AND wb_supply_id  IS NULL
+                  AND source        = 'wildberries'
+                  AND created_at   >= ${rangeStart}
+                  AND created_at   <= ${rangeEnd}
+              `);
+              const fallbackLinked = (fallbackResult as any).rowCount ?? 0;
+              if (fallbackLinked > 0) {
+                console.log(`[wb-supply-backfill] Closed supply ${supplyId}: date-fallback linked ${fallbackLinked} orders`);
+              }
+            }
+          }
+
           for (const o of supplyOrders) {
             const wbOrderId = String(o.id || "");
             if (!wbOrderId) continue;
