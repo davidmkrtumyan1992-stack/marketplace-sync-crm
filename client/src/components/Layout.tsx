@@ -19,10 +19,8 @@ import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { useProducts } from "@/hooks/use-products";
-import { useOrders } from "@/hooks/use-orders";
 import { useQuery } from "@tanstack/react-query";
-import { Customer, InventorySyncSetting } from "@shared/schema";
+import { InventorySyncSetting } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -37,17 +35,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { role, canAccessProducts, canAccessOrders, canAccessIntake, canAccessCustomers, canAccessReports, canAccessSettings } = useRole();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
-  const { data: products } = useProducts();
-  const { data: orders } = useOrders();
-  const { data: customers } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: syncSettings } = useQuery<InventorySyncSetting>({
     queryKey: ["/api/inventory-sync/settings"],
   });
   const isDemoMode = syncSettings?.demoMode ?? false;
-
-  const totalProducts = products?.length || 0;
-  const totalOrders = orders?.length || 0;
-  const totalCustomers = customers?.length || 0;
 
   const allNavItems = [
     { href: "/", label: "Панель", icon: LayoutDashboard, visible: true },
@@ -60,12 +51,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
   ];
 
   const navItems = useMemo(() => allNavItems.filter(item => item.visible), [canAccessProducts, canAccessOrders, canAccessIntake, canAccessCustomers, canAccessReports, canAccessSettings]);
-
-  const stats = [
-    { icon: Package, value: totalProducts, label: "Товаров", color: "from-primary to-accent", visible: canAccessProducts },
-    { icon: ShoppingCart, value: totalOrders, label: "Заказов", color: "from-accent to-primary", visible: canAccessOrders },
-    { icon: Users, value: totalCustomers, label: "Клиентов", color: "from-primary/80 to-accent/80", visible: canAccessCustomers },
-  ].filter(s => s.visible);
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -99,30 +84,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
-
-        <div className="px-4 py-4 space-y-3">
-          <p className="text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/50 px-2">
-            Обзор
-          </p>
-          {stats.map((stat) => {
-            const Icon = stat.icon;
-            return (
-              <div 
-                key={stat.label}
-                className="stat-card-premium flex items-center gap-4"
-                data-testid={`sidebar-stat-${stat.label.toLowerCase()}`}
-              >
-                <div className={`icon-box icon-box-lg bg-gradient-to-br ${stat.color}`}>
-                  <Icon className="w-6 h-6 text-primary-foreground" />
-                </div>
-                <div className="flex-1">
-                  <p className="stat-number text-3xl">{stat.value}</p>
-                  <p className="stat-label text-xs mt-0.5">{stat.label}</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
 
         <div className="p-4 border-t border-sidebar-foreground/10">
           <div className="flex items-center gap-3 px-2 py-2">
@@ -221,25 +182,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
               </button>
             </nav>
             
-            <div className="mt-6 space-y-3">
-              {stats.map((stat) => {
-                const Icon = stat.icon;
-                return (
-                  <div 
-                    key={stat.label}
-                    className="stat-card-premium flex items-center gap-4"
-                  >
-                    <div className={`icon-box icon-box-lg bg-gradient-to-br ${stat.color}`}>
-                      <Icon className="w-6 h-6 text-primary-foreground" />
-                    </div>
-                    <div>
-                      <p className="stat-number text-3xl">{stat.value}</p>
-                      <p className="stat-label text-xs">{stat.label}</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
           </div>
         )}
 

@@ -172,6 +172,52 @@ function CancelReasonLabel({ wbStatus, status }: { wbStatus: string; status?: st
   return <span className="text-sm text-red-600 dark:text-red-400">{label}</span>;
 }
 
+function wbStatusInfo(wbStatus: string): { label: string; className: string } {
+  switch (wbStatus) {
+    case "delivered":
+    case "receive":
+    case "sold":
+      return { label: "Товар выкуплен", className: "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400" };
+    case "ready_for_pickup":
+      return { label: "Ждёт покупателя в ПВЗ", className: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400" };
+    case "sorted":
+      return { label: "Отсортировано", className: "bg-violet-100 text-violet-800 border-violet-200 dark:bg-violet-900/30 dark:text-violet-400" };
+    case "indelivery":
+    case "delivering":
+      return { label: "В доставке", className: "bg-sky-100 text-sky-800 border-sky-200 dark:bg-sky-900/30 dark:text-sky-400" };
+    case "confirm":
+    case "complete":
+      return { label: "Подтверждён", className: "bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400" };
+    case "waiting_for_cancel":
+      return { label: "Ожидает отмены", className: "bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400" };
+    case "cancel":
+    case "canceled":
+    case "cancelled":
+    case "user_cancel":
+    case "canceled_by_client":
+    case "declined":
+    case "declined_by_client":
+    case "cancel_ignore":
+    case "defect":
+      return { label: "Отменён", className: "bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400" };
+    case "new":
+    case "waiting":
+      return { label: "Новый", className: "bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-900/30 dark:text-gray-400" };
+    default:
+      return { label: wbStatus || "—", className: "bg-gray-100 text-gray-600 border-gray-200 dark:bg-gray-800 dark:text-gray-400" };
+  }
+}
+
+function WbStatusBadge({ wbStatus }: { wbStatus?: string }) {
+  if (!wbStatus) return <span className="text-muted-foreground text-xs">—</span>;
+  const { label, className } = wbStatusInfo(wbStatus);
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${className}`}>
+      {label}
+    </span>
+  );
+}
+
 function RenameSupplyDialog({
   open,
   supplyId,
@@ -445,16 +491,34 @@ function SupplyDetailDialog({
     ? `Поставка от ${format(new Date(supply.created_at), "dd.MM.yyyy", { locale: ru })}`
     : supplyId);
 
+  const deliveryActions = useSupplyActions(supply || { supply_id: supplyId, store_id: storeId }, toast, queryClient);
+
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-6xl w-full" data-testid="dialog-supply-detail">
         <DialogHeader>
-          <DialogTitle>
-            {supplyId} — {pluralOrders(orders.length)}
-          </DialogTitle>
-          {supplyName !== supplyId && (
-            <p className="text-sm text-muted-foreground mt-1">{supplyName}</p>
-          )}
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <DialogTitle>
+                {supplyId} — {pluralOrders(orders.length)}
+              </DialogTitle>
+              {supplyName !== supplyId && (
+                <p className="text-sm text-muted-foreground">{supplyName}</p>
+              )}
+            </div>
+            {!isAssembly && (
+              <div className="flex gap-2 flex-shrink-0">
+                <Button size="sm" variant="outline" onClick={deliveryActions.handleAcceptanceAct}>
+                  <FileText className="w-4 h-4 mr-1.5" />
+                  Скачать акт
+                </Button>
+                <Button size="sm" variant="outline" onClick={deliveryActions.handlePrintQr}>
+                  <QrCode className="w-4 h-4 mr-1.5" />
+                  Штрихкод поставки
+                </Button>
+              </div>
+            )}
+          </div>
         </DialogHeader>
         <div className="flex gap-4 overflow-hidden">
           {/* Левая часть: таблица заказов */}
@@ -478,16 +542,23 @@ function SupplyDetailDialog({
                       )}
                       <TableHead>Заказ WB</TableHead>
                       <TableHead>Товар</TableHead>
-                      <TableHead>Артикул</TableHead>
-                      <TableHead>Баркод</TableHead>
-                      <TableHead>Кол-во</TableHead>
+                      {isAssembly ? (
+                        <>
+                          <TableHead>Артикул</TableHead>
+                          <TableHead>Баркод</TableHead>
+                          <TableHead>Кол-во</TableHead>
+                        </>
+                      ) : (
+                        <TableHead>Статус WB</TableHead>
+                      )}
                       <TableHead>Сумма</TableHead>
+                      {!isAssembly && <TableHead className="w-10" />}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {orders.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={isAssembly ? 7 : 6} className="p-0">
+                        <TableCell colSpan={isAssembly ? 7 : 5} className="p-0">
                           <EmptyState text="Заказы для этой поставки не найдены" />
                         </TableCell>
                       </TableRow>
@@ -509,26 +580,59 @@ function SupplyDetailDialog({
                             </TableCell>
                           )}
                           <TableCell>
-                            <span className="font-mono text-sm">{order.wb_order_id || order.order_number || order.id}</span>
+                            <div className="flex flex-col gap-0.5">
+                              <span className="font-mono text-sm">{order.wb_order_id || order.order_number || order.id}</span>
+                              {order.created_at && (
+                                <span className="text-xs text-muted-foreground">
+                                  {format(new Date(order.created_at), "d MMM", { locale: ru })}
+                                </span>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <ProductPhoto imageUrl={order.image_url} sku={order.sku || ""} size={32} />
-                              <span className="text-sm truncate max-w-[160px]">{order.product_name || "WB товар"}</span>
+                              <div className="flex flex-col gap-0.5 min-w-0">
+                                <span className="text-sm truncate max-w-[180px]">{order.product_name || "WB товар"}</span>
+                                {order.sku && (
+                                  <span className="text-xs text-muted-foreground font-mono truncate">{order.sku}</span>
+                                )}
+                              </div>
                             </div>
                           </TableCell>
+                          {isAssembly ? (
+                            <>
+                              <TableCell>
+                                <span className="font-mono text-xs text-muted-foreground">{order.sku || "—"}</span>
+                              </TableCell>
+                              <TableCell>
+                                <span className="font-mono text-xs text-muted-foreground">{order.barcode || "—"}</span>
+                              </TableCell>
+                              <TableCell>
+                                <span className="font-medium">{order.quantity || 1}</span>
+                              </TableCell>
+                            </>
+                          ) : (
+                            <TableCell>
+                              <WbStatusBadge wbStatus={order.wb_status} />
+                            </TableCell>
+                          )}
                           <TableCell>
-                            <span className="font-mono text-xs text-muted-foreground">{order.sku || "—"}</span>
+                            <span className="text-sm font-medium">{formatCurrency(Number(order.total_amount))}</span>
                           </TableCell>
-                          <TableCell>
-                            <span className="font-mono text-xs text-muted-foreground">{order.barcode || "—"}</span>
-                          </TableCell>
-                          <TableCell>
-                            <span className="font-medium">{order.quantity || 1}</span>
-                          </TableCell>
-                          <TableCell>
-                            <span className="text-sm">{formatCurrency(Number(order.total_amount))}</span>
-                          </TableCell>
+                          {!isAssembly && (
+                            <TableCell className="w-10">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                title="Напечатать стикер"
+                                onClick={() => deliveryActions.handlePrintSingleSticker(Number(order.wb_order_id))}
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                              </Button>
+                            </TableCell>
+                          )}
                         </TableRow>
                       );
                     })}
@@ -773,7 +877,52 @@ function useSupplyActions(supply: any, toast: any, queryClient: any) {
     }
   };
 
-  return { handlePrintStickers, handlePrintQr, handlePickingListPdf, handlePickingListExcel, handleCloseSupply };
+  const handleAcceptanceAct = async () => {
+    try {
+      const params = storeId ? `?storeId=${storeId}` : "";
+      const res = await fetch(`/api/wb/supplies/${supplyId}/acceptance-act${params}`, { credentials: "include" });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        let msg = `Ошибка сервера (${res.status})`;
+        try { msg = JSON.parse(errText).message || msg; } catch {}
+        throw new Error(msg);
+      }
+      const html = await res.text();
+      const win = window.open("", "_blank");
+      if (win) { win.document.write(html); win.document.close(); win.print(); }
+    } catch (e: any) {
+      toast({ title: "Ошибка акта приёмки", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const handlePrintSingleSticker = async (wbOrderId: number) => {
+    if (!wbOrderId) {
+      toast({ title: "Нет WB ID заказа", variant: "destructive" });
+      return;
+    }
+    try {
+      const data = await apiRequest("POST", "/api/wb/stickers", { storeId, wbOrderIds: [wbOrderId] });
+      const result = await data.json();
+      const stickers: { orderId: number; file: string }[] = result.stickers || [];
+      if (stickers.length === 0) {
+        toast({ title: "Стикер не получен от WB API", variant: "destructive" });
+        return;
+      }
+      const printHTML = `<html><head><style>
+        @page { size: 58mm 40mm; margin: 0; }
+        body { margin: 0; padding: 0; }
+        img { width: 58mm; height: 40mm; display: block; }
+      </style></head><body>
+        <img src="data:image/png;base64,${stickers[0].file}" />
+      </body></html>`;
+      const win = window.open("", "_blank");
+      if (win) { win.document.write(printHTML); win.document.close(); win.print(); win.close(); }
+    } catch (e: any) {
+      toast({ title: "Ошибка печати стикера", description: e.message, variant: "destructive" });
+    }
+  };
+
+  return { handlePrintStickers, handlePrintQr, handlePickingListPdf, handlePickingListExcel, handleCloseSupply, handleAcceptanceAct, handlePrintSingleSticker };
 }
 
 function AssemblySupplyRow({
@@ -863,10 +1012,11 @@ function DeliverySupplyRow({
 
   return (
     <TableRow
-      className={isSelected ? "bg-violet-50 dark:bg-violet-900/10" : ""}
+      className={`${isSelected ? "bg-violet-50 dark:bg-violet-900/10" : ""} cursor-pointer hover:bg-muted/40`}
+      onClick={() => onOpenDetail(supply)}
       data-testid={`row-wb-delivery-supply-${supply.supply_id}`}
     >
-      <TableCell className="w-10">
+      <TableCell className="w-10" onClick={(e) => e.stopPropagation()}>
         <Checkbox
           checked={isSelected}
           onCheckedChange={(c) => onSelect(supply.supply_id, !!c)}
@@ -901,7 +1051,7 @@ function DeliverySupplyRow({
       <TableCell>
         <span className="text-sm text-muted-foreground">{supply.store_name || "—"}</span>
       </TableCell>
-      <TableCell>
+      <TableCell onClick={(e) => e.stopPropagation()}>
         <SupplyActionsMenu
           supply={supply}
           onPrintStickers={actions.handlePrintStickers}

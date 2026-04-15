@@ -474,18 +474,11 @@ export type CompanyWithStores = Company & {
 };
 
 // KPI Types
-export type TodayKPI = {
-  ordersCount: number;
-  revenue: number;
-  itemsCount: number;
-};
-
 export type DashboardKPI = {
   totalStock: number;
   capitalization: number;
   expectedRevenue: number;
   realProfit: number;
-  today: TodayKPI;
   stockDistribution: {
     local: number;
     ozon: number;

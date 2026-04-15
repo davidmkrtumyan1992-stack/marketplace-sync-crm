@@ -4941,9 +4941,77 @@ export async function registerRoutes(
           )
         `);
 
-        // Шаг Б — закрыть устаревшие открытые поставки (>21 день) без активных заказов
+        // Шаг 0a: reconciliation — создать stub-записи для supply IDs из заказов,
+        // которых нет в wb_supplies. Это фиксирует кейс когда Phase 3 не синхронизировала
+        // поставку (не вернул WB CLOSED API или попала в allActiveSupplyIds на момент синка).
+        // closed_at = NULL → COALESCE(NULL, min_order_created_at) используется для «В доставке».
         await db.execute(sql`
-          UPDATE wb_supplies SET status = 'closed', closed_at = NOW()
+          INSERT INTO wb_supplies (supply_id, organization_id, store_id, status, created_at, wb_synced_as_closed)
+          SELECT
+            o.wb_supply_id,
+            o.organization_id,
+            o.store_id,
+            CASE
+              WHEN bool_or(o.wb_status IN ('indelivery','delivering','sorted','delivered','receive','sold','ready_for_pickup','complete'))
+              THEN 'closed'
+              ELSE 'open'
+            END,
+            MIN(o.created_at),
+            false
+          FROM orders o
+          WHERE o.source = 'wildberries'
+            AND o.wb_supply_id IS NOT NULL
+            AND o.wb_supply_id != ''
+            AND o.organization_id = ${orgId}
+            AND o.created_at >= NOW() - INTERVAL '25 days'
+            AND NOT EXISTS (
+              SELECT 1 FROM wb_supplies ws
+              WHERE ws.supply_id = o.wb_supply_id AND ws.organization_id = o.organization_id
+            )
+          GROUP BY o.wb_supply_id, o.organization_id, o.store_id
+          ON CONFLICT DO NOTHING
+        `);
+
+        // Шаг 0b: перевести 'open' поставки в 'closed', если все заказы уже advanced
+        // (indelivery / sorted / delivered / etc.) и ни одного активного ('new','waiting','confirm').
+        // Фиксирует кейс когда Phase 1 создала поставку как 'open', а WB её уже отсканировал.
+        await db.execute(sql`
+          UPDATE wb_supplies SET status = 'closed'
+          WHERE status = 'open'
+            AND organization_id = ${orgId}
+            AND EXISTS (
+              SELECT 1 FROM orders o
+              WHERE o.wb_supply_id = wb_supplies.supply_id
+                AND o.wb_status IN ('indelivery','delivering','sorted','delivered','receive','sold','ready_for_pickup','complete')
+                AND o.organization_id = ${orgId}
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM orders o
+              WHERE o.wb_supply_id = wb_supplies.supply_id
+                AND o.wb_status IN ('new','waiting','confirm')
+                AND o.organization_id = ${orgId}
+            )
+        `);
+
+        // Однократный фикс: сброс closed_at для поставок, которые были искусственно закрыты
+        // с closed_at = NOW() (не из WB API). wb_synced_as_closed=false означает, что
+        // Phase 3 CLOSED sync не подтвердил эту поставку. Сбрасываем closed_at в NULL →
+        // COALESCE(NULL, created_at_старая) >= NOW()-20d вернёт false → исчезнет из «В доставке».
+        await db.execute(sql`
+          UPDATE wb_supplies
+          SET closed_at = NULL
+          WHERE status = 'closed'
+            AND wb_synced_as_closed = false
+            AND created_at < NOW() - INTERVAL '20 days'
+            AND closed_at >= NOW() - INTERVAL '20 days'
+            AND organization_id = ${orgId}
+        `);
+
+        // Шаг Б — закрыть устаревшие открытые поставки (>21 день) без активных заказов.
+        // НЕ ставим closed_at = NOW() — это локальная операция, WB не сканировал поставку.
+        // closed_at будет NULL → COALESCE вернёт created_at (старая дата) → не пройдёт 20-дневный фильтр.
+        await db.execute(sql`
+          UPDATE wb_supplies SET status = 'closed'
           WHERE status = 'open' AND created_at < NOW() - INTERVAL '21 days'
           AND organization_id = ${orgId}
           AND NOT EXISTS (
@@ -5342,7 +5410,7 @@ export async function registerRoutes(
       for (const sid of toClose) {
         await db.execute(sql`
           UPDATE wb_supplies
-          SET status = 'closed', closed_at = NOW(), wb_synced_as_closed = false
+          SET status = 'closed', wb_synced_as_closed = false
           WHERE supply_id = ${sid}
             AND status = 'open'
             AND organization_id = ${orgId}
@@ -5367,21 +5435,35 @@ export async function registerRoutes(
       const resolvedStoreId = wbSetting.storeId ?? null;
 
       try {
-        const closedResult = await wbFetchJson(
-          `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=0&status=CLOSED`,
-          authHeaders,
-          25000
-        );
-        if (closedResult.status < 200 || closedResult.status >= 300) {
-          errors.push(`[CLOSED] WB API ${closedResult.status}`);
-          allClosedFetchesSucceeded = false;
-        } else {
+        // ── Пагинация: WB CLOSED API может вернуть >1000 поставок.
+        // Cursor-based loop: next=0 → first page, next=N → next page, next=0 again → end.
+        const displayName2 = wbSetting.storeId ? `store ${wbSetting.storeId}` : `org ${orgId}`;
+        let nextCursor = 0;
+        let pagesFetched = 0;
+        const MAX_CLOSED_PAGES = 10;
+        let closedOnlyCount = 0;
+        let totalClosedFetched = 0;
+
+        do {
+          const closedResult = await wbFetchJson(
+            `${WB_MARKETPLACE_BASE}/api/v3/supplies?limit=1000&next=${nextCursor}&status=CLOSED`,
+            authHeaders,
+            25000
+          );
+          if (closedResult.status < 200 || closedResult.status >= 300) {
+            errors.push(`[CLOSED] WB API ${closedResult.status}`);
+            allClosedFetchesSucceeded = false;
+            break;
+          }
           anyClosedFetchSucceeded = true;
           const supplyData = closedResult.json;
           const supplies: any[] = supplyData.supplies || supplyData.list || [];
-          const displayName2 = wbSetting.storeId ? `store ${wbSetting.storeId}` : `org ${orgId}`;
-          let closedOnlyCount = 0;
-          console.log(`[wb-supply-sync] ${displayName2}: ${supplies.length} закрытых в WB (status=CLOSED)`);
+          nextCursor = Number(supplyData.next ?? 0);
+          pagesFetched++;
+          totalClosedFetched += supplies.length;
+          if (pagesFetched === 1) {
+            console.log(`[wb-supply-sync] ${displayName2}: стр.1 — ${supplies.length} закрытых в WB (status=CLOSED)`);
+          }
 
           for (const supply of supplies) {
             const rawId = supply.id || supply.supplyId || supply.supply_id || "";
@@ -5393,18 +5475,29 @@ export async function registerRoutes(
             const closedAtRaw = supply.closedAt || supply.closed_at;
             const closedAtMs = closedAtRaw ? new Date(closedAtRaw).getTime() : Date.now();
             const isRecent = closedAtMs >= twentyDaysAgo;
+            const closedAtTs = closedAtRaw ? new Date(closedAtRaw) : null;
 
             if (isRecent) {
               allWbClosedIds.add(supplyId);
             }
 
             if (allActiveSupplyIds.has(supplyId)) {
-              // Supply is also in ACTIVE: keep status='open', wb_synced_as_closed только для свежих
+              // Supply появилась в BOTH ACTIVE и CLOSED (переходный момент).
+              // WB CLOSED API — авторитетный источник: поставка уже закрыта.
+              // Принудительно закрываем, иначе она навсегда застрянет как 'open'.
               if (isRecent) {
-                await db.execute(sql`
-                  UPDATE wb_supplies SET wb_synced_as_closed = true
-                  WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
-                `);
+                if (closedAtTs) {
+                  await db.execute(sql`
+                    UPDATE wb_supplies SET status = 'closed', wb_synced_as_closed = true, closed_at = ${closedAtTs}
+                    WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+                  `);
+                } else {
+                  await db.execute(sql`
+                    UPDATE wb_supplies SET status = 'closed', wb_synced_as_closed = true
+                    WHERE supply_id = ${supplyId} AND organization_id = ${orgId}
+                  `);
+                }
+                console.log(`[wb-supply-sync] ${displayName2}: ACTIVE+CLOSED → force-closed ${supplyId}`);
               }
               continue;
             }
@@ -5418,8 +5511,6 @@ export async function registerRoutes(
             const supplyName = supply.name || null;
             const createdAtRaw = supply.createdAt || supply.created_at;
             const createdAtTs = createdAtRaw ? new Date(createdAtRaw) : new Date();
-            // closedAtRaw уже объявлен выше (для isRecent)
-            const closedAtTs = closedAtRaw ? new Date(closedAtRaw) : null;
 
             if (existing) {
               await db.execute(sql`
@@ -5444,6 +5535,13 @@ export async function registerRoutes(
             }
             totalSynced++;
           }
+
+          if (supplies.length < 1000) break; // последняя страница
+        } while (nextCursor > 0 && pagesFetched < MAX_CLOSED_PAGES);
+
+        if (pagesFetched > 1) {
+          console.log(`[wb-supply-sync] ${displayName2}: всего ${totalClosedFetched} CLOSED за ${pagesFetched} стр., уникальных (не в ACTIVE): ${closedOnlyCount}`);
+        } else {
           console.log(`[wb-supply-sync] ${displayName2}: уникальных CLOSED (не в ACTIVE): ${closedOnlyCount}`);
         }
       } catch (e: any) {
@@ -6122,8 +6220,14 @@ export async function registerRoutes(
           -- ЭТАЛОННЫЙ ФИЛЬТР «В ДОСТАВКЕ»: только по дате закрытия поставки (≤20 дней).
           -- НЕ добавлять EXISTS/фильтр по wb_status заказов — поставка живёт 20 дней
           -- независимо от прогресса заказов внутри (часть может быть delivered).
+          -- Дополнительно: только поставки с заказами в БД (phantom supplies без заказов исключаются).
           AND ws.status = 'closed'
-          AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'` : sql``}
+          AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
+          AND EXISTS (
+            SELECT 1 FROM orders o_exist
+            WHERE o_exist.wb_supply_id = ws.supply_id
+              AND o_exist.organization_id = ws.organization_id
+          )` : sql``}
         GROUP BY ws.id, ws.supply_id, ws.name, ws.status, ws.store_id, ws.created_at, ws.closed_at, s.name
         ORDER BY ${status === "closed" ? sql`ws.closed_at DESC NULLS LAST` : sql`ws.created_at DESC`}
       `);
@@ -6444,9 +6548,14 @@ export async function registerRoutes(
               AND o.source = 'wildberries'
               AND o.wb_status IN ('new', 'waiting', 'confirm')
           ) THEN ws.supply_id END) as assembly_count,
-          -- ЭТАЛОН: delivery_count = закрытые поставки ≤20 дней (зеркало WB LS «В доставке»)
+          -- ЭТАЛОН: delivery_count = закрытые поставки ≤20 дней с заказами в БД (зеркало WB LS «В доставке»)
           COUNT(DISTINCT CASE WHEN ws.status = 'closed'
             AND COALESCE(ws.closed_at, ws.created_at) >= NOW() - INTERVAL '20 days'
+            AND EXISTS (
+              SELECT 1 FROM orders oe
+              WHERE oe.wb_supply_id = ws.supply_id
+                AND oe.organization_id = ws.organization_id
+            )
           THEN ws.supply_id END) as delivery_count
         FROM wb_supplies ws
         WHERE organization_id = ${orgId}
@@ -6541,6 +6650,127 @@ export async function registerRoutes(
       res.send(html);
     } catch (error: any) {
       console.error("[wb-picking-pdf] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // GET /api/wb/supplies/:supplyId/acceptance-act — акт приёмки/передачи поставки (HTML для печати)
+  app.get("/api/wb/supplies/:supplyId/acceptance-act", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const supplyId = String(req.params.supplyId);
+
+      const rows = await db.execute(sql`
+        SELECT
+          o.order_number, o.wb_order_id, o.wb_status,
+          p.name as product_name, p.sku, p.barcode,
+          COALESCE(oi.quantity, 1) as quantity,
+          oi.price,
+          o.total_amount
+        FROM orders o
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        LEFT JOIN products p ON oi.product_id = p.id
+        WHERE o.wb_supply_id = ${supplyId}
+          AND o.organization_id = ${orgId}
+        ORDER BY o.id
+      `);
+
+      const supplyRows = await db.execute(sql`
+        SELECT ws.name, ws.closed_at, ws.created_at, s.name as store_name
+        FROM wb_supplies ws
+        LEFT JOIN stores s ON ws.store_id = s.id
+        WHERE ws.supply_id = ${supplyId} AND ws.organization_id = ${orgId}
+        LIMIT 1
+      `);
+
+      const items: any[] = (rows as any).rows || rows;
+      const supplyInfo: any = ((supplyRows as any).rows || supplyRows)[0] || {};
+      const date = new Date().toLocaleDateString("ru-RU");
+      const closedDate = supplyInfo.closed_at
+        ? new Date(supplyInfo.closed_at).toLocaleDateString("ru-RU")
+        : date;
+      const supplyName = supplyInfo.name || `Поставка от ${new Date(supplyInfo.created_at || Date.now()).toLocaleDateString("ru-RU")}`;
+      const storeName = supplyInfo.store_name || "—";
+
+      const totalSum = items.reduce((sum: number, r: any) => sum + Number(r.total_amount || r.price || 0), 0);
+
+      const formatRub = (n: number) => n.toLocaleString("ru-RU") + " ₽";
+
+      const tableRows = items.map((r: any, idx: number) => `
+        <tr>
+          <td style="padding:6px 8px;border:1px solid #d1d5db;text-align:center;color:#6b7280;">${idx + 1}</td>
+          <td style="padding:6px 8px;border:1px solid #d1d5db;font-family:monospace;font-size:11px;">${r.wb_order_id || r.order_number || "—"}</td>
+          <td style="padding:6px 8px;border:1px solid #d1d5db;font-weight:500;">${r.product_name || "WB товар"}</td>
+          <td style="padding:6px 8px;border:1px solid #d1d5db;font-family:monospace;font-size:11px;">${r.sku || "—"}</td>
+          <td style="padding:6px 8px;border:1px solid #d1d5db;text-align:center;">${r.quantity || 1}</td>
+          <td style="padding:6px 8px;border:1px solid #d1d5db;text-align:right;">${formatRub(Number(r.total_amount || r.price || 0))}</td>
+        </tr>
+      `).join("");
+
+      const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Акт приёмки — ${supplyId}</title>
+<style>
+  @page { size: A4; margin: 20mm; }
+  body { font-family: Arial, sans-serif; font-size: 12px; color: #111827; margin: 0; }
+  .header { margin-bottom: 24px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .meta { font-size: 12px; color: #6b7280; margin: 0 0 4px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  th { background: #f3f4f6; padding: 8px; text-align: left; border: 1px solid #d1d5db; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #374151; }
+  .total-row td { font-weight: 700; background: #f9fafb; }
+  .signatures { margin-top: 40px; display: flex; gap: 60px; }
+  .sig-block { flex: 1; }
+  .sig-line { border-bottom: 1px solid #374151; margin-bottom: 4px; height: 30px; }
+  .sig-label { font-size: 11px; color: #6b7280; }
+  @media print { .no-print { display: none; } }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>Акт приёмки / передачи поставки</h1>
+    <p class="meta">Идентификатор поставки: <strong>${supplyId}</strong></p>
+    <p class="meta">Наименование: ${supplyName}</p>
+    <p class="meta">Склад: ${storeName}</p>
+    <p class="meta">Дата сканирования WB: ${closedDate}</p>
+    <p class="meta">Дата документа: ${date}</p>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:32px;text-align:center;">№</th>
+        <th style="width:110px;">Заказ WB</th>
+        <th>Товар</th>
+        <th style="width:100px;">Артикул</th>
+        <th style="width:60px;text-align:center;">Кол-во</th>
+        <th style="width:100px;text-align:right;">Сумма</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${tableRows}
+      <tr class="total-row">
+        <td colspan="4" style="padding:8px;border:1px solid #d1d5db;text-align:right;">Итого:</td>
+        <td style="padding:8px;border:1px solid #d1d5db;text-align:center;">${items.length}</td>
+        <td style="padding:8px;border:1px solid #d1d5db;text-align:right;">${formatRub(totalSum)}</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="signatures">
+    <div class="sig-block">
+      <div class="sig-line"></div>
+      <div class="sig-label">Поставщик (подпись / ФИО / дата)</div>
+    </div>
+    <div class="sig-block">
+      <div class="sig-line"></div>
+      <div class="sig-label">Принял WB (подпись / ФИО / дата)</div>
+    </div>
+  </div>
+</body></html>`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
+    } catch (error: any) {
+      console.error("[wb-acceptance-act] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });

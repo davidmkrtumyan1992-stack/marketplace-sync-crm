@@ -658,21 +658,6 @@ export class DatabaseStorage implements IStorage {
     const companyList = await this.getCompanies(organizationId);
     const allOrders = await db.select().from(orders).where(eq(orders.organizationId, organizationId));
 
-    const activeOrders = allOrders.filter(o => {
-      if (o.source === "ozon" && o.fulfillmentType === "FBS" &&
-        (o.ozonStatus === "awaiting_packaging" || o.ozonStatus === "awaiting_deliver")) return true;
-      if (o.source === "yandex" &&
-        (o.yandexStatus === "NEW" || o.yandexStatus === "PROCESSING" || o.yandexStatus === "READY_TO_SHIP")) return true;
-      return false;
-    });
-    const activeOrderIds = activeOrders.map(o => o.id);
-    let activeItemsCount = 0;
-    if (activeOrderIds.length > 0) {
-      const activeItems = await db.select().from(orderItems).where(inArray(orderItems.orderId, activeOrderIds));
-      activeItemsCount = activeItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
-    }
-    const activeRevenue = activeOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
-
     let totalStock = 0;
     let capitalization = 0;
     let expectedRevenue = 0;
@@ -764,11 +749,6 @@ export class DatabaseStorage implements IStorage {
       capitalization,
       expectedRevenue,
       realProfit,
-      today: {
-        ordersCount: activeOrders.length,
-        revenue: activeRevenue,
-        itemsCount: activeItemsCount,
-      },
       stockDistribution: { local: stockLocal, ozon: stockOzon, wb: stockWb, yandex: stockYandex },
       companies: companiesWithStores
     };
