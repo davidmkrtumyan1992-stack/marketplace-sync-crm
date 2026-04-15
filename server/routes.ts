@@ -5290,6 +5290,9 @@ export async function registerRoutes(
           // closedAt из ACTIVE API → поставка уже отсканирована WB складом («В доставке»)
           // closedAt null → поставка ещё собирается («На сборке»)
           const isScanned = !!closedAtTsActive;
+          if (isScanned) {
+            console.log(`[wb-supply-sync] Phase1 ACTIVE+closedAt: ${supplyId} → closedAt=${closedAtTsActive?.toISOString()}, статус→closed`);
+          }
 
           if (existing) {
             if (isScanned) {
