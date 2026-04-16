@@ -6237,17 +6237,30 @@ export async function registerRoutes(
           ${status !== "all" && status !== "open" && status !== "closed" ? sql`AND ws.status = ${status}` : sql``}
           ${storeId ? sql`AND ws.store_id = ${storeId}` : sql``}
           ${status === "open" ? sql`
-          AND EXISTS (
-            SELECT 1 FROM orders o2
-            WHERE o2.wb_supply_id = ws.supply_id
-              AND o2.source = 'wildberries'
-              AND o2.wb_status IN ('new', 'waiting', 'confirm')
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM orders o_del
-            WHERE o_del.wb_supply_id = ws.supply_id
-              AND o_del.source = 'wildberries'
-              AND o_del.wb_status IN ('indelivery', 'delivering', 'shipped', 'ready_for_pickup', 'sold', 'complete', 'delivered', 'receive')
+          -- ЭТАЛОН «НА СБОРКЕ»: показываем пустые поставки (0 заказов) ИЛИ поставки с активными заказами
+          -- Пустая поставка = open + ни одного заказа в orders → NOT EXISTS без фильтра по wb_status
+          -- Поставка с заказами = open + есть 'new'/'waiting'/'confirm' + нет заказов в стадии доставки
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM orders o2
+              WHERE o2.wb_supply_id = ws.supply_id
+                AND o2.source = 'wildberries'
+                AND o2.organization_id = ws.organization_id
+            )
+            OR (
+              EXISTS (
+                SELECT 1 FROM orders o2
+                WHERE o2.wb_supply_id = ws.supply_id
+                  AND o2.source = 'wildberries'
+                  AND o2.wb_status IN ('new', 'waiting', 'confirm')
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM orders o_del
+                WHERE o_del.wb_supply_id = ws.supply_id
+                  AND o_del.source = 'wildberries'
+                  AND o_del.wb_status IN ('indelivery', 'delivering', 'shipped', 'ready_for_pickup', 'sold', 'complete', 'delivered', 'receive')
+              )
+            )
           )` : sql``}
           ${status === "closed" ? sql`
           -- ЭТАЛОННЫЙ ФИЛЬТР «В ДОСТАВКЕ»: по дате закрытия поставки (≤20 дней)
@@ -6716,11 +6729,23 @@ export async function registerRoutes(
 
       const supplyCounts = await db.execute(sql`
         SELECT
-          COUNT(DISTINCT CASE WHEN ws.status = 'open' AND EXISTS (
-            SELECT 1 FROM orders o
-            WHERE o.wb_supply_id = ws.supply_id
-              AND o.source = 'wildberries'
-              AND o.wb_status IN ('new', 'waiting', 'confirm')
+          -- ЭТАЛОН assembly_count: пустые open-поставки + open-поставки с активными заказами (без стадии доставки)
+          COUNT(DISTINCT CASE WHEN ws.status = 'open' AND (
+            NOT EXISTS (
+              SELECT 1 FROM orders o WHERE o.wb_supply_id = ws.supply_id
+                AND o.source = 'wildberries' AND o.organization_id = ws.organization_id
+            )
+            OR (
+              EXISTS (
+                SELECT 1 FROM orders o WHERE o.wb_supply_id = ws.supply_id
+                  AND o.source = 'wildberries' AND o.wb_status IN ('new', 'waiting', 'confirm')
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM orders o2 WHERE o2.wb_supply_id = ws.supply_id
+                  AND o2.source = 'wildberries'
+                  AND o2.wb_status IN ('indelivery', 'delivering', 'shipped', 'ready_for_pickup', 'sold', 'complete', 'delivered', 'receive')
+              )
+            )
           ) THEN ws.supply_id END) as assembly_count,
           -- ЭТАЛОН: delivery_count = закрытые поставки ≤20 дней с хотя бы одним незавершённым заказом
           COUNT(DISTINCT CASE WHEN ws.status = 'closed'

@@ -105,12 +105,18 @@ cancel / canceled / user_cancel / canceled_by_client /
 wb_status IN ('new','waiting') AND wb_supply_id IS NULL AND created_at >= NOW() - INTERVAL '7 days'
 ```
 
-**На сборке** — открытые поставки с активными заказами (не ушедшими дальше confirm):
+**На сборке** — открытые поставки: пустые (0 заказов) ИЛИ с активными заказами (не ушедшими дальше confirm):
 ```sql
 ws.status = 'open'
-AND EXISTS     (SELECT 1 FROM orders o WHERE o.wb_status IN ('new','waiting','confirm') AND o.wb_supply_id = ws.supply_id)
-AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.wb_status IN ('indelivery','delivering','shipped','ready_for_pickup','sold','complete','delivered','receive') AND o.wb_supply_id = ws.supply_id)
+AND (
+  NOT EXISTS (SELECT 1 FROM orders o WHERE o.wb_supply_id = ws.supply_id AND o.source = 'wildberries' AND o.organization_id = ws.organization_id)
+  OR (
+    EXISTS     (SELECT 1 FROM orders o WHERE o.wb_status IN ('new','waiting','confirm') AND o.wb_supply_id = ws.supply_id AND o.source = 'wildberries')
+    AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.wb_status IN ('indelivery','delivering','shipped','ready_for_pickup','sold','complete','delivered','receive') AND o.wb_supply_id = ws.supply_id AND o.source = 'wildberries')
+  )
+)
 ```
+Пустая поставка (status=open, 0 заказов в orders) — всегда показывается в «На сборке». Это нужно для поставок, созданных через CRM или WB до добавления заказов.
 
 **В доставке** ⚠️ КРИТИЧНО — фильтр по дате закрытия + хотя бы один незавершённый заказ:
 ```sql
