@@ -311,69 +311,6 @@ export function useOzonPrintLabel() {
   });
 }
 
-export function useSyncYandexOrders() {
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-
-  return useMutation({
-    mutationFn: async (storeId?: string | number) => {
-      const res = await fetch("/api/marketplace/yandex/sync-orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(storeId && storeId !== "all" ? { storeId: Number(storeId) } : {}),
-      });
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.message || "Ошибка синхронизации заказов Yandex");
-      }
-      return res.json();
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
-      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/analytics/sales"] });
-      const storeResults = data.storeResults || [];
-      const successStores = storeResults.filter((s: any) => !s.error);
-      const failedStores = storeResults.filter((s: any) => s.error);
-      const lines: string[] = [];
-      for (const s of successStores) {
-        let line = `«${s.storeName}»: +${s.created} новых, ${s.updated} обновлено`;
-        if (s.skippedNoSku > 0) line += ` (${s.skippedNoSku} пропущено)`;
-        lines.push(line);
-      }
-      for (const s of failedStores) {
-        const errorMsg = s.error || "";
-        const isSpecificError = errorMsg.includes("Неверный токен") || errorMsg.includes("Доступ к кампании");
-        
-        if (isSpecificError) {
-          // Extract the specific part if it's wrapped in "Ошибка для магазина ...: "
-          const cleanMsg = errorMsg.includes(": ") ? errorMsg.split(": ").slice(1).join(": ") : errorMsg;
-          lines.push(`«${s.storeName}»: ${cleanMsg}`);
-        } else {
-          const is403 = errorMsg.includes("403") || errorMsg.includes("Forbidden") || errorMsg.includes("доступ");
-          lines.push(`«${s.storeName}»: ${is403 ? "ошибка доступа (403)" : errorMsg}`);
-        }
-      }
-      const allFailed = successStores.length === 0 && failedStores.length > 0;
-      const hasErrors = failedStores.length > 0;
-      const title = allFailed
-        ? "Yandex: ошибка синхронизации"
-        : hasErrors
-        ? "Yandex: синхронизация с ошибками"
-        : "Yandex: синхронизация завершена";
-      toast({
-        title,
-        description: lines.join("\n") || `Создано: ${data.created}, обновлено: ${data.updated}`,
-        variant: allFailed ? "destructive" : "default",
-      });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Ошибка Yandex", description: error.message, variant: "destructive" });
-    },
-  });
-}
-
 export function useOzonBulkLabels() {
   const { toast } = useToast();
 
