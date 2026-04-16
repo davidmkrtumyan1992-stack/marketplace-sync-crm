@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useOzonPrintLabel, useOzonBulkLabels, useSilentSyncOzonOrders, useSyncOzonOrders } from "@/hooks/use-orders";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useOzonPrintLabel, useOzonBulkLabels, useSilentSyncOzonOrders, useSyncOzonOrders, useSyncYandexOrders } from "@/hooks/use-orders";
 import { format, isToday, isYesterday } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
@@ -180,7 +180,9 @@ export default function Orders() {
   const [storeFilter, setStoreFilter] = useState<"all" | number>("all");
 
   const silentSync = useSilentSyncOzonOrders();
-  const syncOrders = useSyncOzonOrders();
+  const syncOzonOrders = useSyncOzonOrders();
+  const syncYandexOrders = useSyncYandexOrders();
+  const syncOrders = marketplaceTab === "yandex" ? syncYandexOrders : syncOzonOrders;
   const bulkLabels = useOzonBulkLabels();
 
   const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number; apiKey: string | null; warehouseId: string | null }[]>({

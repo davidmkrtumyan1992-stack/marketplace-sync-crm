@@ -43,7 +43,7 @@ organizations → companies → stores → marketplace_settings
 | Кирилл-Озон | 4052691 | ✓ подключён |
 | Лаура — Ozon | 2311038 | ✓ подключён |
 | Лаура texnicol | 2496152 | ✓ подключён |
-| Focus cosmetics — ЯМ | 131115754 (Campaign) | ✓ подключён (FBS sync) |
+| Focus cosmetics — ЯМ | 99063023 (Campaign), Business: 131115754 | ✓ подключён (FBS sync) |
 | Wildberries | — | ✓ подключён (FBS sync) |
 
 ## Правила — ОБЯЗАТЕЛЬНО соблюдать
@@ -150,8 +150,8 @@ OR status = 'cancelled'
 ```
 
 ### Синхронизация заказов Яндекс Маркет — Золотой стандарт:
-- Активный магазин: **Focus cosmetics**, campaign_id=131115754, marketplace_settings.marketplace='yandex'
-- `warehouseId` в marketplace_settings = Campaign ID (131115754) — НЕ Business ID
+- Активный магазин: **Focus cosmetics**, campaign_id=99063023, Business ID=131115754, marketplace_settings.marketplace='yandex'
+- `warehouseId` в marketplace_settings = Campaign ID (99063023) — НЕ Business ID (131115754)! Это разные числа
 - `fromDate` формат: **DD-MM-YYYY** (например `16-04-2026`) — НЕ ISO! Критичная особенность ЯМ API
 - `autoSyncYandexOrders` фильтрует кампании по warehouseId (точное совпадение campaign.id → exactMatch; иначе filter по business.id)
 - Заказы создаются ВСЕГДА даже если items.length=0 (SKU не нашлись в БД) — totalAmount берётся из yOrder.itemsTotal || yOrder.buyerTotal
@@ -193,7 +193,7 @@ npm run build        # production сборка
 ## Статус разработки (актуально)
 ✓ Мультикомпания/магазин архитектура
 ✓ Sync заказов Ozon FBS+FBO
-✓ Sync заказов Яндекс Маркет (Focus cosmetics, campaign 131115754, FBS) — fromDate DD-MM-YYYY, campaign filter by warehouseId, заказы создаются даже без SKU-совпадения
+✓ Sync заказов Яндекс Маркет (Focus cosmetics, campaign 99063023, Business 131115754, FBS) — fromDate DD-MM-YYYY, campaign filter by warehouseId, заказы создаются даже без SKU-совпадения
 ✓ Ozon Калькулятор (точность ±1₽ от официального)
 ✓ Вкладка Аналитика в карточке товара
 ✓ Симулятор цены

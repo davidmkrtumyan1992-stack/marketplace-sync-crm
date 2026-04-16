@@ -1047,10 +1047,15 @@ export async function fetchYandexProducts(oauthToken: string, businessId: string
     console.log(`[Yandex Sync] Could not fetch campaigns: ${err.message}`);
   }
 
-  // Step 2: Fetch products by businessId
-  console.log(`[Yandex Sync] === STEP 2: POST /businesses/${cleanBusinessId}/offer-mappings ===`);
-  let allEntries = await fetchYandexOffersByBusiness(BASE, headers, cleanBusinessId);
-  console.log(`[Yandex Sync] Business-level fetch returned ${allEntries.length} offer(s)`);
+  // Step 2: Fetch products by businessId (may fail with 403 if warehouseId is Campaign ID, not Business ID)
+  let allEntries: any[] = [];
+  try {
+    console.log(`[Yandex Sync] === STEP 2: POST /businesses/${cleanBusinessId}/offer-mappings ===`);
+    allEntries = await fetchYandexOffersByBusiness(BASE, headers, cleanBusinessId);
+    console.log(`[Yandex Sync] Business-level fetch returned ${allEntries.length} offer(s)`);
+  } catch (err: any) {
+    console.log(`[Yandex Sync] Step 2 failed (${err.message}) — falling back to per-campaign fetch`);
+  }
 
   // Step 3: If 0 products, fall back to per-campaign fetch
   if (allEntries.length === 0 && campaigns.length > 0) {

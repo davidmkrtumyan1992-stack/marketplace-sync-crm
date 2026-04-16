@@ -198,6 +198,41 @@ export function useSyncOzonOrders() {
   });
 }
 
+export function useSyncYandexOrders() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/marketplace/yandex/sync-orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Ошибка синхронизации заказов Yandex");
+      }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/kpi"] });
+      const storeDetails = data.storeResults?.map((s: any) => {
+        if (s.error) return s.error;
+        return `${s.storeName}: +${s.created} новых, ${s.updated} обновлено`;
+      }).join("\n") || "";
+      toast({
+        title: "Синхронизация Yandex завершена",
+        description: storeDetails || `Создано: ${data.created}, обновлено: ${data.updated}`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка синхронизации", description: error.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useSilentSyncOzonOrders() {
   const queryClient = useQueryClient();
 
