@@ -3827,10 +3827,8 @@ export async function registerRoutes(
             let page = 1;
             let hasMore = true;
             while (hasMore) {
-              const yandexStatuses = ['NEW', 'PROCESSING', 'READY_TO_SHIP', 'DELIVERY', 'PICKUP', 'DELIVERED', 'CANCELLED', 'RETURNED'];
-              const statusParams = yandexStatuses.map(s => `status=${s}`).join('&');
               const ordersRes = await fetch(
-                `${YANDEX_BASE}/campaigns/${campaignId}/orders?${statusParams}&fromDate=${[String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-')}&page=${page}&pageSize=50`,
+                `${YANDEX_BASE}/campaigns/${campaignId}/orders?fromDate=${[String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-')}&page=${page}&pageSize=50`,
                 { method: "GET", headers: authHeaders }
               );
               if (!ordersRes.ok) {
@@ -4440,10 +4438,8 @@ export async function registerRoutes(
               let page = 1;
               let hasMore = true;
               while (hasMore) {
-                const yandexStatuses = ['NEW', 'PROCESSING', 'READY_TO_SHIP', 'DELIVERY', 'PICKUP', 'DELIVERED', 'CANCELLED', 'RETURNED'];
-                const statusParams = yandexStatuses.map(s => `status=${s}`).join('&');
                 const ordersRes = await fetch(
-                  `${YANDEX_BASE}/campaigns/${campaignId}/orders?${statusParams}&fromDate=${[String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-')}&page=${page}&pageSize=50`,
+                  `${YANDEX_BASE}/campaigns/${campaignId}/orders?fromDate=${[String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-')}&page=${page}&pageSize=50`,
                   { method: "GET", headers: authHeaders }
                 );
                 if (!ordersRes.ok) { hasMore = false; break; }

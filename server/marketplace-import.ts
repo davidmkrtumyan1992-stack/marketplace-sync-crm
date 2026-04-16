@@ -927,9 +927,8 @@ function buildYandexHeaders(apiKey: string, businessId: string): { headers: Head
     headers: {
       ...(isAcmaKey
         ? { "Api-Key": cleanToken }
-        : { "Authorization": `Bearer ${cleanToken}` }),
+        : { "Authorization": `OAuth ${cleanToken}` }),
       "Content-Type": "application/json",
-      "Business-Id": cleanBusinessId,
     },
     cleanBusinessId,
   };
