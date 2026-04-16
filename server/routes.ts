@@ -6327,36 +6327,39 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/wb/supplies — создать поставку WB и привязать заказы
+  // POST /api/wb/supplies — создать поставку WB (с заказами или пустую)
   app.post("/api/wb/supplies", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const { storeId, orderIds } = req.body;
-      if (!storeId || !Array.isArray(orderIds) || orderIds.length === 0) {
-        return res.status(400).json({ message: "Необходимы storeId и orderIds" });
+      const { storeId, orderIds, name: requestedName } = req.body;
+      if (!storeId) {
+        return res.status(400).json({ message: "storeId обязателен" });
       }
+      const normalizedOrderIds: number[] = Array.isArray(orderIds) ? orderIds.map(Number) : [];
+      const isEmptySupply = normalizedOrderIds.length === 0;
 
       const cleanApiKey = await getWbApiKeyForStore(orgId, Number(storeId));
       if (!cleanApiKey) {
         return res.status(400).json({ message: "WB API-ключ не найден для магазина" });
       }
 
-      // Проверить что все заказы принадлежат указанному магазину и ещё не в поставке
-      const numericOrderIds = orderIds.map(Number);
-      const existingOrders = await db.select().from(ordersTable).where(
-        and(inArray(ordersTable.id, numericOrderIds), eq(ordersTable.organizationId, orgId))
-      );
-      const wrongStore = existingOrders.filter(o => o.storeId !== Number(storeId));
-      if (wrongStore.length > 0) {
-        return res.status(400).json({ message: `${wrongStore.length} заказов принадлежат другому магазину` });
-      }
-      const alreadyInSupply = existingOrders.filter(o => o.wbSupplyId);
-      if (alreadyInSupply.length > 0) {
-        return res.status(400).json({ message: `${alreadyInSupply.length} заказов уже добавлены в поставку` });
+      // Проверить заказы только если они переданы
+      if (!isEmptySupply) {
+        const existingOrders = await db.select().from(ordersTable).where(
+          and(inArray(ordersTable.id, normalizedOrderIds), eq(ordersTable.organizationId, orgId))
+        );
+        const wrongStore = existingOrders.filter(o => o.storeId !== Number(storeId));
+        if (wrongStore.length > 0) {
+          return res.status(400).json({ message: `${wrongStore.length} заказов принадлежат другому магазину` });
+        }
+        const alreadyInSupply = existingOrders.filter(o => o.wbSupplyId);
+        if (alreadyInSupply.length > 0) {
+          return res.status(400).json({ message: `${alreadyInSupply.length} заказов уже добавлены в поставку` });
+        }
       }
 
       const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
-      const supplyName = `Поставка ${new Date().toLocaleDateString("ru-RU")}`;
+      const supplyName = requestedName?.trim() || `Поставка от ${new Date().toLocaleDateString("ru-RU")}`;
 
       // 1. Создать поставку в WB API
       const createRes = await fetch(`${WB_MARKETPLACE_BASE}/api/v3/supplies`, {
@@ -6374,29 +6377,29 @@ export async function registerRoutes(
         return res.status(502).json({ message: "WB API не вернул supplyId" });
       }
 
-      // 2. Получить wb_order_id для каждого заказа и добавить в поставку
-      const dbOrders = await db.select().from(ordersTable).where(
-        and(inArray(ordersTable.id, orderIds.map(Number)), eq(ordersTable.organizationId, orgId))
-      );
-
+      // 2. Добавить заказы в поставку (пропустить если пустая поставка)
       let ordersAdded = 0;
       const addErrors: string[] = [];
-      for (const order of dbOrders) {
-        if (!order.wbOrderId) continue;
-        const addRes = await fetch(`${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders/${order.wbOrderId}`, {
-          method: "PATCH",
-          headers: authHeaders,
-        });
-        if (addRes.ok || addRes.status === 204) {
-          // Обновить wb_supply_id в БД
-          await db.update(ordersTable)
-            .set({ wbSupplyId: supplyId })
-            .where(and(eq(ordersTable.id, order.id), eq(ordersTable.organizationId, orgId)));
-          ordersAdded++;
-        } else {
-          const errText = await addRes.text().catch(() => "");
-          addErrors.push(`Order ${order.wbOrderId}: ${addRes.status} ${errText.slice(0, 100)}`);
-          console.error(`[wb-supplies] Не удалось добавить заказ ${order.wbOrderId}:`, errText);
+      if (!isEmptySupply) {
+        const dbOrders = await db.select().from(ordersTable).where(
+          and(inArray(ordersTable.id, normalizedOrderIds), eq(ordersTable.organizationId, orgId))
+        );
+        for (const order of dbOrders) {
+          if (!order.wbOrderId) continue;
+          const addRes = await fetch(`${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders/${order.wbOrderId}`, {
+            method: "PATCH",
+            headers: authHeaders,
+          });
+          if (addRes.ok || addRes.status === 204) {
+            await db.update(ordersTable)
+              .set({ wbSupplyId: supplyId })
+              .where(and(eq(ordersTable.id, order.id), eq(ordersTable.organizationId, orgId)));
+            ordersAdded++;
+          } else {
+            const errText = await addRes.text().catch(() => "");
+            addErrors.push(`Order ${order.wbOrderId}: ${addRes.status} ${errText.slice(0, 100)}`);
+            console.error(`[wb-supplies] Не удалось добавить заказ ${order.wbOrderId}:`, errText);
+          }
         }
       }
 
@@ -6414,6 +6417,133 @@ export async function registerRoutes(
       res.json({ supplyId, name: supplyName, ordersAdded, errors: addErrors });
     } catch (error: any) {
       console.error("[wb-supplies] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // DELETE /api/wb/supplies/:supplyId — удалить поставку (WB API + локальная БД)
+  app.delete("/api/wb/supplies/:supplyId", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const supplyId = String(req.params.supplyId);
+      const storeId = req.query.storeId ? Number(req.query.storeId) : null;
+
+      // Проверить что поставка принадлежит org
+      const existing = await db.select().from(wbSuppliesTable).where(
+        and(eq(wbSuppliesTable.supplyId, supplyId), eq(wbSuppliesTable.organizationId, orgId))
+      );
+      if (existing.length === 0) {
+        return res.status(404).json({ message: "Поставка не найдена" });
+      }
+
+      // WB API DELETE — non-fatal: 404/409/network error = продолжить локальное удаление
+      const cleanApiKey = await getWbApiKeyForStore(orgId, storeId);
+      if (cleanApiKey) {
+        try {
+          const deleteRes = await fetch(`${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}`, {
+            method: "DELETE",
+            headers: { "Authorization": cleanApiKey },
+          });
+          if (!deleteRes.ok && deleteRes.status !== 204 && deleteRes.status !== 404 && deleteRes.status !== 409) {
+            const errText = await deleteRes.text().catch(() => "");
+            console.warn(`[wb-delete-supply] WB API ${deleteRes.status}: ${errText.slice(0, 200)}`);
+          } else {
+            console.log(`[wb-delete-supply] WB API: поставка ${supplyId} удалена (${deleteRes.status})`);
+          }
+        } catch (wbErr: any) {
+          console.warn(`[wb-delete-supply] WB API network error:`, wbErr.message);
+          // non-fatal — продолжить локальное удаление
+        }
+      }
+
+      // Обнулить wb_supply_id у привязанных заказов
+      await db.update(ordersTable)
+        .set({ wbSupplyId: null })
+        .where(and(eq(ordersTable.wbSupplyId, supplyId), eq(ordersTable.organizationId, orgId)));
+
+      // Удалить из wb_supplies
+      await db.delete(wbSuppliesTable).where(
+        and(eq(wbSuppliesTable.supplyId, supplyId), eq(wbSuppliesTable.organizationId, orgId))
+      );
+
+      console.log(`[wb-delete-supply] Поставка ${supplyId} удалена`);
+      res.json({ success: true, supplyId });
+    } catch (error: any) {
+      console.error("[wb-delete-supply] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // POST /api/wb/supplies/:supplyId/add-orders — добавить заказы в существующую открытую поставку
+  app.post("/api/wb/supplies/:supplyId/add-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const supplyId = String(req.params.supplyId);
+      const { storeId, orderIds } = req.body;
+
+      if (!storeId || !Array.isArray(orderIds) || orderIds.length === 0) {
+        return res.status(400).json({ message: "storeId и orderIds обязательны" });
+      }
+
+      // Проверить поставку: существует, открыта, принадлежит org
+      const supplyRows = await db.select().from(wbSuppliesTable).where(
+        and(eq(wbSuppliesTable.supplyId, supplyId), eq(wbSuppliesTable.organizationId, orgId))
+      );
+      if (supplyRows.length === 0) {
+        return res.status(404).json({ message: "Поставка не найдена" });
+      }
+      if (supplyRows[0].status !== "open") {
+        return res.status(400).json({ message: "Поставка уже закрыта, добавление невозможно" });
+      }
+
+      const cleanApiKey = await getWbApiKeyForStore(orgId, Number(storeId));
+      if (!cleanApiKey) {
+        return res.status(400).json({ message: "WB API-ключ не найден для магазина" });
+      }
+
+      const numericIds = orderIds.map(Number);
+      const dbOrders = await db.select().from(ordersTable).where(
+        and(inArray(ordersTable.id, numericIds), eq(ordersTable.organizationId, orgId))
+      );
+
+      const wrongStore = dbOrders.filter(o => o.storeId !== Number(storeId));
+      if (wrongStore.length > 0) {
+        return res.status(400).json({ message: `${wrongStore.length} заказов из другого магазина` });
+      }
+      const alreadyIn = dbOrders.filter(o => o.wbSupplyId);
+      if (alreadyIn.length > 0) {
+        return res.status(400).json({ message: `${alreadyIn.length} заказов уже в другой поставке` });
+      }
+
+      const authHeaders = { "Authorization": cleanApiKey, "Content-Type": "application/json" };
+      let ordersAdded = 0;
+      const addErrors: string[] = [];
+
+      for (const order of dbOrders) {
+        if (!order.wbOrderId) {
+          addErrors.push(`ID ${order.id}: нет WB Order ID`);
+          continue;
+        }
+        const addRes = await fetch(`${WB_MARKETPLACE_BASE}/api/v3/supplies/${supplyId}/orders/${order.wbOrderId}`, {
+          method: "PATCH",
+          headers: authHeaders,
+        });
+        if (addRes.ok || addRes.status === 204) {
+          await db.update(ordersTable)
+            .set({ wbSupplyId: supplyId })
+            .where(and(eq(ordersTable.id, order.id), eq(ordersTable.organizationId, orgId)));
+          ordersAdded++;
+        } else {
+          const errText = await addRes.text().catch(() => "");
+          addErrors.push(`Order ${order.wbOrderId}: ${addRes.status} ${errText.slice(0, 100)}`);
+          console.error(`[wb-add-orders] Ошибка добавления заказа ${order.wbOrderId}:`, errText);
+        }
+      }
+
+      console.log(`[wb-add-orders] ${supplyId}: добавлено ${ordersAdded} заказов`);
+      res.json({ ordersAdded, errors: addErrors });
+    } catch (error: any) {
+      console.error("[wb-add-orders] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });

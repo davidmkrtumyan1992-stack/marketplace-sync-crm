@@ -18,7 +18,7 @@ import {
 import {
   Loader2, Package, PackageSearch, Printer, FileText, FileSpreadsheet,
   XCircle, Truck, CheckCircle, MoreHorizontal,
-  QrCode,
+  QrCode, Trash2,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
@@ -386,16 +386,194 @@ function CreateSupplyDialog({
   );
 }
 
+function CreateEmptySupplyDialog({
+  open,
+  storeId,
+  onClose,
+}: {
+  open: boolean;
+  storeId: number | null;
+  onClose: () => void;
+}) {
+  const today = format(new Date(), "dd.MM.yyyy", { locale: ru });
+  const [name, setName] = useState(`Поставка от ${today}`);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (open) setName(`Поставка от ${format(new Date(), "dd.MM.yyyy", { locale: ru })}`);
+  }, [open]);
+
+  const createEmpty = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/wb/supplies", {
+        storeId,
+        orderIds: [],
+        name: name.trim(),
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({ title: `✓ Поставка ${data.supplyId} создана` });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/supplies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/counts"] });
+      onClose();
+    },
+    onError: (e: any) => {
+      toast({ title: "Ошибка создания поставки", description: e.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-sm" data-testid="dialog-create-empty-supply">
+        <DialogHeader>
+          <DialogTitle>Создать пустую поставку</DialogTitle>
+        </DialogHeader>
+        <div className="py-2">
+          <label className="text-sm font-medium mb-1.5 block">Название поставки</label>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Название поставки"
+            onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) createEmpty.mutate(); }}
+            data-testid="input-empty-supply-name"
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Закрыть</Button>
+          <Button
+            onClick={() => createEmpty.mutate()}
+            disabled={createEmpty.isPending || !name.trim()}
+            style={{ backgroundColor: WB_COLOR }}
+            className="text-white"
+            data-testid="button-confirm-create-empty-supply"
+          >
+            {createEmpty.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+            Создать
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AddToSupplyDialog({
+  open,
+  selectedOrders,
+  storeId,
+  onClose,
+  onSuccess,
+}: {
+  open: boolean;
+  selectedOrders: any[];
+  storeId: number | null;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const suppliesQuery = useQuery<any[]>({
+    queryKey: ["/api/wb/supplies", "open-for-dialog", storeId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ status: "open" });
+      if (storeId) params.set("storeId", String(storeId));
+      const res = await fetch(`/api/wb/supplies?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Ошибка загрузки поставок");
+      return res.json();
+    },
+    enabled: open,
+    staleTime: 0,
+  });
+
+  const openSupplies: any[] = suppliesQuery.data || [];
+
+  const addToSupply = useMutation({
+    mutationFn: async (targetSupplyId: string) => {
+      const res = await apiRequest("POST", `/api/wb/supplies/${targetSupplyId}/add-orders`, {
+        storeId,
+        orderIds: selectedOrders.map((o: any) => o.id),
+      });
+      return { data: await res.json(), supplyId: targetSupplyId };
+    },
+    onSuccess: ({ data, supplyId }: any) => {
+      toast({
+        title: `✓ Добавлено в поставку ${supplyId}`,
+        description: `${data.ordersAdded} заказов добавлено`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/supplies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/counts"] });
+      onSuccess();
+      onClose();
+    },
+    onError: (e: any) => {
+      toast({ title: "Ошибка добавления", description: e.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-md" data-testid="dialog-add-to-supply">
+        <DialogHeader>
+          <DialogTitle>Добавить к поставке</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          {pluralOrders(selectedOrders.length)}. Выберите поставку:
+        </p>
+        <div className="max-h-72 overflow-y-auto space-y-1 pr-1">
+          {suppliesQuery.isLoading ? (
+            <div className="flex justify-center py-6">
+              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : openSupplies.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-6">Нет активных поставок</p>
+          ) : (
+            openSupplies.map((supply: any) => (
+              <button
+                key={supply.supply_id}
+                className="w-full text-left px-3 py-2.5 rounded-lg border hover:border-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/10 transition-colors flex items-center justify-between gap-3 disabled:opacity-50"
+                onClick={() => addToSupply.mutate(supply.supply_id)}
+                disabled={addToSupply.isPending}
+                data-testid={`button-add-to-supply-${supply.supply_id}`}
+              >
+                <div className="flex flex-col gap-0.5 min-w-0">
+                  <span className="font-medium text-sm truncate">
+                    {supply.name || `Поставка от ${format(new Date(supply.created_at), "dd.MM.yyyy", { locale: ru })}`}
+                  </span>
+                  <span className="text-xs text-muted-foreground font-mono">{supply.supply_id}</span>
+                </div>
+                <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
+                  <span className="text-sm font-medium">{Number(supply.orders_count) || 0}</span>
+                  <span className="text-xs text-muted-foreground">заказов</span>
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Закрыть</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function SupplyDetailDialog({
   open,
   supply,
   onClose,
   isAssembly = false,
+  onSwitchToNew,
+  onDeleteSupply,
 }: {
   open: boolean;
   supply: any;
   onClose: () => void;
   isAssembly?: boolean;
+  onSwitchToNew?: () => void;
+  onDeleteSupply?: (supply: any) => void;
 }) {
   const supplyId = supply?.supply_id;
   const storeId = supply?.store_id || null;
@@ -487,6 +665,8 @@ function SupplyDetailDialog({
     }
   };
 
+  const isEmptySupply = isAssembly && !isLoading && orders.length === 0;
+
   const supplyName = supply?.name || (supply?.created_at
     ? `Поставка от ${format(new Date(supply.created_at), "dd.MM.yyyy", { locale: ru })}`
     : supplyId);
@@ -526,6 +706,39 @@ function SupplyDetailDialog({
             {isLoading ? (
               <div className="flex justify-center py-10">
                 <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : isEmptySupply ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-4 border rounded-xl">
+                <PackageSearch className="w-12 h-12 text-muted-foreground opacity-40" />
+                <div className="text-center space-y-1">
+                  <p className="font-semibold text-sm">Добавьте заказы</p>
+                  <p className="text-sm text-muted-foreground max-w-xs">
+                    Выберите заказы на вкладке «Новые» или перенесите их из другой поставки
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  {onSwitchToNew && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => { onClose(); onSwitchToNew(); }}
+                      data-testid="button-go-to-new-tab"
+                    >
+                      Перейти в «Новые»
+                    </Button>
+                  )}
+                  {onDeleteSupply && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 border-red-200 hover:bg-red-50"
+                      onClick={() => { onDeleteSupply(supply); onClose(); }}
+                      data-testid="button-delete-empty-supply"
+                    >
+                      Удалить поставку
+                    </Button>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="max-h-[65vh] overflow-y-auto rounded border">
@@ -662,8 +875,8 @@ function SupplyDetailDialog({
               </div>
             )}
           </div>
-          {/* Правая панель: Этапы сборки */}
-          {isAssembly && (
+          {/* Правая панель: Этапы сборки (скрыта для пустой поставки) */}
+          {isAssembly && !isEmptySupply && (
             <div className="w-44 flex-shrink-0 border rounded-xl p-4 flex flex-col gap-3 bg-background self-start">
               <div className="font-semibold text-sm">Этапы сборки</div>
               <div className="flex flex-col gap-3 text-sm flex-1">
@@ -705,6 +918,8 @@ function SupplyActionsMenu({
   onPickingListPdf,
   onPickingListExcel,
   onDetailDialog,
+  onRename,
+  onDelete,
   showClose = false,
   onClose,
 }: {
@@ -714,6 +929,8 @@ function SupplyActionsMenu({
   onPickingListPdf: () => void;
   onPickingListExcel: () => void;
   onDetailDialog: () => void;
+  onRename?: () => void;
+  onDelete?: () => void;
   showClose?: boolean;
   onClose?: () => void;
 }) {
@@ -725,6 +942,14 @@ function SupplyActionsMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
+        {onRename && (
+          <>
+            <DropdownMenuItem onClick={onRename} data-testid={`menu-rename-supply-${supply.supply_id}`}>
+              <FileText className="w-4 h-4 mr-2" /> Переименовать поставку
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuItem onClick={onPrintStickers} data-testid={`menu-print-stickers-${supply.supply_id}`}>
           <Printer className="w-4 h-4 mr-2" /> Печать стикеров
         </DropdownMenuItem>
@@ -751,6 +976,18 @@ function SupplyActionsMenu({
               data-testid={`menu-close-supply-${supply.supply_id}`}
             >
               <XCircle className="w-4 h-4 mr-2" /> Закрыть поставку
+            </DropdownMenuItem>
+          </>
+        )}
+        {onDelete && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={onDelete}
+              className="text-red-600 focus:text-red-600"
+              data-testid={`menu-delete-supply-${supply.supply_id}`}
+            >
+              <Trash2 className="w-4 h-4 mr-2" /> Удалить поставку
             </DropdownMenuItem>
           </>
         )}
@@ -930,11 +1167,15 @@ function AssemblySupplyRow({
   isSelected,
   onSelect,
   onOpenDetail,
+  onDelete,
+  onRename,
 }: {
   supply: any;
   isSelected: boolean;
   onSelect: (supplyId: string, checked: boolean) => void;
   onOpenDetail: (supply: any) => void;
+  onDelete: (supply: any) => void;
+  onRename: (supply: any) => void;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -986,6 +1227,8 @@ function AssemblySupplyRow({
           onPickingListPdf={actions.handlePickingListPdf}
           onPickingListExcel={actions.handlePickingListExcel}
           onDetailDialog={() => onOpenDetail(supply)}
+          onRename={() => onRename(supply)}
+          onDelete={() => onDelete(supply)}
           showClose={true}
           onClose={actions.handleCloseSupply}
         />
@@ -1075,6 +1318,8 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
   const [renameSupply, setRenameSupply] = useState<any | null>(null);
   const [detailSupply, setDetailSupply] = useState<any | null>(null);
   const [detailIsAssembly, setDetailIsAssembly] = useState(false);
+  const [showCreateEmptySupply, setShowCreateEmptySupply] = useState(false);
+  const [showAddToSupplyDialog, setShowAddToSupplyDialog] = useState(false);
 
   const openDetailAssembly = (supply: any) => { setDetailSupply(supply); setDetailIsAssembly(true); };
   const openDetailDelivery = (supply: any) => { setDetailSupply(supply); setDetailIsAssembly(false); };
@@ -1183,6 +1428,28 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
   const handleSupplyCreated = () => {
     setSelectedOrderIds(new Set());
     setActiveTab("assembly");
+  };
+
+  const handleDeleteSupply = async (supply: any) => {
+    const supplyId = supply.supply_id;
+    const sid = supply.store_id || storeId || null;
+    try {
+      const params = sid ? `?storeId=${sid}` : "";
+      const res = await fetch(`/api/wb/supplies/${supplyId}${params}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Ошибка удаления поставки" }));
+        throw new Error(err.message);
+      }
+      toast({ title: `✓ Поставка ${supplyId} удалена` });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/supplies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/counts"] });
+      if (detailSupply?.supply_id === supplyId) setDetailSupply(null);
+    } catch (e: any) {
+      toast({ title: "Ошибка удаления поставки", description: e.message, variant: "destructive" });
+    }
   };
 
   const handleBulkPrintQr = async () => {
@@ -1369,15 +1636,26 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
               <span className="text-white font-medium">
                 Выбрано {pluralOrders(selectedOrderIds.size)}
               </span>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setShowCreateSupply(true)}
-                data-testid="button-create-supply"
-              >
-                <Package className="w-4 h-4 mr-1.5" />
-                Создать поставку
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setShowCreateSupply(true)}
+                  data-testid="button-create-supply"
+                >
+                  <Package className="w-4 h-4 mr-1.5" />
+                  + Новая поставка
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="bg-white/20 text-white border-white/30 hover:bg-white/30"
+                  onClick={() => setShowAddToSupplyDialog(true)}
+                  data-testid="button-add-to-existing-supply"
+                >
+                  Добавить к созданной
+                </Button>
+              </div>
             </div>
           )}
         </div>
@@ -1386,6 +1664,19 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
       {/* ===== ВКЛАДКА НА СБОРКЕ ===== */}
       {activeTab === "assembly" && (
         <div className="space-y-3" data-testid="wb-assembly-supplies">
+          {/* Кнопка создания пустой поставки */}
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              style={{ backgroundColor: WB_COLOR }}
+              className="text-white"
+              onClick={() => setShowCreateEmptySupply(true)}
+              data-testid="button-create-empty-supply"
+            >
+              <Package className="w-4 h-4 mr-1.5" />
+              Создать пустую поставку
+            </Button>
+          </div>
           {supplies.length === 0 ? (
             <EmptyState text="У вас пока нет активных поставок" />
           ) : (
@@ -1416,6 +1707,8 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
                       isSelected={selectedSupplyIds.has(supply.supply_id)}
                       onSelect={handleSelectSupply}
                       onOpenDetail={openDetailAssembly}
+                      onDelete={handleDeleteSupply}
+                      onRename={(s) => setRenameSupply(s)}
                     />
                   ))}
                 </TableBody>
@@ -1648,8 +1941,24 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
           supply={detailSupply}
           onClose={() => setDetailSupply(null)}
           isAssembly={detailIsAssembly}
+          onSwitchToNew={() => { setDetailSupply(null); setActiveTab("new"); }}
+          onDeleteSupply={handleDeleteSupply}
         />
       )}
+
+      <CreateEmptySupplyDialog
+        open={showCreateEmptySupply}
+        storeId={storeId || null}
+        onClose={() => setShowCreateEmptySupply(false)}
+      />
+
+      <AddToSupplyDialog
+        open={showAddToSupplyDialog}
+        selectedOrders={selectedOrders}
+        storeId={selectedStoreId}
+        onClose={() => setShowAddToSupplyDialog(false)}
+        onSuccess={() => setSelectedOrderIds(new Set())}
+      />
     </div>
   );
 }
