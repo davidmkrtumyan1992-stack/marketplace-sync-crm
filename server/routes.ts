@@ -3830,7 +3830,7 @@ export async function registerRoutes(
               const yandexStatuses = ['NEW', 'PROCESSING', 'READY_TO_SHIP', 'DELIVERY', 'PICKUP', 'DELIVERED', 'CANCELLED', 'RETURNED'];
               const statusParams = yandexStatuses.map(s => `status=${s}`).join('&');
               const ordersRes = await fetch(
-                `${YANDEX_BASE}/campaigns/${campaignId}/orders?${statusParams}&fromDate=${since.toISOString().split("T")[0]}&page=${page}&pageSize=50`,
+                `${YANDEX_BASE}/campaigns/${campaignId}/orders?${statusParams}&fromDate=${[String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-')}&page=${page}&pageSize=50`,
                 { method: "GET", headers: authHeaders }
               );
               if (!ordersRes.ok) {
@@ -3891,29 +3891,27 @@ export async function registerRoutes(
                   }
                 }
 
-                if (items.length > 0) {
-                  const internalStatus = yandexStatusToInternal(yStatus);
-                  await storage.createOrder({
-                    orderNumber: `YM-${yOrderId}`,
-                    status: internalStatus,
-                    totalAmount: totalAmount.toFixed(2),
-                    source: "yandex",
-                    externalId: yOrderId,
-                    postingNumber: null,
-                    ozonStatus: null,
-                    yandexStatus: yStatus,
-                    fulfillmentType: "FBS",
-                    storeId: resolvedStoreId ?? undefined,
-                    sourceStoreName: resolvedStoreName ?? undefined,
-                    companyId: resolvedCompanyId ?? undefined,
-                    organizationId: orgId,
-                    createdAt: yCreatedAt || undefined,
-                  }, items);
-                  created++;
-                  storeCreated++;
-                } else {
-                  storeSkippedNoSku++;
-                }
+                if (items.length === 0) storeSkippedNoSku++;
+                const orderTotal = totalAmount > 0 ? totalAmount : parseFloat(String(yOrder.itemsTotal || yOrder.buyerTotal || "0"));
+                const internalStatus = yandexStatusToInternal(yStatus);
+                await storage.createOrder({
+                  orderNumber: `YM-${yOrderId}`,
+                  status: internalStatus,
+                  totalAmount: orderTotal.toFixed(2),
+                  source: "yandex",
+                  externalId: yOrderId,
+                  postingNumber: null,
+                  ozonStatus: null,
+                  yandexStatus: yStatus,
+                  fulfillmentType: "FBS",
+                  storeId: resolvedStoreId ?? undefined,
+                  sourceStoreName: resolvedStoreName ?? undefined,
+                  companyId: resolvedCompanyId ?? undefined,
+                  organizationId: orgId,
+                  createdAt: yCreatedAt || undefined,
+                }, items);
+                created++;
+                storeCreated++;
               }
 
               if (pager && page < pager.pagesCount) {
@@ -4424,7 +4422,20 @@ export async function registerRoutes(
             const campData = await campRes.json();
             const campaigns = campData?.campaigns || [];
 
-            for (const campaign of campaigns) {
+            // Фильтруем кампании по warehouseId (Campaign ID или Business ID)
+            const cleanWh = (ySetting.warehouseId || "").replace(/\s/g, "").trim();
+            let filteredCampaigns = campaigns;
+            if (cleanWh) {
+              const exactMatch = campaigns.find((c: any) => String(c.id) === cleanWh);
+              if (exactMatch) {
+                filteredCampaigns = [exactMatch];
+              } else {
+                const byBiz = campaigns.filter((c: any) => c.business?.id && String(c.business.id) === cleanWh);
+                if (byBiz.length > 0) filteredCampaigns = byBiz;
+              }
+            }
+
+            for (const campaign of filteredCampaigns) {
               const campaignId = String(campaign.id);
               let page = 1;
               let hasMore = true;
@@ -4432,7 +4443,7 @@ export async function registerRoutes(
                 const yandexStatuses = ['NEW', 'PROCESSING', 'READY_TO_SHIP', 'DELIVERY', 'PICKUP', 'DELIVERED', 'CANCELLED', 'RETURNED'];
                 const statusParams = yandexStatuses.map(s => `status=${s}`).join('&');
                 const ordersRes = await fetch(
-                  `${YANDEX_BASE}/campaigns/${campaignId}/orders?${statusParams}&fromDate=${since.toISOString().split("T")[0]}&page=${page}&pageSize=50`,
+                  `${YANDEX_BASE}/campaigns/${campaignId}/orders?${statusParams}&fromDate=${[String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-')}&page=${page}&pageSize=50`,
                   { method: "GET", headers: authHeaders }
                 );
                 if (!ordersRes.ok) { hasMore = false; break; }
@@ -4468,25 +4479,24 @@ export async function registerRoutes(
                         }
                       }
                     }
-                    if (items.length > 0) {
-                      await storage.createOrder({
-                        orderNumber: `YM-${yOrderId}`,
-                        status: yandexStatusToInternal(yStatus),
-                        totalAmount: totalAmount.toFixed(2),
-                        source: "yandex",
-                        externalId: yOrderId,
-                        postingNumber: null,
-                        ozonStatus: null,
-                        yandexStatus: yStatus,
-                        fulfillmentType: "FBS",
-                        storeId: resolvedStoreId ?? undefined,
-                        sourceStoreName: resolvedStoreName ?? undefined,
-                        companyId: resolvedCompanyId ?? undefined,
-                        organizationId: orgId,
-                        createdAt: yCreatedAt || undefined,
-                      }, items);
-                      created++;
-                    }
+                    const orderTotal = totalAmount > 0 ? totalAmount : parseFloat(String(yOrder.itemsTotal || yOrder.buyerTotal || "0"));
+                    await storage.createOrder({
+                      orderNumber: `YM-${yOrderId}`,
+                      status: yandexStatusToInternal(yStatus),
+                      totalAmount: orderTotal.toFixed(2),
+                      source: "yandex",
+                      externalId: yOrderId,
+                      postingNumber: null,
+                      ozonStatus: null,
+                      yandexStatus: yStatus,
+                      fulfillmentType: "FBS",
+                      storeId: resolvedStoreId ?? undefined,
+                      sourceStoreName: resolvedStoreName ?? undefined,
+                      companyId: resolvedCompanyId ?? undefined,
+                      organizationId: orgId,
+                      createdAt: yCreatedAt || undefined,
+                    }, items);
+                    created++;
                   }
                 }
 
