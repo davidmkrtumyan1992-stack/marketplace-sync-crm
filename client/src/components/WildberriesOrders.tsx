@@ -329,11 +329,12 @@ function CreateSupplyDialog({
       });
       queryClient.invalidateQueries({ queryKey: ["/api/wb/orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/wb/supplies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/wb/counts"] });
       onSuccess(data.supplyId);
       onClose();
     },
     onError: (e: any) => {
-      toast({ title: "Ошибка", description: e.message, variant: "destructive" });
+      toast({ title: "Ошибка создания поставки", description: e.message, variant: "destructive" });
     },
   });
 

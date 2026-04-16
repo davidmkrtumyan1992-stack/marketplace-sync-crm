@@ -6344,14 +6344,24 @@ export async function registerRoutes(
   app.post("/api/wb/supplies", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const { storeId, orderIds, name: requestedName } = req.body;
-      if (!storeId) {
-        return res.status(400).json({ message: "storeId обязателен" });
-      }
+      const { storeId: rawStoreId, orderIds, name: requestedName } = req.body;
       const normalizedOrderIds: number[] = Array.isArray(orderIds) ? orderIds.map(Number) : [];
       const isEmptySupply = normalizedOrderIds.length === 0;
 
-      const cleanApiKey = await getWbApiKeyForStore(orgId, Number(storeId));
+      // Автодетект storeId: если не передан (фильтр "Все магазины"), берём первый активный WB магазин
+      let resolvedStoreId: number;
+      if (rawStoreId) {
+        resolvedStoreId = Number(rawStoreId);
+      } else {
+        const allSettings = await storage.getMarketplaceSettings(orgId);
+        const wbActive = allSettings.find(s => s.marketplace === "wildberries" && s.isActive && s.apiKey && s.storeId);
+        if (!wbActive?.storeId) {
+          return res.status(400).json({ message: "Активный WB магазин не найден" });
+        }
+        resolvedStoreId = wbActive.storeId;
+      }
+
+      const cleanApiKey = await getWbApiKeyForStore(orgId, resolvedStoreId);
       if (!cleanApiKey) {
         return res.status(400).json({ message: "WB API-ключ не найден для магазина" });
       }
@@ -6361,7 +6371,7 @@ export async function registerRoutes(
         const existingOrders = await db.select().from(ordersTable).where(
           and(inArray(ordersTable.id, normalizedOrderIds), eq(ordersTable.organizationId, orgId))
         );
-        const wrongStore = existingOrders.filter(o => o.storeId !== Number(storeId));
+        const wrongStore = existingOrders.filter(o => o.storeId !== resolvedStoreId);
         if (wrongStore.length > 0) {
           return res.status(400).json({ message: `${wrongStore.length} заказов принадлежат другому магазину` });
         }
@@ -6419,7 +6429,7 @@ export async function registerRoutes(
       // 3. Сохранить поставку в wb_supplies
       await db.insert(wbSuppliesTable).values({
         supplyId,
-        storeId: Number(storeId),
+        storeId: resolvedStoreId,
         organizationId: orgId,
         name: supplyName,
         status: "open",
