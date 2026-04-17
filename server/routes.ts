@@ -4405,7 +4405,7 @@ export async function registerRoutes(
         const yandexSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey && s.warehouseId && s.organizationId === orgId);
         const YANDEX_BASE = "https://api.partner.market.yandex.ru";
         const since = new Date();
-        since.setDate(since.getDate() - 30);
+        since.setDate(since.getDate() - 90);
         let updated = 0, created = 0;
 
         for (const ySetting of yandexSettings) {
@@ -4525,6 +4525,81 @@ export async function registerRoutes(
   setInterval(autoSyncYandexOrders, YANDEX_SYNC_INTERVAL);
   setTimeout(autoSyncYandexOrders, 15000);
   console.log(`[yandex-auto-sync] Background sync scheduled every ${YANDEX_SYNC_INTERVAL / 60000} minutes`);
+
+  // Обновление статусов для старых ЯМ-заказов (>90 дней) — аналог syncWbArchiveStatuses
+  const syncYmArchiveStatuses = async () => {
+    try {
+      const allSettings = await db.select().from(marketplaceSettingsTable);
+      const yandexSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey && s.warehouseId);
+      if (yandexSettings.length === 0) return;
+
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+      const since = new Date();
+      since.setDate(since.getDate() - 365);
+      const fromDateStr = [String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-');
+      let totalUpdated = 0;
+
+      for (const ySetting of yandexSettings) {
+        const orgId = ySetting.organizationId;
+        const { storeId: resolvedStoreId } = await resolveStoreForYandex(ySetting);
+        try {
+          const cleanToken = ySetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+          const isAcmaKey = cleanToken.startsWith("ACMA:");
+          const authHeaders: Record<string, string> = {
+            ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
+            "Content-Type": "application/json", "Accept": "application/json",
+          };
+          const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { method: "GET", headers: authHeaders });
+          if (!campRes.ok) continue;
+          const campData = await campRes.json();
+          const campaigns = campData?.campaigns || [];
+          const cleanWh = (ySetting.warehouseId || "").replace(/\s/g, "").trim();
+          let filteredCampaigns = campaigns;
+          if (cleanWh) {
+            const exactMatch = campaigns.find((c: any) => String(c.id) === cleanWh);
+            if (exactMatch) { filteredCampaigns = [exactMatch]; }
+            else {
+              const byBiz = campaigns.filter((c: any) => c.business?.id && String(c.business.id) === cleanWh);
+              if (byBiz.length > 0) filteredCampaigns = byBiz;
+            }
+          }
+          for (const campaign of filteredCampaigns) {
+            const campaignId = String(campaign.id);
+            let page = 1, hasMore = true;
+            while (hasMore) {
+              const ordersRes = await fetch(
+                `${YANDEX_BASE}/campaigns/${campaignId}/orders?fromDate=${fromDateStr}&page=${page}&pageSize=50`,
+                { method: "GET", headers: authHeaders }
+              );
+              if (!ordersRes.ok) { hasMore = false; break; }
+              const ordersData = await ordersRes.json();
+              const ordersList = ordersData?.orders || [];
+              const pager = ordersData?.pager;
+              for (const yOrder of ordersList) {
+                const yOrderId = String(yOrder.id);
+                const yStatus = yOrder.status || "NEW";
+                const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
+                const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
+                if (existingOrder && existingOrder.yandexStatus !== yStatus) {
+                  await storage.updateOrderYandexStatus(existingOrder.id, yStatus, yandexStatusToInternal(yStatus), yCreatedAt);
+                  totalUpdated++;
+                }
+              }
+              if (pager && page < pager.pagesCount) { page++; } else { hasMore = false; }
+            }
+          }
+        } catch (err: any) {
+          console.error(`[ym-archive-sync] Error:`, err.message);
+        }
+      }
+      if (totalUpdated > 0) console.log(`[ym-archive-sync] Updated ${totalUpdated} stale YM order statuses`);
+    } catch (error) {
+      console.error("[ym-archive-sync] Error:", error);
+    }
+  };
+  setTimeout(syncYmArchiveStatuses, 60 * 1000);
+  setInterval(syncYmArchiveStatuses, 6 * 60 * 60 * 1000);
+  console.log("[ym-archive-sync] Archive status sync scheduled every 6 hours");
 
   const WB_SYNC_INTERVAL = 2 * 60 * 1000;
   const autoSyncWbOrders = async () => {
