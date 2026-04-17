@@ -3764,7 +3764,7 @@ export async function registerRoutes(
 
       const YANDEX_BASE = "https://api.partner.market.yandex.ru";
       const since = new Date();
-      since.setDate(since.getDate() - 30);
+      since.setDate(since.getDate() - 365);
 
       let created = 0, updated = 0, skipped = 0;
       const storeResults: { storeName: string; storeId: number | null; created: number; updated: number; skippedNoSku: number; error?: string }[] = [];
@@ -3826,9 +3826,11 @@ export async function registerRoutes(
 
             let page = 1;
             let hasMore = true;
+            const fromDateStr = [String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-');
+            console.log(`[yandex-sync-orders] campaign=${campaignId} fromDate=${fromDateStr}`);
             while (hasMore) {
               const ordersRes = await fetch(
-                `${YANDEX_BASE}/campaigns/${campaignId}/orders?fromDate=${[String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-')}&page=${page}&pageSize=50`,
+                `${YANDEX_BASE}/campaigns/${campaignId}/orders?fromDate=${fromDateStr}&page=${page}&pageSize=50`,
                 { method: "GET", headers: authHeaders }
               );
               if (!ordersRes.ok) {
@@ -3851,6 +3853,7 @@ export async function registerRoutes(
               const ordersData = await ordersRes.json();
               const ordersList = ordersData?.orders || [];
               const pager = ordersData?.pager;
+              console.log(`[yandex-sync-orders] page=${page} orders=${ordersList.length} pager=${JSON.stringify(pager)}`);
 
               for (const yOrder of ordersList) {
                 const yOrderId = String(yOrder.id);
@@ -4433,19 +4436,21 @@ export async function registerRoutes(
               }
             }
 
+            const autoFromDateStr = [String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-');
             for (const campaign of filteredCampaigns) {
               const campaignId = String(campaign.id);
               let page = 1;
               let hasMore = true;
               while (hasMore) {
                 const ordersRes = await fetch(
-                  `${YANDEX_BASE}/campaigns/${campaignId}/orders?fromDate=${[String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-')}&page=${page}&pageSize=50`,
+                  `${YANDEX_BASE}/campaigns/${campaignId}/orders?fromDate=${autoFromDateStr}&page=${page}&pageSize=50`,
                   { method: "GET", headers: authHeaders }
                 );
                 if (!ordersRes.ok) { hasMore = false; break; }
                 const ordersData = await ordersRes.json();
                 const ordersList = ordersData?.orders || [];
                 const pager = ordersData?.pager;
+                if (page === 1) console.log(`[yandex-auto-sync] campaign=${campaignId} fromDate=${autoFromDateStr} page=1 orders=${ordersList.length} pager=${JSON.stringify(pager)}`);
 
                 for (const yOrder of ordersList) {
                   const yOrderId = String(yOrder.id);
