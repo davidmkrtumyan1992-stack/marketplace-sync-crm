@@ -156,11 +156,25 @@ OR status = 'cancelled'
 - `fromDate` формат: **DD-MM-YYYY** (например `16-04-2026`) — НЕ ISO! Критичная особенность ЯМ API
 - `autoSyncYandexOrders` фильтрует кампании по warehouseId (точное совпадение campaign.id → exactMatch; иначе filter по business.id)
 - Заказы создаются ВСЕГДА даже если items.length=0 (SKU не нашлись в БД) — totalAmount берётся из yOrder.itemsTotal || yOrder.buyerTotal
-- Авто-синк каждые 5 минут (YANDEX_SYNC_INTERVAL), первый запуск через 15 сек
+- Авто-синк каждые 5 минут (YANDEX_SYNC_INTERVAL), первый запуск через 15 сек, окно **30 дней**
 - Ручной синк: POST /api/marketplace/yandex/sync-orders, окно 30 дней
-- Статусы: NEW/PROCESSING/READY_TO_SHIP/RESERVED → pending; DELIVERY/PICKUP → shipped; DELIVERED → completed; CANCELLED/RETURNED/UNPAID → cancelled
 - Авторизация: ACMA-ключ → `Api-Key: ACMA:...`; OAuth → `Authorization: OAuth {token}`
 - **НЕ трогать Ozon/WB при правке ЯМ и наоборот**
+
+### Маппинг статусов ЯМ FBS — Золотой стандарт (вкладки Orders.tsx):
+```
+yandex_status            → Вкладка CRM       → internal status
+──────────────────────────────────────────────────────────────────
+NEW                      → Новые             → pending
+PROCESSING / RESERVED    → Ожидают сборки    → pending
+READY_TO_SHIP            → Отправления       → pending
+PICKUP                   → Ожидают курьера   → shipped
+DELIVERY                 → Доставляются      → shipped
+DELIVERED                → Доставлены        → completed
+CANCELLED/RETURNED/UNPAID→ Отменены          → cancelled
+(нет данных)             → Не отгружены      → 0 (нет ship-by date в API)
+```
+Порядок вкладок: Новые / Ожидают сборки / Отправления / Не отгружены / Ожидают курьера / Доставляются / Доставлены / Отменены / Все
 
 ### Синхронизация заказов Ozon — Золотой стандарт:
 - since = предыдущий день 21:00:00 UTC (= 00:00:00 МСК текущего дня)

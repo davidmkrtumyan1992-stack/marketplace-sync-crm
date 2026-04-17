@@ -58,7 +58,7 @@ type MarketplaceTab = "ozon" | "yandex" | "wildberries";
 type OzonSubFilter = "all" | "FBS" | "FBO" | "direct";
 type FbsSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "dispute" | "delivered" | "cancelled";
 type FboSubFilter = "all" | "awaiting_packaging" | "awaiting_deliver" | "delivering" | "delivered" | "cancelled";
-type YandexSubFilter = "all" | "NEW" | "READY_TO_SHIP" | "NOT_SHIPPED" | "WAITING_COURIER" | "DELIVERY" | "DELIVERED" | "CANCELLED";
+type YandexSubFilter = "all" | "NEW" | "PROCESSING" | "READY_TO_SHIP" | "NOT_SHIPPED" | "PICKUP" | "DELIVERY" | "DELIVERED" | "CANCELLED";
 type WbSubFilter = "all" | "new" | "assembling" | "assembled" | "transit" | "delivered" | "cancelled";
 
 function getMarketplaceStatusLabel(ozonStatus: string | null | undefined): string {
@@ -85,10 +85,10 @@ function getYandexStatusLabel(yandexStatus: string | null | undefined): string {
   if (!yandexStatus) return "Новый";
   switch (yandexStatus) {
     case "NEW": return "Новый";
-    case "PROCESSING": return "В обработке";
-    case "READY_TO_SHIP": return "Ожидает отгрузки";
-    case "DELIVERY": return "Доставка в процессе";
-    case "PICKUP": return "Ожидает курьера";
+    case "PROCESSING": return "Ожидает сборки";
+    case "READY_TO_SHIP": return "Отправление";
+    case "DELIVERY": return "Доставляется";
+    case "PICKUP": return "Ожидает получения";
     case "DELIVERED": return "Доставлено";
     case "CANCELLED": return "Отменено";
     case "RETURNED": return "Возвращено";
@@ -118,14 +118,15 @@ const FBO_SUB_FILTERS: { key: FboSubFilter; label: string; icon: any }[] = [
 ];
 
 const YANDEX_SUB_FILTERS: { key: YandexSubFilter; label: string; icon: any }[] = [
-  { key: "all", label: "Все", icon: Package },
-  { key: "NEW", label: "Новый", icon: Clock },
-  { key: "READY_TO_SHIP", label: "Ожидает отгрузки", icon: Package },
-  { key: "NOT_SHIPPED", label: "Не отправлено", icon: AlertTriangle },
-  { key: "WAITING_COURIER", label: "Ожидает курьера", icon: Truck },
-  { key: "DELIVERY", label: "Доставка в процессе", icon: Truck },
-  { key: "DELIVERED", label: "Доставлено", icon: CheckCircle },
-  { key: "CANCELLED", label: "Отменено", icon: XCircle },
+  { key: "NEW",          label: "Новые",           icon: Clock },
+  { key: "PROCESSING",   label: "Ожидают сборки",  icon: Package },
+  { key: "READY_TO_SHIP",label: "Отправления",     icon: Package },
+  { key: "NOT_SHIPPED",  label: "Не отгружены",    icon: AlertTriangle },
+  { key: "PICKUP",       label: "Ожидают курьера", icon: Truck },
+  { key: "DELIVERY",     label: "Доставляются",    icon: Truck },
+  { key: "DELIVERED",    label: "Доставлены",      icon: CheckCircle },
+  { key: "CANCELLED",    label: "Отменены",        icon: XCircle },
+  { key: "all",          label: "Все",             icon: Package },
 ];
 
 const WB_SUB_FILTERS: { key: WbSubFilter; label: string; icon: any }[] = [
@@ -280,18 +281,24 @@ export default function Orders() {
     }
 
     if (marketplaceTab === "yandex" && yandexSubFilter !== "all") {
-      if (yandexSubFilter === "DELIVERY") {
-        result = result.filter((o: any) => o.yandexStatus === "DELIVERY");
-      } else if (yandexSubFilter === "CANCELLED") {
-        result = result.filter((o: any) => o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED");
-      } else if (yandexSubFilter === "NEW") {
-        result = result.filter((o: any) => o.yandexStatus === "NEW" || o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED");
-      } else if (yandexSubFilter === "WAITING_COURIER") {
-        result = result.filter((o: any) => o.yandexStatus === "PICKUP");
+      if (yandexSubFilter === "NEW") {
+        result = result.filter((o: any) => o.yandexStatus === "NEW");
+      } else if (yandexSubFilter === "PROCESSING") {
+        result = result.filter((o: any) => o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED");
+      } else if (yandexSubFilter === "READY_TO_SHIP") {
+        result = result.filter((o: any) => o.yandexStatus === "READY_TO_SHIP");
       } else if (yandexSubFilter === "NOT_SHIPPED") {
-        result = result.filter((o: any) => o.yandexStatus === "UNPAID");
-      } else {
-        result = result.filter((o: any) => o.yandexStatus === yandexSubFilter);
+        result = [];
+      } else if (yandexSubFilter === "PICKUP") {
+        result = result.filter((o: any) => o.yandexStatus === "PICKUP");
+      } else if (yandexSubFilter === "DELIVERY") {
+        result = result.filter((o: any) => o.yandexStatus === "DELIVERY");
+      } else if (yandexSubFilter === "DELIVERED") {
+        result = result.filter((o: any) => o.yandexStatus === "DELIVERED");
+      } else if (yandexSubFilter === "CANCELLED") {
+        result = result.filter((o: any) =>
+          o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED" || o.yandexStatus === "UNPAID"
+        );
       }
     }
 
@@ -330,14 +337,17 @@ export default function Orders() {
   const yandexStatusCounts = useMemo(() => {
     const yOrders = marketplaceOrders;
     return {
-      all: yOrders.length,
-      NEW: yOrders.filter((o: any) => o.yandexStatus === "NEW" || o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED").length,
+      all:           yOrders.length,
+      NEW:           yOrders.filter((o: any) => o.yandexStatus === "NEW").length,
+      PROCESSING:    yOrders.filter((o: any) => o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED").length,
       READY_TO_SHIP: yOrders.filter((o: any) => o.yandexStatus === "READY_TO_SHIP").length,
-      NOT_SHIPPED: yOrders.filter((o: any) => o.yandexStatus === "UNPAID").length,
-      WAITING_COURIER: yOrders.filter((o: any) => o.yandexStatus === "PICKUP").length,
-      DELIVERY: yOrders.filter((o: any) => o.yandexStatus === "DELIVERY").length,
-      DELIVERED: yOrders.filter((o: any) => o.yandexStatus === "DELIVERED").length,
-      CANCELLED: yOrders.filter((o: any) => o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED").length,
+      NOT_SHIPPED:   0,
+      PICKUP:        yOrders.filter((o: any) => o.yandexStatus === "PICKUP").length,
+      DELIVERY:      yOrders.filter((o: any) => o.yandexStatus === "DELIVERY").length,
+      DELIVERED:     yOrders.filter((o: any) => o.yandexStatus === "DELIVERED").length,
+      CANCELLED:     yOrders.filter((o: any) =>
+        o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED" || o.yandexStatus === "UNPAID"
+      ).length,
     };
   }, [marketplaceOrders]);
 

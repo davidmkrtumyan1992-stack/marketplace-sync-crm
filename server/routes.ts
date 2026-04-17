@@ -4402,7 +4402,7 @@ export async function registerRoutes(
         const yandexSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey && s.warehouseId && s.organizationId === orgId);
         const YANDEX_BASE = "https://api.partner.market.yandex.ru";
         const since = new Date();
-        since.setDate(since.getDate() - 7);
+        since.setDate(since.getDate() - 30);
         let updated = 0, created = 0;
 
         for (const ySetting of yandexSettings) {
