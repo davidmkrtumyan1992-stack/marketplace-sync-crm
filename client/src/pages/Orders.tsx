@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useOzonPrintLabel, useOzonBulkLabels, useSilentSyncOzonOrders, useSyncOzonOrders, useSyncYandexOrders } from "@/hooks/use-orders";
+import { useOrders, useUpdateOrderStatus, useCreateDirectSale, useOzonShipOrder, useOzonCancelOrder, useOzonPrintLabel, useOzonBulkLabels, useSilentSyncOzonOrders, useSyncOzonOrders, useSyncYandexOrders, useYandexBulkReadyToShip, useYandexBulkLabels } from "@/hooks/use-orders";
 import { format, isToday, isYesterday } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +24,9 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, Truck, XCircle, Loader2, Printer, Warehouse, Download, AlertTriangle, CheckCircle, Clock, RefreshCw } from "lucide-react";
+import { ShoppingCart, Package, Calendar, User, CreditCard, Plus, Search, Trash2, UserPlus, Store, Eye, FileText, Phone, Truck, XCircle, Loader2, Printer, Warehouse, Download, AlertTriangle, CheckCircle, Clock, RefreshCw, Square } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { formatCurrency } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -185,6 +187,14 @@ export default function Orders() {
   const syncYandexOrders = useSyncYandexOrders();
   const syncOrders = marketplaceTab === "yandex" ? syncYandexOrders : syncOzonOrders;
   const bulkLabels = useOzonBulkLabels();
+  const ymBulkReady = useYandexBulkReadyToShip();
+  const ymBulkLabels = useYandexBulkLabels();
+
+  const [selectedYmOrderIds, setSelectedYmOrderIds] = useState<Set<number>>(new Set());
+  const [isLabelFormatOpen, setIsLabelFormatOpen] = useState(false);
+  const [labelSize, setLabelSize] = useState<"75x120" | "58x40">("58x40");
+  const [labelPrinter, setLabelPrinter] = useState<"A4" | "TAPE">("TAPE");
+  const [labelOrientation, setLabelOrientation] = useState<"VERTICAL" | "HORIZONTAL">("VERTICAL");
 
   const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number; apiKey: string | null; warehouseId: string | null }[]>({
     queryKey: ["/api/stores"],
@@ -228,6 +238,21 @@ export default function Orders() {
     setYandexSubFilter("all");
     setWbSubFilter("all");
     setStoreFilter("all");
+    setSelectedYmOrderIds(new Set());
+  };
+
+  const handleYmOrderList = () => {
+    fetch("/api/marketplace/yandex/order-list-pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderIds: [...selectedYmOrderIds] }),
+      credentials: "include",
+    }).then(async (res) => {
+      if (!res.ok) return;
+      const html = await res.text();
+      const win = window.open("", "_blank");
+      if (win) { win.document.write(html); win.document.close(); }
+    });
   };
 
 
@@ -627,7 +652,7 @@ export default function Orders() {
                     variant={yandexSubFilter === sub.key ? "default" : "ghost"}
                     size="sm"
                     className={yandexSubFilter === sub.key ? "" : "text-muted-foreground"}
-                    onClick={() => setYandexSubFilter(sub.key)}
+                    onClick={() => { setYandexSubFilter(sub.key); setSelectedYmOrderIds(new Set()); }}
                     data-testid={`button-yandex-sub-${sub.key}`}
                   >
                     <Icon className="w-3.5 h-3.5 mr-1.5" />
@@ -714,6 +739,18 @@ export default function Orders() {
           </Card>
         ) : (
           <div className="space-y-6">
+            {marketplaceTab === "yandex" && yandexSubFilter === "PROCESSING" && filteredOrders.length > 0 && (
+              <div className="flex items-center gap-2 pb-1 border-b">
+                <Checkbox
+                  checked={filteredOrders.length > 0 && selectedYmOrderIds.size === filteredOrders.length}
+                  onCheckedChange={(c) => setSelectedYmOrderIds(c ? new Set(filteredOrders.map((o: any) => o.id)) : new Set())}
+                  id="ym-select-all"
+                />
+                <label htmlFor="ym-select-all" className="text-sm text-muted-foreground cursor-pointer select-none">
+                  Выбрать все ({filteredOrders.length})
+                </label>
+              </div>
+            )}
             {dateGroups.map((group) => (
               <div key={group.label} data-testid={`date-group-${group.label}`}>
                 <div className="flex items-center gap-3 mb-3">
@@ -725,17 +762,43 @@ export default function Orders() {
                 </div>
                 <div className="grid gap-3">
                   {group.orders.map((order: any) => (
-                    <OrderCard
-                      key={order.id}
-                      order={order}
-                      storeName={order.sourceStoreName || (order.storeId ? storesMap.get(order.storeId) : undefined)}
-                      storeId={order.storeId}
-                      marketplaceStores={activeMarketplaceStores}
-                      getStatusColor={getStatusColor}
-                      getStatusLabel={getStatusLabel}
-                      getSourceBadge={getSourceBadge}
-                      onClick={() => setSelectedOrder(order)}
-                    />
+                    marketplaceTab === "yandex" && yandexSubFilter === "PROCESSING" ? (
+                      <div key={order.id} className="flex items-start gap-3">
+                        <Checkbox
+                          checked={selectedYmOrderIds.has(order.id)}
+                          onCheckedChange={(c) => setSelectedYmOrderIds(prev => {
+                            const next = new Set(prev);
+                            c ? next.add(order.id) : next.delete(order.id);
+                            return next;
+                          })}
+                          className="mt-4"
+                        />
+                        <div className="flex-1">
+                          <OrderCard
+                            order={order}
+                            storeName={order.sourceStoreName || (order.storeId ? storesMap.get(order.storeId) : undefined)}
+                            storeId={order.storeId}
+                            marketplaceStores={activeMarketplaceStores}
+                            getStatusColor={getStatusColor}
+                            getStatusLabel={getStatusLabel}
+                            getSourceBadge={getSourceBadge}
+                            onClick={() => setSelectedOrder(order)}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <OrderCard
+                        key={order.id}
+                        order={order}
+                        storeName={order.sourceStoreName || (order.storeId ? storesMap.get(order.storeId) : undefined)}
+                        storeId={order.storeId}
+                        marketplaceStores={activeMarketplaceStores}
+                        getStatusColor={getStatusColor}
+                        getStatusLabel={getStatusLabel}
+                        getSourceBadge={getSourceBadge}
+                        onClick={() => setSelectedOrder(order)}
+                      />
+                    )
                   ))}
                 </div>
               </div>
@@ -757,6 +820,124 @@ export default function Orders() {
         getSourceBadge={getSourceBadge}
         getStatusColor={getStatusColor}
       />
+
+      {/* ЯМ sticky bar — «Ожидают сборки» */}
+      {marketplaceTab === "yandex" && yandexSubFilter === "PROCESSING" && selectedYmOrderIds.size > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-between gap-4 px-6 py-3 shadow-lg border-t" style={{ backgroundColor: "#FFCC00", borderColor: "#F0BC00" }}>
+          <span className="font-medium text-black text-sm">
+            Выбрано {selectedYmOrderIds.size} {selectedYmOrderIds.size === 1 ? "заказ" : selectedYmOrderIds.size < 5 ? "заказа" : "заказов"}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              className="bg-black text-[#FFCC00] hover:bg-gray-800 border-0"
+              disabled={ymBulkReady.isPending}
+              onClick={() => ymBulkReady.mutate([...selectedYmOrderIds], { onSuccess: () => setSelectedYmOrderIds(new Set()) })}
+            >
+              {ymBulkReady.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
+              Готов к отправке
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="bg-white text-black border-gray-300 hover:bg-gray-100"
+              onClick={handleYmOrderList}
+            >
+              <FileText className="w-4 h-4 mr-2" />
+              Список
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="bg-white text-black border-gray-300 hover:bg-gray-100"
+              onClick={() => setIsLabelFormatOpen(true)}
+            >
+              <Printer className="w-4 h-4 mr-2" />
+              Этикетки
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-black hover:bg-yellow-300"
+              onClick={() => setSelectedYmOrderIds(new Set())}
+            >
+              <XCircle className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Диалог формата этикеток ЯМ */}
+      <Dialog open={isLabelFormatOpen} onOpenChange={setIsLabelFormatOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Настройте печать этикеток для посылок</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-5 py-2">
+            <div>
+              <p className="text-sm font-semibold mb-2">Размер</p>
+              <RadioGroup value={labelSize} onValueChange={(v) => setLabelSize(v as any)} className="space-y-2">
+                <div className="flex items-start gap-2">
+                  <RadioGroupItem value="75x120" id="sz-75" className="mt-0.5" />
+                  <label htmlFor="sz-75" className="cursor-pointer">
+                    <p className="text-sm font-medium">75 × 120 мм</p>
+                    <p className="text-xs text-muted-foreground">Чуть больше, чем A7</p>
+                  </label>
+                </div>
+                <div className="flex items-start gap-2">
+                  <RadioGroupItem value="58x40" id="sz-58" className="mt-0.5" />
+                  <label htmlFor="sz-58" className="cursor-pointer">
+                    <p className="text-sm font-medium">58 × 40 мм</p>
+                    <p className="text-xs text-muted-foreground">Немного больше, чем A9 — как и на других рынках</p>
+                  </label>
+                </div>
+              </RadioGroup>
+            </div>
+            <div>
+              <p className="text-sm font-semibold mb-2">Принтер</p>
+              <RadioGroup value={labelPrinter} onValueChange={(v) => setLabelPrinter(v as any)} className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="A4" id="pr-a4" />
+                  <label htmlFor="pr-a4" className="text-sm cursor-pointer">Офис А4</label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="TAPE" id="pr-tape" />
+                  <label htmlFor="pr-tape" className="text-sm cursor-pointer">Для этикеток на ленте</label>
+                </div>
+              </RadioGroup>
+            </div>
+            <div>
+              <p className="text-sm font-semibold mb-2">Ориентация печати</p>
+              <RadioGroup value={labelOrientation} onValueChange={(v) => setLabelOrientation(v as any)} className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="VERTICAL" id="or-v" />
+                  <label htmlFor="or-v" className="text-sm cursor-pointer">Вертикальный</label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="HORIZONTAL" id="or-h" />
+                  <label htmlFor="or-h" className="text-sm cursor-pointer">Горизонтальный</label>
+                </div>
+              </RadioGroup>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              className="bg-[#FFCC00] text-black hover:bg-yellow-400 border-0 w-full"
+              disabled={ymBulkLabels.isPending}
+              onClick={() => {
+                const pageFormat = labelPrinter === "A4" ? "A4" : "A6";
+                ymBulkLabels.mutate(
+                  { orderIds: [...selectedYmOrderIds], pageFormat, orientation: labelOrientation },
+                  { onSuccess: () => setIsLabelFormatOpen(false) }
+                );
+              }}
+            >
+              {ymBulkLabels.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Сохранить
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 }

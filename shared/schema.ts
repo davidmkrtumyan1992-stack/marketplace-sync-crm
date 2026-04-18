@@ -106,6 +106,7 @@ export const orders = pgTable("orders", {
   postingNumber: text("posting_number"),
   ozonStatus: text("ozon_status"),
   yandexStatus: text("yandex_status"),
+  ymCampaignId: text("ym_campaign_id"),
   wbOrderId: text("wb_order_id"),
   wbStatus: text("wb_status"),
   wbSupplyId: text("wb_supply_id"),

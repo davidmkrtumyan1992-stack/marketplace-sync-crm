@@ -79,7 +79,7 @@ export interface IStorage {
   createOrder(order: InsertOrder & { createdAt?: Date }, items: { productId?: number | null; sku?: string; productName?: string; quantity: number; price: number; originalPrice?: number; salePrice?: number }[]): Promise<Order>;
   updateOrderStatus(id: number, status: string): Promise<Order>;
   updateOrderOzonStatus(id: number, ozonStatus: string, status?: string, createdAt?: Date): Promise<Order>;
-  updateOrderYandexStatus(id: number, yandexStatus: string, status?: string, createdAt?: Date): Promise<Order>;
+  updateOrderYandexStatus(id: number, yandexStatus: string, status?: string, createdAt?: Date, ymCampaignId?: string): Promise<Order>;
   updateOrderWbStatus(id: number, wbStatus: string, status?: string, createdAt?: Date): Promise<Order>;
   getOrderByExternalId(externalId: string, organizationId: string, storeId?: number | null): Promise<Order | undefined>;
 
@@ -488,10 +488,11 @@ export class DatabaseStorage implements IStorage {
     return order;
   }
 
-  async updateOrderYandexStatus(id: number, yandexStatus: string, status?: string, createdAt?: Date): Promise<Order> {
+  async updateOrderYandexStatus(id: number, yandexStatus: string, status?: string, createdAt?: Date, ymCampaignId?: string): Promise<Order> {
     const updates: Record<string, any> = { yandexStatus };
     if (status) updates.status = status;
     if (createdAt) updates.createdAt = createdAt;
+    if (ymCampaignId) updates.ymCampaignId = ymCampaignId;
     const [order] = await db.update(orders).set(updates).where(eq(orders.id, id)).returning();
     return order;
   }

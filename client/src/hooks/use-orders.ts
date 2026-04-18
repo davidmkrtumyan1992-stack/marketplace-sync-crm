@@ -233,6 +233,57 @@ export function useSyncYandexOrders() {
   });
 }
 
+export function useYandexBulkReadyToShip() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: async (orderIds: number[]) => {
+      const res = await fetch("/api/marketplace/yandex/bulk-ready-to-ship", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderIds }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Ошибка");
+      }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [api.orders.list.path] });
+      toast({ title: `Готово к отправке: ${data.success} заказов` + (data.failed?.length ? `, ошибок: ${data.failed.length}` : "") });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
+    },
+  });
+}
+
+export function useYandexBulkLabels() {
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: async ({ orderIds, pageFormat, orientation }: { orderIds: number[]; pageFormat: string; orientation: string }) => {
+      const res = await fetch("/api/marketplace/yandex/bulk-labels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderIds, pageFormat, orientation }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Ошибка получения этикеток");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+    },
+    onError: (error: Error) => {
+      toast({ title: "Ошибка этикеток", description: error.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useSilentSyncOzonOrders() {
   const queryClient = useQueryClient();
 

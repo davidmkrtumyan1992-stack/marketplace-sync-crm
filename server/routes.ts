@@ -3904,6 +3904,7 @@ export async function registerRoutes(
                   postingNumber: null,
                   ozonStatus: null,
                   yandexStatus: yStatus,
+                  ymCampaignId: campaignId,
                   fulfillmentType: "FBS",
                   storeId: resolvedStoreId ?? undefined,
                   sourceStoreName: resolvedStoreName ?? undefined,
@@ -3943,6 +3944,224 @@ export async function registerRoutes(
       res.json({ success: true, created, updated, skipped, storeResults });
     } catch (error: any) {
       console.error("[yandex-sync-orders] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ==================== Yandex Market Bulk Actions ====================
+
+  app.post("/api/marketplace/yandex/bulk-ready-to-ship", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { orderIds } = req.body as { orderIds: number[] };
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return res.status(400).json({ message: "orderIds required" });
+      }
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ymSetting = allSettings.find(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
+      if (!ymSetting) return res.status(400).json({ message: "Настройки Яндекс Маркет не найдены" });
+
+      const cleanToken = ymSetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+      const isAcmaKey = cleanToken.startsWith("ACMA:");
+      const authHeaders: Record<string, string> = {
+        ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      };
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+
+      const dbOrders = await db.select().from(ordersTable).where(
+        and(
+          inArray(ordersTable.id, orderIds),
+          eq(ordersTable.source, "yandex"),
+          eq(ordersTable.organizationId, orgId)
+        )
+      );
+
+      let successCount = 0;
+      const failed: { orderId: number; error: string }[] = [];
+
+      for (const order of dbOrders) {
+        const campaignId = (order as any).ymCampaignId;
+        const ymOrderId = order.externalId;
+        if (!campaignId || !ymOrderId) {
+          failed.push({ orderId: order.id, error: "Нет campaign ID или external ID" });
+          continue;
+        }
+        try {
+          const statusRes = await fetch(
+            `${YANDEX_BASE}/campaigns/${campaignId}/orders/${ymOrderId}/status`,
+            {
+              method: "PUT",
+              headers: authHeaders,
+              body: JSON.stringify({ order: { status: "PROCESSING", substatus: "READY_TO_SHIP" } }),
+            }
+          );
+          if (statusRes.ok) {
+            await storage.updateOrderYandexStatus(order.id, "READY_TO_SHIP", "pending", undefined, campaignId);
+            successCount++;
+          } else {
+            const errText = await statusRes.text().catch(() => "");
+            failed.push({ orderId: order.id, error: `YM API ${statusRes.status}: ${errText.slice(0, 200)}` });
+          }
+        } catch (err: any) {
+          failed.push({ orderId: order.id, error: err.message });
+        }
+      }
+
+      console.log(`[ym-bulk-ready] org=${orgId} success=${successCount} failed=${failed.length}`);
+      res.json({ success: successCount, failed });
+    } catch (error: any) {
+      console.error("[ym-bulk-ready-to-ship] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/marketplace/yandex/bulk-labels", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { orderIds, pageFormat = "A4", orientation = "VERTICAL" } = req.body as { orderIds: number[]; pageFormat?: string; orientation?: string };
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return res.status(400).json({ message: "orderIds required" });
+      }
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ymSetting = allSettings.find(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
+      if (!ymSetting) return res.status(400).json({ message: "Настройки Яндекс Маркет не найдены" });
+
+      const cleanToken = ymSetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+      const isAcmaKey = cleanToken.startsWith("ACMA:");
+      const authHeaders: Record<string, string> = {
+        ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
+        "Accept": "application/pdf",
+      };
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+
+      const dbOrders = await db.select().from(ordersTable).where(
+        and(
+          inArray(ordersTable.id, orderIds),
+          eq(ordersTable.source, "yandex"),
+          eq(ordersTable.organizationId, orgId)
+        )
+      );
+
+      // Группируем по campaignId
+      const byCampaign = new Map<string, string[]>();
+      for (const order of dbOrders) {
+        const cid = (order as any).ymCampaignId;
+        const eid = order.externalId;
+        if (cid && eid) {
+          if (!byCampaign.has(cid)) byCampaign.set(cid, []);
+          byCampaign.get(cid)!.push(eid);
+        }
+      }
+
+      if (byCampaign.size === 0) {
+        return res.status(400).json({ message: "Не найдено заказов с известным campaign ID. Выполните синхронизацию." });
+      }
+
+      const pdfBuffers: Buffer[] = [];
+      for (const [campaignId, ymOrderIds] of byCampaign.entries()) {
+        const queryIds = ymOrderIds.map(id => `orderIds=${id}`).join("&");
+        const labelRes = await fetch(
+          `${YANDEX_BASE}/campaigns/${campaignId}/orders/delivery/labels?${queryIds}&format=${pageFormat}`,
+          { method: "GET", headers: authHeaders }
+        );
+        if (labelRes.ok) {
+          const buf = Buffer.from(await labelRes.arrayBuffer());
+          pdfBuffers.push(buf);
+        } else {
+          console.error(`[ym-bulk-labels] campaign=${campaignId} status=${labelRes.status}`);
+        }
+      }
+
+      if (pdfBuffers.length === 0) {
+        return res.status(502).json({ message: "Яндекс Маркет не вернул этикетки. Проверьте статус заказов." });
+      }
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", "attachment; filename=\"ym-labels.pdf\"");
+      // Если несколько кампаний — конкатенируем буферы (PDF reader покажет несколько документов)
+      res.send(Buffer.concat(pdfBuffers));
+    } catch (error: any) {
+      console.error("[ym-bulk-labels] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/marketplace/yandex/order-list-pdf", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { orderIds } = req.body as { orderIds: number[] };
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return res.status(400).json({ message: "orderIds required" });
+      }
+
+      const dbOrders = await db.select().from(ordersTable).where(
+        and(
+          inArray(ordersTable.id, orderIds),
+          eq(ordersTable.source, "yandex"),
+          eq(ordersTable.organizationId, orgId)
+        )
+      );
+
+      const orderItemsData = await db.select({
+        orderId: orderItemsTable.orderId,
+        sku: orderItemsTable.sku,
+        productName: orderItemsTable.productName,
+        quantity: orderItemsTable.quantity,
+        price: orderItemsTable.price,
+      }).from(orderItemsTable).where(
+        inArray(orderItemsTable.orderId, dbOrders.map(o => o.id))
+      );
+
+      const itemsByOrder = new Map<number, typeof orderItemsData>();
+      for (const item of orderItemsData) {
+        if (!itemsByOrder.has(item.orderId)) itemsByOrder.set(item.orderId, []);
+        itemsByOrder.get(item.orderId)!.push(item);
+      }
+
+      const rows = dbOrders.map(o => {
+        const items = itemsByOrder.get(o.id) || [];
+        const itemsHtml = items.length > 0
+          ? items.map(i => `<tr><td>${i.sku || "—"}</td><td>${i.productName || "—"}</td><td>${i.quantity}</td><td>${Number(i.price).toLocaleString("ru-RU")} ₽</td></tr>`).join("")
+          : `<tr><td colspan="4" style="color:#888">Товары не найдены в базе</td></tr>`;
+        return `
+          <tr class="order-row">
+            <td colspan="4"><strong>Заказ № ${o.externalId || o.orderNumber}</strong>
+              — статус: ${o.yandexStatus || "—"}
+              — сумма: ${Number(o.totalAmount).toLocaleString("ru-RU")} ₽
+              — кампания: ${(o as any).ymCampaignId || "—"}</td>
+          </tr>
+          ${itemsHtml}`;
+      }).join("");
+
+      const html = `<!DOCTYPE html><html lang="ru"><head>
+        <meta charset="UTF-8">
+        <title>Список заказов ЯМ</title>
+        <style>
+          body { font-family: Arial, sans-serif; font-size: 13px; }
+          h1 { font-size: 16px; margin-bottom: 8px; }
+          table { border-collapse: collapse; width: 100%; }
+          th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+          th { background: #f5f5f5; }
+          .order-row td { background: #fffbe6; font-weight: bold; }
+          @media print { button { display: none; } }
+        </style>
+      </head><body>
+        <button onclick="window.print()" style="margin-bottom:12px;padding:6px 16px;cursor:pointer">Печать</button>
+        <h1>Список заказов Яндекс Маркет (${dbOrders.length})</h1>
+        <table>
+          <thead><tr><th>Артикул</th><th>Товар</th><th>Кол-во</th><th>Цена</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </body></html>`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
+    } catch (error: any) {
+      console.error("[ym-order-list-pdf] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });
@@ -4490,6 +4709,7 @@ export async function registerRoutes(
                       postingNumber: null,
                       ozonStatus: null,
                       yandexStatus: yStatus,
+                      ymCampaignId: campaignId,
                       fulfillmentType: "FBS",
                       storeId: resolvedStoreId ?? undefined,
                       sourceStoreName: resolvedStoreName ?? undefined,
@@ -4580,9 +4800,13 @@ export async function registerRoutes(
                 const yStatus = yOrder.status || "NEW";
                 const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
                 const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
-                if (existingOrder && existingOrder.yandexStatus !== yStatus) {
-                  await storage.updateOrderYandexStatus(existingOrder.id, yStatus, yandexStatusToInternal(yStatus), yCreatedAt);
-                  totalUpdated++;
+                if (existingOrder) {
+                  const statusChanged = existingOrder.yandexStatus !== yStatus;
+                  const needsCampaignId = !(existingOrder as any).ymCampaignId;
+                  if (statusChanged || needsCampaignId) {
+                    await storage.updateOrderYandexStatus(existingOrder.id, yStatus, yandexStatusToInternal(yStatus), yCreatedAt, campaignId);
+                    if (statusChanged) totalUpdated++;
+                  }
                 }
               }
               if (pager && page < pager.pagesCount) { page++; } else { hasMore = false; }
