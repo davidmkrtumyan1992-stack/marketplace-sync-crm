@@ -4046,6 +4046,35 @@ export async function registerRoutes(
         )
       );
 
+      // Если ymCampaignId не заполнен — резолвим через YM API
+      const ordersNeedingCampaign = dbOrders.filter(o => !(o as any).ymCampaignId && o.externalId);
+      if (ordersNeedingCampaign.length > 0) {
+        const cleanToken2 = ymSetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+        const isAcmaKey2 = cleanToken2.startsWith("ACMA:");
+        const resolveHeaders: Record<string, string> = {
+          ...(isAcmaKey2 ? { "Api-Key": cleanToken2 } : { "Authorization": `OAuth ${cleanToken2}` }),
+          "Content-Type": "application/json", "Accept": "application/json",
+        };
+        const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { method: "GET", headers: resolveHeaders });
+        if (campRes.ok) {
+          const campData = await campRes.json();
+          const campaigns: any[] = campData?.campaigns || [];
+          for (const order of ordersNeedingCampaign) {
+            for (const camp of campaigns) {
+              const testRes = await fetch(
+                `${YANDEX_BASE}/campaigns/${camp.id}/orders/${order.externalId}`,
+                { method: "GET", headers: resolveHeaders }
+              );
+              if (testRes.ok) {
+                await db.update(ordersTable).set({ ymCampaignId: String(camp.id) } as any).where(eq(ordersTable.id, order.id));
+                (order as any).ymCampaignId = String(camp.id);
+                break;
+              }
+            }
+          }
+        }
+      }
+
       // Группируем по campaignId
       const byCampaign = new Map<string, string[]>();
       for (const order of dbOrders) {
@@ -4058,26 +4087,43 @@ export async function registerRoutes(
       }
 
       if (byCampaign.size === 0) {
-        return res.status(400).json({ message: "Не найдено заказов с известным campaign ID. Выполните синхронизацию." });
+        return res.status(400).json({ message: "Не найдено заказов с известным campaign ID. Нажмите «Синхронизировать» и попробуйте снова." });
       }
 
       const pdfBuffers: Buffer[] = [];
       for (const [campaignId, ymOrderIds] of byCampaign.entries()) {
-        const queryIds = ymOrderIds.map(id => `orderIds=${id}`).join("&");
-        const labelRes = await fetch(
-          `${YANDEX_BASE}/campaigns/${campaignId}/orders/delivery/labels?${queryIds}&format=${pageFormat}`,
+        // Пробуем батчевый запрос
+        const queryIds = ymOrderIds.map(id => `orderIds=${encodeURIComponent(id)}`).join("&");
+        const batchRes = await fetch(
+          `${YANDEX_BASE}/campaigns/${campaignId}/orders/delivery/labels?${queryIds}`,
           { method: "GET", headers: authHeaders }
         );
-        if (labelRes.ok) {
-          const buf = Buffer.from(await labelRes.arrayBuffer());
+        if (batchRes.ok) {
+          const buf = Buffer.from(await batchRes.arrayBuffer());
           pdfBuffers.push(buf);
+          console.log(`[ym-bulk-labels] campaign=${campaignId} batch OK, ${ymOrderIds.length} orders`);
         } else {
-          console.error(`[ym-bulk-labels] campaign=${campaignId} status=${labelRes.status}`);
+          const errText = await batchRes.text().catch(() => "");
+          console.error(`[ym-bulk-labels] campaign=${campaignId} batch status=${batchRes.status} body=${errText.slice(0,300)}`);
+          // Fallback: запрашиваем этикетки по одному
+          for (const ymOrderId of ymOrderIds) {
+            const singleRes = await fetch(
+              `${YANDEX_BASE}/campaigns/${campaignId}/orders/${ymOrderId}/delivery/labels`,
+              { method: "GET", headers: authHeaders }
+            );
+            if (singleRes.ok) {
+              const buf = Buffer.from(await singleRes.arrayBuffer());
+              pdfBuffers.push(buf);
+            } else {
+              const singleErr = await singleRes.text().catch(() => "");
+              console.error(`[ym-bulk-labels] order=${ymOrderId} status=${singleRes.status} body=${singleErr.slice(0,200)}`);
+            }
+          }
         }
       }
 
       if (pdfBuffers.length === 0) {
-        return res.status(502).json({ message: "Яндекс Маркет не вернул этикетки. Проверьте статус заказов." });
+        return res.status(502).json({ message: "Яндекс Маркет не вернул этикетки. Убедитесь что заказы находятся в статусе «Ожидает сборки» или «Готов к отправке»." });
       }
 
       res.setHeader("Content-Type", "application/pdf");
