@@ -3764,7 +3764,7 @@ export async function registerRoutes(
 
       const YANDEX_BASE = "https://api.partner.market.yandex.ru";
       const since = new Date();
-      since.setDate(since.getDate() - 365);
+      since.setDate(since.getDate() - 460);
 
       let created = 0, updated = 0, skipped = 0;
       const storeResults: { storeName: string; storeId: number | null; created: number; updated: number; skippedNoSku: number; error?: string }[] = [];
@@ -4535,7 +4535,7 @@ export async function registerRoutes(
 
       const YANDEX_BASE = "https://api.partner.market.yandex.ru";
       const since = new Date();
-      since.setDate(since.getDate() - 365);
+      since.setDate(since.getDate() - 460);
       const fromDateStr = [String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-');
       let totalUpdated = 0;
 
