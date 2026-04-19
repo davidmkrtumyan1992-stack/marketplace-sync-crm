@@ -3858,7 +3858,18 @@ export async function registerRoutes(
               for (const yOrder of ordersList) {
                 const yOrderId = String(yOrder.id);
                 const rawStatus = yOrder.status || "NEW";
-                const yStatus = (rawStatus === "PROCESSING" && yOrder.substatus === "READY_TO_SHIP") ? "READY_TO_SHIP" : rawStatus;
+                let yStatus = rawStatus;
+                if (rawStatus === "PROCESSING") {
+                  if (yOrder.substatus === "READY_TO_SHIP") {
+                    yStatus = "READY_TO_SHIP";
+                  } else if (!yOrder.substatus) {
+                    try {
+                      const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
+                      if (dRes.ok) { const d = await dRes.json(); if (d?.order?.substatus === "READY_TO_SHIP") yStatus = "READY_TO_SHIP"; }
+                    } catch {}
+                  }
+                }
+                console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
                 const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
 
                 const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
@@ -4721,7 +4732,18 @@ export async function registerRoutes(
                 for (const yOrder of ordersList) {
                   const yOrderId = String(yOrder.id);
                   const rawStatus = yOrder.status || "NEW";
-                  const yStatus = (rawStatus === "PROCESSING" && yOrder.substatus === "READY_TO_SHIP") ? "READY_TO_SHIP" : rawStatus;
+                  let yStatus = rawStatus;
+                  if (rawStatus === "PROCESSING") {
+                    if (yOrder.substatus === "READY_TO_SHIP") {
+                      yStatus = "READY_TO_SHIP";
+                    } else if (!yOrder.substatus) {
+                      try {
+                        const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
+                        if (dRes.ok) { const d = await dRes.json(); if (d?.order?.substatus === "READY_TO_SHIP") yStatus = "READY_TO_SHIP"; }
+                      } catch {}
+                    }
+                  }
+                  console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
                   const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
                   const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
 
@@ -4846,7 +4868,18 @@ export async function registerRoutes(
               for (const yOrder of ordersList) {
                 const yOrderId = String(yOrder.id);
                 const rawStatus = yOrder.status || "NEW";
-                const yStatus = (rawStatus === "PROCESSING" && yOrder.substatus === "READY_TO_SHIP") ? "READY_TO_SHIP" : rawStatus;
+                let yStatus = rawStatus;
+                if (rawStatus === "PROCESSING") {
+                  if (yOrder.substatus === "READY_TO_SHIP") {
+                    yStatus = "READY_TO_SHIP";
+                  } else if (!yOrder.substatus) {
+                    try {
+                      const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
+                      if (dRes.ok) { const d = await dRes.json(); if (d?.order?.substatus === "READY_TO_SHIP") yStatus = "READY_TO_SHIP"; }
+                    } catch {}
+                  }
+                }
+                console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
                 const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
                 const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
                 if (existingOrder) {
