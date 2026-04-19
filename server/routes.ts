@@ -3862,7 +3862,7 @@ export async function registerRoutes(
                 if (rawStatus === "PROCESSING") {
                   if (yOrder.substatus === "READY_TO_SHIP") {
                     yStatus = "READY_TO_SHIP";
-                  } else if (!yOrder.substatus) {
+                  } else {
                     try {
                       const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
                       if (dRes.ok) { const d = await dRes.json(); if (d?.order?.substatus === "READY_TO_SHIP") yStatus = "READY_TO_SHIP"; }
@@ -4736,7 +4736,7 @@ export async function registerRoutes(
                   if (rawStatus === "PROCESSING") {
                     if (yOrder.substatus === "READY_TO_SHIP") {
                       yStatus = "READY_TO_SHIP";
-                    } else if (!yOrder.substatus) {
+                    } else {
                       try {
                         const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
                         if (dRes.ok) { const d = await dRes.json(); if (d?.order?.substatus === "READY_TO_SHIP") yStatus = "READY_TO_SHIP"; }
@@ -4872,7 +4872,7 @@ export async function registerRoutes(
                 if (rawStatus === "PROCESSING") {
                   if (yOrder.substatus === "READY_TO_SHIP") {
                     yStatus = "READY_TO_SHIP";
-                  } else if (!yOrder.substatus) {
+                  } else {
                     try {
                       const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
                       if (dRes.ok) { const d = await dRes.json(); if (d?.order?.substatus === "READY_TO_SHIP") yStatus = "READY_TO_SHIP"; }
