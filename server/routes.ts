@@ -3857,7 +3857,8 @@ export async function registerRoutes(
 
               for (const yOrder of ordersList) {
                 const yOrderId = String(yOrder.id);
-                const yStatus = yOrder.status || "NEW";
+                const rawStatus = yOrder.status || "NEW";
+                const yStatus = (rawStatus === "PROCESSING" && yOrder.substatus === "READY_TO_SHIP") ? "READY_TO_SHIP" : rawStatus;
                 const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
 
                 const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
@@ -4719,7 +4720,8 @@ export async function registerRoutes(
 
                 for (const yOrder of ordersList) {
                   const yOrderId = String(yOrder.id);
-                  const yStatus = yOrder.status || "NEW";
+                  const rawStatus = yOrder.status || "NEW";
+                  const yStatus = (rawStatus === "PROCESSING" && yOrder.substatus === "READY_TO_SHIP") ? "READY_TO_SHIP" : rawStatus;
                   const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
                   const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
 
@@ -4843,7 +4845,8 @@ export async function registerRoutes(
               const pager = ordersData?.pager;
               for (const yOrder of ordersList) {
                 const yOrderId = String(yOrder.id);
-                const yStatus = yOrder.status || "NEW";
+                const rawStatus = yOrder.status || "NEW";
+                const yStatus = (rawStatus === "PROCESSING" && yOrder.substatus === "READY_TO_SHIP") ? "READY_TO_SHIP" : rawStatus;
                 const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
                 const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
                 if (existingOrder) {
