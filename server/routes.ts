@@ -4311,16 +4311,34 @@ export async function registerRoutes(
       const fromDateStr = `${String(fromDate.getDate()).padStart(2,"0")}-${String(fromDate.getMonth()+1).padStart(2,"0")}-${fromDate.getFullYear()}`;
 
       for (const campaign of campaigns) {
-        const sRes = await fetch(
+        // Пробуем несколько вариантов параметра даты для совместимости
+        const urls = [
+          `${YANDEX_BASE}/campaigns/${campaign.id}/first-mile/shipments?limit=50`,
+          `${YANDEX_BASE}/campaigns/${campaign.id}/first-mile/shipments?dateFrom=${fromDateStr}&limit=50`,
           `${YANDEX_BASE}/campaigns/${campaign.id}/first-mile/shipments?fromDate=${fromDateStr}&limit=50`,
-          { headers: authHeaders }
-        );
-        if (!sRes.ok) {
-          console.log(`[ym-shipments] campaign=${campaign.id} HTTP ${sRes.status}`);
-          continue;
+        ];
+
+        let sData: any = null;
+        for (const url of urls) {
+          const sRes = await fetch(url, { headers: authHeaders });
+          const rawText = await sRes.text();
+          console.log(`[ym-shipments] campaign=${campaign.id} url=${url} status=${sRes.status} body=${rawText.slice(0,500)}`);
+          if (sRes.ok) {
+            try { sData = JSON.parse(rawText); } catch {}
+            break;
+          }
         }
-        const sData = await sRes.json();
-        const shipments: any[] = sData?.result?.shipments || sData?.shipments || [];
+        if (!sData) continue;
+
+        // Поддерживаем разные форматы ответа YM API
+        const shipments: any[] = (
+          sData?.result?.shipments ||
+          sData?.result?.models ||
+          sData?.shipments ||
+          sData?.models ||
+          []
+        );
+        console.log(`[ym-shipments] campaign=${campaign.id} parsed=${shipments.length} shipments`);
 
         for (const s of shipments) {
           let orderIds: number[] = s.orderIds || [];
@@ -4331,7 +4349,7 @@ export async function registerRoutes(
             );
             if (oRes.ok) {
               const oData = await oRes.json();
-              orderIds = (oData?.result?.orders || oData?.orders || []).map((o: any) => o.id ?? o.orderId);
+              orderIds = (oData?.result?.orders || oData?.result?.models || oData?.orders || []).map((o: any) => o.id ?? o.orderId);
             }
           }
 
@@ -4358,6 +4376,42 @@ export async function registerRoutes(
       console.error("[ym-shipments]", e);
       res.status(500).json({ message: e.message });
     }
+  });
+
+  app.get("/api/marketplace/yandex/debug-shipments", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ymSetting = allSettings.find(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
+      if (!ymSetting) return res.status(400).json({ message: "no YM setting" });
+
+      const cleanToken = ymSetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+      const isAcmaKey = cleanToken.startsWith("ACMA:");
+      const authHeaders: Record<string, string> = {
+        ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
+        "Content-Type": "application/json", "Accept": "application/json",
+      };
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+
+      const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { headers: authHeaders });
+      const campData = await campRes.json();
+      const campaigns: any[] = campData?.campaigns || [];
+
+      const results: any[] = [];
+      for (const c of campaigns.slice(0, 3)) {
+        const urls: Record<string, any> = {};
+        for (const url of [
+          `${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments?limit=10`,
+          `${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments?dateFrom=20-03-2026&limit=10`,
+        ]) {
+          const r = await fetch(url, { headers: authHeaders });
+          const txt = await r.text();
+          urls[url.split("campaigns/")[1]] = { status: r.status, body: txt.slice(0, 1000) };
+        }
+        results.push({ campaignId: c.id, domain: c.domain, tests: urls });
+      }
+      res.json({ campaigns: campaigns.map((c: any) => ({ id: c.id, domain: c.domain })), results });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   app.get("/api/marketplace/yandex/shipments/:id/act", isAuthenticated, async (req, res) => {
