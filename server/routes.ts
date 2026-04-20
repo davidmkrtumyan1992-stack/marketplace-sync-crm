@@ -3865,8 +3865,14 @@ export async function registerRoutes(
                   } else {
                     try {
                       const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
-                      if (dRes.ok) { const d = await dRes.json(); if (d?.order?.substatus === "READY_TO_SHIP") yStatus = "READY_TO_SHIP"; }
-                    } catch {}
+                      if (dRes.ok) {
+                        const d = await dRes.json(); const fo = d?.order;
+                        const fSub = fo?.substatus;
+                        const inShipment = (fo?.delivery?.shipments?.length ?? 0) > 0 || !!fo?.delivery?.shipment?.id;
+                        if (fSub === "READY_TO_SHIP" || inShipment) yStatus = "READY_TO_SHIP";
+                        console.log(`[ym-single] ${yOrderId} sub="${fSub}" inShipment=${inShipment} → ${yStatus}`);
+                      } else { console.log(`[ym-single] ${yOrderId} HTTP ${dRes.status}`); }
+                    } catch (e: any) { console.log(`[ym-single] ${yOrderId} err=${(e as any).message}`); }
                   }
                 }
                 console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
@@ -3958,6 +3964,59 @@ export async function registerRoutes(
       console.error("[yandex-sync-orders] Error:", error);
       res.status(500).json({ message: error.message });
     }
+  });
+
+  // ==================== Yandex Market Debug ====================
+
+  app.get("/api/marketplace/yandex/debug-processing", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+      const allSettings = await db.select().from(marketplaceSettingsTable);
+      const yandexSettings = allSettings.filter((s: any) => s.marketplace === "yandex" && s.isActive && s.apiKey && s.warehouseId && s.organizationId === orgId);
+      const results: any[] = [];
+      for (const ySetting of yandexSettings) {
+        const cleanToken = ySetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+        const isAcmaKey = cleanToken.startsWith("ACMA:");
+        const authHeaders: Record<string, string> = {
+          ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
+          "Content-Type": "application/json", "Accept": "application/json",
+        };
+        const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { method: "GET", headers: authHeaders });
+        if (!campRes.ok) continue;
+        const campaigns = (await campRes.json())?.campaigns || [];
+        const cleanWh = (ySetting.warehouseId || "").replace(/\s/g, "").trim();
+        let filtered = campaigns;
+        if (cleanWh) {
+          const exact = campaigns.find((c: any) => String(c.id) === cleanWh);
+          filtered = exact ? [exact] : campaigns.filter((c: any) => c.business?.id && String(c.business.id) === cleanWh);
+        }
+        const since = new Date(); since.setDate(since.getDate() - 30);
+        const fromDateStr = [String(since.getDate()).padStart(2,'0'), String(since.getMonth()+1).padStart(2,'0'), since.getFullYear()].join('-');
+        for (const campaign of filtered) {
+          const campaignId = String(campaign.id);
+          const ordersRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders?fromDate=${fromDateStr}&pageSize=50`, { method: "GET", headers: authHeaders });
+          if (!ordersRes.ok) continue;
+          const ordersList = (await ordersRes.json())?.orders || [];
+          for (const yOrder of ordersList) {
+            if (yOrder.status !== "PROCESSING") continue;
+            const yOrderId = String(yOrder.id);
+            const sRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
+            let singleData: any = null;
+            if (sRes.ok) singleData = (await sRes.json())?.order;
+            results.push({
+              orderId: yOrderId, campaignId,
+              listSubstatus: yOrder.substatus ?? null,
+              singleSubstatus: singleData?.substatus ?? null,
+              deliveryShipment: singleData?.delivery?.shipment ?? null,
+              deliveryShipments: singleData?.delivery?.shipments ?? null,
+              singleHttpStatus: sRes.status,
+            });
+          }
+        }
+      }
+      res.json({ count: results.length, results });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   // ==================== Yandex Market Bulk Actions ====================
@@ -4739,8 +4798,14 @@ export async function registerRoutes(
                     } else {
                       try {
                         const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
-                        if (dRes.ok) { const d = await dRes.json(); if (d?.order?.substatus === "READY_TO_SHIP") yStatus = "READY_TO_SHIP"; }
-                      } catch {}
+                        if (dRes.ok) {
+                          const d = await dRes.json(); const fo = d?.order;
+                          const fSub = fo?.substatus;
+                          const inShipment = (fo?.delivery?.shipments?.length ?? 0) > 0 || !!fo?.delivery?.shipment?.id;
+                          if (fSub === "READY_TO_SHIP" || inShipment) yStatus = "READY_TO_SHIP";
+                          console.log(`[ym-single] ${yOrderId} sub="${fSub}" inShipment=${inShipment} → ${yStatus}`);
+                        } else { console.log(`[ym-single] ${yOrderId} HTTP ${dRes.status}`); }
+                      } catch (e: any) { console.log(`[ym-single] ${yOrderId} err=${(e as any).message}`); }
                     }
                   }
                   console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
@@ -4875,8 +4940,14 @@ export async function registerRoutes(
                   } else {
                     try {
                       const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
-                      if (dRes.ok) { const d = await dRes.json(); if (d?.order?.substatus === "READY_TO_SHIP") yStatus = "READY_TO_SHIP"; }
-                    } catch {}
+                      if (dRes.ok) {
+                        const d = await dRes.json(); const fo = d?.order;
+                        const fSub = fo?.substatus;
+                        const inShipment = (fo?.delivery?.shipments?.length ?? 0) > 0 || !!fo?.delivery?.shipment?.id;
+                        if (fSub === "READY_TO_SHIP" || inShipment) yStatus = "READY_TO_SHIP";
+                        console.log(`[ym-single] ${yOrderId} sub="${fSub}" inShipment=${inShipment} → ${yStatus}`);
+                      } else { console.log(`[ym-single] ${yOrderId} HTTP ${dRes.status}`); }
+                    } catch (e: any) { console.log(`[ym-single] ${yOrderId} err=${(e as any).message}`); }
                   }
                 }
                 console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
