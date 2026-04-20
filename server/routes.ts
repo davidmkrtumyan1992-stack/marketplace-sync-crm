@@ -4283,6 +4283,156 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== Yandex Market Shipments ====================
+
+  app.get("/api/marketplace/yandex/shipments", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ymSetting = allSettings.find(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
+      if (!ymSetting) return res.status(400).json({ message: "Настройки Яндекс Маркет не найдены" });
+
+      const cleanToken = ymSetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+      const isAcmaKey = cleanToken.startsWith("ACMA:");
+      const authHeaders: Record<string, string> = {
+        ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      };
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+
+      const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { headers: authHeaders });
+      if (!campRes.ok) return res.status(502).json({ message: "YM API /campaigns error" });
+      const campData = await campRes.json();
+      const campaigns: any[] = campData?.campaigns || [];
+
+      const allShipments: any[] = [];
+      const fromDate = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+      const fromDateStr = `${String(fromDate.getDate()).padStart(2,"0")}-${String(fromDate.getMonth()+1).padStart(2,"0")}-${fromDate.getFullYear()}`;
+
+      for (const campaign of campaigns) {
+        const sRes = await fetch(
+          `${YANDEX_BASE}/campaigns/${campaign.id}/first-mile/shipments?fromDate=${fromDateStr}&limit=50`,
+          { headers: authHeaders }
+        );
+        if (!sRes.ok) {
+          console.log(`[ym-shipments] campaign=${campaign.id} HTTP ${sRes.status}`);
+          continue;
+        }
+        const sData = await sRes.json();
+        const shipments: any[] = sData?.result?.shipments || sData?.shipments || [];
+
+        for (const s of shipments) {
+          let orderIds: number[] = s.orderIds || [];
+          if (orderIds.length === 0 && s.id) {
+            const oRes = await fetch(
+              `${YANDEX_BASE}/campaigns/${campaign.id}/first-mile/shipments/${s.id}/orders`,
+              { headers: authHeaders }
+            );
+            if (oRes.ok) {
+              const oData = await oRes.json();
+              orderIds = (oData?.result?.orders || oData?.orders || []).map((o: any) => o.id ?? o.orderId);
+            }
+          }
+
+          allShipments.push({
+            id: s.id,
+            campaignId: campaign.id,
+            status: s.status || "CREATED",
+            warehouseName: s.warehouseFrom?.description || s.warehouseFrom?.address?.street || campaign.domain || `Кампания ${campaign.id}`,
+            warehouseAddress: s.warehouseFrom?.address
+              ? [s.warehouseFrom.address.street, s.warehouseFrom.address.city].filter(Boolean).join(", ")
+              : null,
+            planDate: s.planIntervalFrom || s.createdAt || null,
+            orderCount: s.orderCount ?? orderIds.length,
+            orderIds,
+            availableActions: s.availableActions || [],
+          });
+        }
+      }
+
+      allShipments.sort((a, b) => (b.planDate || "").localeCompare(a.planDate || ""));
+      console.log(`[ym-shipments] org=${orgId} total=${allShipments.length}`);
+      res.json({ shipments: allShipments });
+    } catch (e: any) {
+      console.error("[ym-shipments]", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.get("/api/marketplace/yandex/shipments/:id/act", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { id: shipmentId } = req.params;
+      const { campaignId } = req.query as { campaignId?: string };
+      if (!campaignId) return res.status(400).json({ message: "campaignId required" });
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ymSetting = allSettings.find(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
+      if (!ymSetting) return res.status(400).json({ message: "Настройки Яндекс Маркет не найдены" });
+
+      const cleanToken = ymSetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+      const isAcmaKey = cleanToken.startsWith("ACMA:");
+      const authHeaders: Record<string, string> = {
+        ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
+        "Accept": "application/pdf",
+      };
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+
+      const pdfRes = await fetch(
+        `${YANDEX_BASE}/campaigns/${campaignId}/first-mile/shipments/${shipmentId}/act`,
+        { headers: authHeaders }
+      );
+      if (!pdfRes.ok) {
+        const txt = await pdfRes.text().catch(() => "");
+        return res.status(pdfRes.status).json({ message: `YM API ${pdfRes.status}: ${txt.slice(0,200)}` });
+      }
+      const buf = Buffer.from(await pdfRes.arrayBuffer());
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="shipment-${shipmentId}-act.pdf"`);
+      res.send(buf);
+    } catch (e: any) {
+      console.error("[ym-shipment-act]", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/marketplace/yandex/shipments/:id/sign", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { id: shipmentId } = req.params;
+      const { campaignId } = req.body as { campaignId: string };
+      if (!campaignId) return res.status(400).json({ message: "campaignId required" });
+
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const ymSetting = allSettings.find(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
+      if (!ymSetting) return res.status(400).json({ message: "Настройки Яндекс Маркет не найдены" });
+
+      const cleanToken = ymSetting.apiKey!.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+      const isAcmaKey = cleanToken.startsWith("ACMA:");
+      const authHeaders: Record<string, string> = {
+        ...(isAcmaKey ? { "Api-Key": cleanToken } : { "Authorization": `OAuth ${cleanToken}` }),
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      };
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+
+      const signRes = await fetch(
+        `${YANDEX_BASE}/campaigns/${campaignId}/first-mile/shipments/${shipmentId}/confirm`,
+        { method: "POST", headers: authHeaders, body: JSON.stringify({}) }
+      );
+      if (!signRes.ok) {
+        const txt = await signRes.text().catch(() => "");
+        return res.status(signRes.status).json({ message: `YM API ${signRes.status}: ${txt.slice(0,200)}` });
+      }
+      console.log(`[ym-shipment-sign] shipment=${shipmentId} campaign=${campaignId} OK`);
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error("[ym-shipment-sign]", e);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   // ═══════════════════════════════════════════════════════════════════════════
   // WB FBS СТАТУСЫ — ЭТАЛОННЫЙ МАППИНГ. НЕ ИЗМЕНЯТЬ без явного указания.
   // WB API wbStatus → internal CRM status

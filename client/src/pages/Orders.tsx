@@ -196,6 +196,33 @@ export default function Orders() {
   const [labelPrinter, setLabelPrinter] = useState<"A4" | "TAPE">("TAPE");
   const [labelOrientation, setLabelOrientation] = useState<"VERTICAL" | "HORIZONTAL">("VERTICAL");
 
+  const [selectedShipmentId, setSelectedShipmentId] = useState<number | null>(null);
+  const [isPaperReceiptOpen, setIsPaperReceiptOpen] = useState(false);
+  const [isSignReceiptOpen, setIsSignReceiptOpen] = useState(false);
+
+  const { data: shipmentsData, isLoading: isShipmentsLoading, refetch: refetchShipments } = useQuery<{ shipments: any[] }>({
+    queryKey: ["/api/marketplace/yandex/shipments"],
+    enabled: marketplaceTab === "yandex" && yandexSubFilter === "READY_TO_SHIP",
+    refetchInterval: 5 * 60 * 1000,
+  });
+  const ymShipments = shipmentsData?.shipments || [];
+  const selectedShipment = ymShipments.find((s: any) => s.id === selectedShipmentId) || ymShipments[0] || null;
+
+  const signShipment = useMutation({
+    mutationFn: async ({ shipmentId, campaignId }: { shipmentId: number; campaignId: string }) => {
+      const r = await fetch(`/api/marketplace/yandex/shipments/${shipmentId}/sign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignId }),
+        credentials: "include",
+      });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.message || "Ошибка"); }
+      return r.json();
+    },
+    onSuccess: () => { toast({ title: "Квитанция подписана" }); setIsSignReceiptOpen(false); refetchShipments(); },
+    onError: (e: any) => toast({ title: "Ошибка подписи", description: e.message, variant: "destructive" }),
+  });
+
   const { data: storesList } = useQuery<{ id: number; name: string; marketplace: string; companyId: number; apiKey: string | null; warehouseId: string | null }[]>({
     queryKey: ["/api/stores"],
   });
@@ -309,7 +336,7 @@ export default function Orders() {
       if (yandexSubFilter === "NEW") {
         result = result.filter((o: any) => o.yandexStatus === "NEW");
       } else if (yandexSubFilter === "PROCESSING") {
-        result = result.filter((o: any) => o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED");
+        result = result.filter((o: any) => o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED" || o.yandexStatus === "READY_TO_SHIP");
       } else if (yandexSubFilter === "READY_TO_SHIP") {
         result = result.filter((o: any) => o.yandexStatus === "READY_TO_SHIP");
       } else if (yandexSubFilter === "NOT_SHIPPED") {
@@ -364,7 +391,7 @@ export default function Orders() {
     return {
       all:           yOrders.length,
       NEW:           yOrders.filter((o: any) => o.yandexStatus === "NEW").length,
-      PROCESSING:    yOrders.filter((o: any) => o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED").length,
+      PROCESSING:    yOrders.filter((o: any) => o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED" || o.yandexStatus === "READY_TO_SHIP").length,
       READY_TO_SHIP: yOrders.filter((o: any) => o.yandexStatus === "READY_TO_SHIP").length,
       NOT_SHIPPED:   0,
       PICKUP:        yOrders.filter((o: any) => o.yandexStatus === "PICKUP").length,
@@ -719,7 +746,114 @@ export default function Orders() {
           </div>
         )}
 
-        {marketplaceTab !== "wildberries" && (isLoading ? (
+        {marketplaceTab !== "wildberries" && (marketplaceTab === "yandex" && yandexSubFilter === "READY_TO_SHIP" ? (
+          isShipmentsLoading ? (
+            <div className="grid gap-4">
+              {[1, 2, 3].map((i) => (
+                <Card key={i} className="kpi-card animate-pulse">
+                  <CardContent className="py-6"><div className="h-16 bg-muted rounded-xl" /></CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : ymShipments.length === 0 ? (
+            <Card className="kpi-card">
+              <CardContent className="py-16 text-center">
+                <Package className="w-16 h-16 mx-auto text-muted-foreground/30 mb-4" />
+                <p className="text-xl font-medium text-muted-foreground">Отгрузок нет</p>
+                <p className="text-sm text-muted-foreground mt-2">Отгрузки появятся после синхронизации</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="flex gap-4" style={{ height: "calc(100vh - 300px)", minHeight: "500px" }}>
+              {/* Левая панель — список отгрузок */}
+              <div className="w-72 flex-shrink-0 overflow-y-auto border rounded-xl bg-card">
+                {ymShipments.map((s: any) => (
+                  <div
+                    key={s.id}
+                    className={`p-4 border-b cursor-pointer transition-colors hover:bg-accent/50 ${selectedShipment?.id === s.id ? "bg-accent" : ""}`}
+                    onClick={() => setSelectedShipmentId(s.id)}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-semibold">Отгрузка №{s.id}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${s.status === "CREATED" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-600"}`}>
+                        {s.status === "CREATED" ? "Созданный" : "Создание"}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {s.planDate ? new Date(s.planDate).toLocaleDateString("ru-RU") : "—"} · {s.orderCount} {s.orderCount === 1 ? "заказ" : s.orderCount < 5 ? "заказа" : "заказов"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Правая панель — детали отгрузки */}
+              {selectedShipment && (
+                <div className="flex-1 overflow-y-auto border rounded-xl bg-card p-6 space-y-5">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h2 className="text-lg font-bold">Отгрузка №{selectedShipment.id}</h2>
+                      <p className="text-sm text-muted-foreground mt-0.5">{selectedShipment.warehouseName}</p>
+                      {selectedShipment.warehouseAddress && (
+                        <p className="text-xs text-muted-foreground">{selectedShipment.warehouseAddress}</p>
+                      )}
+                    </div>
+                    <span className={`text-sm px-3 py-1 rounded-full font-medium ${selectedShipment.status === "CREATED" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-600"}`}>
+                      {selectedShipment.status === "CREATED" ? "Созданный" : "Создание"}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    <Button variant="outline" className="gap-2" onClick={() => setIsPaperReceiptOpen(true)}>
+                      <Printer className="w-4 h-4" />
+                      Распечатайте квитанцию
+                    </Button>
+                    <Button variant="outline" className="gap-2" onClick={() => setIsSignReceiptOpen(true)}>
+                      <CheckCircle className="w-4 h-4" />
+                      Подпишите электронную квитанцию
+                    </Button>
+                  </div>
+
+                  <div>
+                    <p className="text-sm font-semibold mb-3">
+                      Заказы отгрузки ({selectedShipment.orderIds?.length || selectedShipment.orderCount})
+                    </p>
+                    {selectedShipment.orderIds && selectedShipment.orderIds.length > 0 ? (
+                      <div className="rounded-lg border overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>№ заказа</TableHead>
+                              <TableHead>Сумма</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {selectedShipment.orderIds.map((oid: number) => {
+                              const order = marketplaceOrders.find((o: any) => o.externalId === String(oid) || o.externalId === oid);
+                              return (
+                                <TableRow
+                                  key={oid}
+                                  className={order ? "cursor-pointer hover:bg-accent/30" : ""}
+                                  onClick={() => order && setSelectedOrder(order)}
+                                >
+                                  <TableCell className="font-mono text-sm">#{oid}</TableCell>
+                                  <TableCell className="text-sm text-muted-foreground">
+                                    {order ? `${Number(order.totalAmount).toLocaleString("ru-RU")} ₽` : "—"}
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Список заказов недоступен</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        ) : isLoading ? (
           <div className="grid gap-4">
             {[1, 2, 3].map((i) => (
               <Card key={i} className="kpi-card animate-pulse">
@@ -934,6 +1068,58 @@ export default function Orders() {
             >
               {ymBulkLabels.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
               Сохранить
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог бумажной квитанции ЯМ */}
+      <Dialog open={isPaperReceiptOpen} onOpenChange={setIsPaperReceiptOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Создать бумажную квитанцию?</DialogTitle>
+            <DialogDescription>
+              После его создания вы не сможете выбрать электронную квитанцию.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setIsPaperReceiptOpen(false)}>Назад</Button>
+            <Button
+              onClick={() => {
+                if (!selectedShipment) return;
+                setIsPaperReceiptOpen(false);
+                window.open(
+                  `/api/marketplace/yandex/shipments/${selectedShipment.id}/act?campaignId=${selectedShipment.campaignId}`,
+                  "_blank"
+                );
+              }}
+            >
+              Создавать
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог электронной подписи ЯМ */}
+      <Dialog open={isSignReceiptOpen} onOpenChange={setIsSignReceiptOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Подписать квитанцию?</DialogTitle>
+            <DialogDescription>
+              Убедитесь, что все заказы подготовлены к отгрузке.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setIsSignReceiptOpen(false)}>Проверьте заказы</Button>
+            <Button
+              disabled={signShipment.isPending}
+              onClick={() => {
+                if (!selectedShipment) return;
+                signShipment.mutate({ shipmentId: selectedShipment.id, campaignId: String(selectedShipment.campaignId) });
+              }}
+            >
+              {signShipment.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Знак
             </Button>
           </DialogFooter>
         </DialogContent>
