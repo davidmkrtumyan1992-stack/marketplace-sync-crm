@@ -488,11 +488,12 @@ export class DatabaseStorage implements IStorage {
     return order;
   }
 
-  async updateOrderYandexStatus(id: number, yandexStatus: string, status?: string, createdAt?: Date, ymCampaignId?: string): Promise<Order> {
+  async updateOrderYandexStatus(id: number, yandexStatus: string, status?: string, createdAt?: Date, ymCampaignId?: string, ymShipmentId?: string | null): Promise<Order> {
     const updates: Record<string, any> = { yandexStatus };
     if (status) updates.status = status;
     if (createdAt) updates.createdAt = createdAt;
     if (ymCampaignId) updates.ymCampaignId = ymCampaignId;
+    if (ymShipmentId) updates.ymShipmentId = ymShipmentId;
     const [order] = await db.update(orders).set(updates).where(eq(orders.id, id)).returning();
     return order;
   }
