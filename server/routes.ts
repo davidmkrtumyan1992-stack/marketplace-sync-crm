@@ -4327,13 +4327,19 @@ export async function registerRoutes(
       const fromD2 = new Date(now2); fromD2.setDate(fromD2.getDate() - 30);
       const pad2 = (n: number) => String(n).padStart(2, "0");
       const dateFrom2 = `${pad2(fromD2.getDate())}-${pad2(fromD2.getMonth() + 1)}-${fromD2.getFullYear()}`;
-      const dateTo2   = `${pad2(now2.getDate())}-${pad2(now2.getMonth() + 1)}-${now2.getFullYear()}`;
+      // ISO dates for POST body
+      const fromIso2 = `${fromD2.getFullYear()}-${pad2(fromD2.getMonth() + 1)}-${pad2(fromD2.getDate())}`;
+      const toIso2   = `${now2.getFullYear()}-${pad2(now2.getMonth() + 1)}-${pad2(now2.getDate())}`;
 
       for (const campId of campaignIds) {
         try {
           const sessRes = await fetch(
-            `${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments?dateFrom=${dateFrom2}&dateTo=${dateTo2}&pageSize=50`,
-            { headers: authHeaders }
+            `${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments`,
+            {
+              method: "POST",
+              headers: authHeaders,
+              body: JSON.stringify({ dateFrom: fromIso2, dateTo: toIso2, limit: 50 })
+            }
           );
           if (!sessRes.ok) { console.log(`[ym-shipments] sessions HTTP ${sessRes.status} camp=${campId}`); continue; }
           const sessData = await sessRes.json();
@@ -4517,17 +4523,31 @@ export async function registerRoutes(
       ).limit(1);
       const sampleOrder = sampleOrders[0];
 
+      const fromIso = `${fromD.getFullYear()}-${pad(fromD.getMonth() + 1)}-${pad(fromD.getDate())}`;
+      const toIso   = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
       const results: any[] = [];
       for (const c of campaigns.slice(0, 2)) {
-        // 1. Sessions list
-        const sessUrl = `${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments?dateFrom=${dateFrom}&dateTo=${dateTo}&pageSize=10`;
-        const sessR = await fetch(sessUrl, { headers: authHeaders });
-        const sessTxt = await sessR.text();
-        let sessJson: any = null;
-        try { sessJson = JSON.parse(sessTxt); } catch {}
-        const firstSession = sessJson?.result?.shipments?.[0] || sessJson?.shipments?.[0];
+        // 1a. POST with ISO dates (YYYY-MM-DD)
+        const sessR_iso = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments`, {
+          method: "POST", headers: authHeaders,
+          body: JSON.stringify({ dateFrom: fromIso, dateTo: toIso, limit: 10 })
+        });
+        let sessJson_iso: any = null;
+        try { sessJson_iso = await sessR_iso.json(); } catch {}
 
-        // 2. First session detail
+        // 1b. POST with DD-MM-YYYY dates (YM orders format)
+        const sessR_ddmm = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments`, {
+          method: "POST", headers: authHeaders,
+          body: JSON.stringify({ dateFrom: dateFrom, dateTo: dateTo, limit: 10 })
+        });
+        let sessJson_ddmm: any = null;
+        try { sessJson_ddmm = await sessR_ddmm.json(); } catch {}
+
+        const workingSessJson = (sessR_iso.ok ? sessJson_iso : null) || (sessR_ddmm.ok ? sessJson_ddmm : null);
+        const firstSession = workingSessJson?.result?.shipments?.[0] || workingSessJson?.shipments?.[0];
+
+        // 2. First session detail (GET - works per previous testing)
         let sessionDetailJson: any = null;
         if (firstSession?.id) {
           const detR = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments/${firstSession.id}`, { headers: authHeaders });
@@ -4541,20 +4561,20 @@ export async function registerRoutes(
           try { supplierFilterJson = { status: sfR.status, body: await sfR.json() }; } catch {}
         }
 
-        // 4. Single-order delivery structure
+        // 4. Single-order delivery
         let sampleDelivery: any = null;
         if (sampleOrder?.externalId) {
           const soR = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/orders/${sampleOrder.externalId}`, { headers: authHeaders });
-          if (soR.ok) {
-            try { const soData = await soR.json(); sampleDelivery = soData?.order?.delivery; } catch {}
-          }
+          if (soR.ok) { try { const soData = await soR.json(); sampleDelivery = soData?.order?.delivery; } catch {} }
         }
 
         results.push({
           campaignId: c.id,
           domain: c.domain,
-          sessionsListStatus: sessR.status,
-          sessionsListRaw: sessJson,
+          postIsoStatus: sessR_iso.status,
+          postIsoBody: sessJson_iso,
+          postDdmmStatus: sessR_ddmm.status,
+          postDdmmBody: sessJson_ddmm,
           firstSessionObject: firstSession || null,
           firstSessionDetailRaw: sessionDetailJson,
           supplierShipmentIdFilterTest: supplierFilterJson,
