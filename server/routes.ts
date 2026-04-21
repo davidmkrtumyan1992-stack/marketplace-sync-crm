@@ -4317,11 +4317,26 @@ export async function registerRoutes(
 
       // externalId → sessionId mapping (строим через multiple strategies)
       const externalIdToSession = new Map<string, string>();
-      const isSessionId = (v: any) => v != null && Number(String(v)) > 0 && Number(String(v)) <= 200_000_000;
+      const isSessionId = (v: any) => {
+        if (v != null && String(v).startsWith('VRT_')) return true;
+        return v != null && Number(String(v)) > 0 && Number(String(v)) <= 200_000_000;
+      };
+      const virtualMeta = new Map<string, { logisticPointId: string; shipmentDate: string }>();
 
       const campaignIds = [...new Set(
         readyOrders.filter(o => (o as any).ymCampaignId).map(o => (o as any).ymCampaignId as string)
       )];
+
+      // Pre-populate from DB: skip YM API calls for orders already mapped
+      for (const order of readyOrders) {
+        const existingId = (order as any).ymShipmentId as string | null;
+        if (!existingId || !order.externalId || !isSessionId(existingId)) continue;
+        externalIdToSession.set(order.externalId!, existingId);
+        if (existingId.startsWith('VRT_')) {
+          const m = existingId.match(/^VRT_(\d+)_(.+)$/);
+          if (m && !virtualMeta.has(existingId)) virtualMeta.set(existingId, { logisticPointId: m[1], shipmentDate: m[2] });
+        }
+      }
 
       const now2 = new Date();
       const fromD2 = new Date(now2); fromD2.setDate(fromD2.getDate() - 30);
@@ -4414,7 +4429,18 @@ export async function registerRoutes(
               externalIdToSession.set(order.externalId!, String(candidates[0]));
               console.log(`[ym-shipments] single-API order=${order.externalId} → session=${candidates[0]}`);
             } else {
-              console.log(`[ym-shipments] no-session order=${order.externalId} delivery=${JSON.stringify(del).slice(0, 500)}`);
+              // Fallback: virtual session grouped by logisticPointId + shipmentDate
+              const vpId = String(del?.logisticPointId || del?.outletCode || "0");
+              const rawDate = del?.shipments?.[0]?.shipmentDate || del?.dates?.fromDate;
+              let vpDateIso = rawDate || "nodate";
+              if (rawDate && /^\d{2}-\d{2}-\d{4}$/.test(rawDate)) {
+                const [dd, mm, yyyy] = rawDate.split('-');
+                vpDateIso = `${yyyy}-${mm}-${dd}`;
+              }
+              const vId = `VRT_${vpId}_${vpDateIso}`;
+              externalIdToSession.set(order.externalId!, vId);
+              if (!virtualMeta.has(vId)) virtualMeta.set(vId, { logisticPointId: vpId, shipmentDate: vpDateIso });
+              console.log(`[ym-shipments] virtual-session order=${order.externalId} → ${vId}`);
             }
           }
         } catch (e: any) { /* ignore */ }
@@ -4451,23 +4477,29 @@ export async function registerRoutes(
         let warehouseAddress: string | null = null;
         let planDate: string | null = null;
 
-        try {
-          const sRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/first-mile/shipments/${shipmentId}`, { headers: authHeaders });
-          if (sRes.ok) {
-            const sData = await sRes.json();
-            const s = sData?.result || sData?.shipment || sData;
-            shipmentStatus = s?.status || "CREATED";
-            warehouseName = s?.warehouseFrom?.description || s?.warehouseFrom?.address?.street || warehouseName;
-            if (s?.warehouseFrom?.address) {
-              warehouseAddress = [s.warehouseFrom.address.street, s.warehouseFrom.address.city].filter(Boolean).join(", ");
+        if (shipmentId.startsWith('VRT_')) {
+          const vm = virtualMeta.get(shipmentId);
+          planDate = vm?.shipmentDate || null;
+          warehouseName = vm ? `Яндекс Маркет · ${vm.logisticPointId}` : `Кампания ${campaignId}`;
+        } else {
+          try {
+            const sRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/first-mile/shipments/${shipmentId}`, { headers: authHeaders });
+            if (sRes.ok) {
+              const sData = await sRes.json();
+              const s = sData?.result || sData?.shipment || sData;
+              shipmentStatus = s?.status || "CREATED";
+              warehouseName = s?.warehouseFrom?.description || s?.warehouseFrom?.address?.street || warehouseName;
+              if (s?.warehouseFrom?.address) {
+                warehouseAddress = [s.warehouseFrom.address.street, s.warehouseFrom.address.city].filter(Boolean).join(", ");
+              }
+              planDate = s?.planIntervalFrom || null;
+              console.log(`[ym-shipments] shipment=${shipmentId} status=${shipmentStatus} raw=${JSON.stringify(sData).slice(0,200)}`);
+            } else {
+              console.log(`[ym-shipments] single-shipment API ${shipmentId} HTTP ${sRes.status}`);
             }
-            planDate = s?.planIntervalFrom || null;
-            console.log(`[ym-shipments] shipment=${shipmentId} status=${shipmentStatus} raw=${JSON.stringify(sData).slice(0,200)}`);
-          } else {
-            console.log(`[ym-shipments] single-shipment API ${shipmentId} HTTP ${sRes.status}`);
+          } catch (e: any) {
+            console.log(`[ym-shipments] single-shipment error: ${e.message}`);
           }
-        } catch (e: any) {
-          console.log(`[ym-shipments] single-shipment error: ${e.message}`);
         }
 
         allShipments.push({
