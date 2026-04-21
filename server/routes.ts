@@ -4510,79 +4510,100 @@ export async function registerRoutes(
       const now = new Date();
       const fromD = new Date(now); fromD.setDate(fromD.getDate() - 30);
       const pad = (n: number) => String(n).padStart(2, "0");
-      const dateFrom = `${pad(fromD.getDate())}-${pad(fromD.getMonth() + 1)}-${fromD.getFullYear()}`;
-      const dateTo   = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}`;
+      const fromIso = `${fromD.getFullYear()}-${pad(fromD.getMonth() + 1)}-${pad(fromD.getDate())}`;
+      const toIso   = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
       const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { headers: authHeaders });
       const campData = await campRes.json();
       const campaigns: any[] = campData?.campaigns || [];
+      const businessId = campaigns[0]?.business?.id || 131115754;
 
-      // Get first READY_TO_SHIP order from DB for single-order delivery debug
+      // ── Test 1: POST /campaigns/124589277/first-mile/shipments + capture Allow header ──
+      const postRes = await fetch(`${YANDEX_BASE}/campaigns/124589277/first-mile/shipments`, {
+        method: "POST", headers: authHeaders,
+        body: JSON.stringify({ dateFrom: fromIso, dateTo: toIso, limit: 10 })
+      });
+      const postAllowHeader = postRes.headers.get("Allow") || postRes.headers.get("allow") || null;
+      let postBody: any = null; try { postBody = await postRes.json(); } catch {}
+
+      // ── Test 2: PUT /campaigns/124589277/first-mile/shipments ──
+      const putRes = await fetch(`${YANDEX_BASE}/campaigns/124589277/first-mile/shipments`, {
+        method: "PUT", headers: authHeaders,
+        body: JSON.stringify({ dateFrom: fromIso, dateTo: toIso, limit: 50 })
+      });
+      let putBody: any = null; try { putBody = await putRes.json(); } catch {}
+
+      // ── Test 3: GET /businesses/{id}/first-mile/shipments ──
+      const bizGetRes = await fetch(
+        `${YANDEX_BASE}/businesses/${businessId}/first-mile/shipments?dateFrom=${fromIso}&dateTo=${toIso}&limit=50`,
+        { headers: authHeaders }
+      );
+      let bizGetBody: any = null; try { bizGetBody = await bizGetRes.json(); } catch {}
+
+      // ── Test 4: POST /businesses/{id}/first-mile/shipments ──
+      const bizPostRes = await fetch(`${YANDEX_BASE}/businesses/${businessId}/first-mile/shipments`, {
+        method: "POST", headers: authHeaders,
+        body: JSON.stringify({ dateFrom: fromIso, dateTo: toIso, limit: 50 })
+      });
+      let bizPostBody: any = null; try { bizPostBody = await bizPostRes.json(); } catch {}
+
+      // ── Test 5: Full order JSON — all top-level keys ──
       const sampleOrders = await db.select().from(ordersTable).where(
         and(eq(ordersTable.source, "yandex"), eq(ordersTable.yandexStatus, "READY_TO_SHIP"), eq(ordersTable.organizationId, orgId))
       ).limit(1);
       const sampleOrder = sampleOrders[0];
-
-      const fromIso = `${fromD.getFullYear()}-${pad(fromD.getMonth() + 1)}-${pad(fromD.getDate())}`;
-      const toIso   = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-
-      const results: any[] = [];
-      for (const c of campaigns.slice(0, 2)) {
-        // 1a. POST with ISO dates (YYYY-MM-DD)
-        const sessR_iso = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments`, {
-          method: "POST", headers: authHeaders,
-          body: JSON.stringify({ dateFrom: fromIso, dateTo: toIso, limit: 10 })
-        });
-        let sessJson_iso: any = null;
-        try { sessJson_iso = await sessR_iso.json(); } catch {}
-
-        // 1b. POST with DD-MM-YYYY dates (YM orders format)
-        const sessR_ddmm = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments`, {
-          method: "POST", headers: authHeaders,
-          body: JSON.stringify({ dateFrom: dateFrom, dateTo: dateTo, limit: 10 })
-        });
-        let sessJson_ddmm: any = null;
-        try { sessJson_ddmm = await sessR_ddmm.json(); } catch {}
-
-        const workingSessJson = (sessR_iso.ok ? sessJson_iso : null) || (sessR_ddmm.ok ? sessJson_ddmm : null);
-        const firstSession = workingSessJson?.result?.shipments?.[0] || workingSessJson?.shipments?.[0];
-
-        // 2. First session detail (GET - works per previous testing)
-        let sessionDetailJson: any = null;
-        if (firstSession?.id) {
-          const detR = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments/${firstSession.id}`, { headers: authHeaders });
-          try { sessionDetailJson = await detR.json(); } catch {}
+      let fullOrderKeys: string[] = [];
+      let fullOrderDeliveryKeys: string[] = [];
+      if (sampleOrder?.externalId) {
+        const campId = (sampleOrder as any).ymCampaignId || "124589277";
+        const soRes = await fetch(`${YANDEX_BASE}/campaigns/${campId}/orders/${sampleOrder.externalId}`, { headers: authHeaders });
+        if (soRes.ok) {
+          const soData = await soRes.json();
+          const ord = soData?.order;
+          if (ord) { fullOrderKeys = Object.keys(ord); fullOrderDeliveryKeys = Object.keys(ord.delivery || {}); }
         }
-
-        // 3. supplierShipmentId filter test
-        let supplierFilterJson: any = null;
-        if (firstSession?.id) {
-          const sfR = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/orders?supplierShipmentId=${firstSession.id}&pageSize=10`, { headers: authHeaders });
-          try { supplierFilterJson = { status: sfR.status, body: await sfR.json() }; } catch {}
-        }
-
-        // 4. Single-order delivery
-        let sampleDelivery: any = null;
-        if (sampleOrder?.externalId) {
-          const soR = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/orders/${sampleOrder.externalId}`, { headers: authHeaders });
-          if (soR.ok) { try { const soData = await soR.json(); sampleDelivery = soData?.order?.delivery; } catch {} }
-        }
-
-        results.push({
-          campaignId: c.id,
-          domain: c.domain,
-          postIsoStatus: sessR_iso.status,
-          postIsoBody: sessJson_iso,
-          postDdmmStatus: sessR_ddmm.status,
-          postDdmmBody: sessJson_ddmm,
-          firstSessionObject: firstSession || null,
-          firstSessionDetailRaw: sessionDetailJson,
-          supplierShipmentIdFilterTest: supplierFilterJson,
-          sampleOrderExternalId: sampleOrder?.externalId || null,
-          sampleOrderDelivery: sampleDelivery,
-        });
       }
-      res.json({ campaigns: campaigns.map((c: any) => ({ id: c.id, domain: c.domain })), results });
+
+      // ── Test 6: Delivery data for ALL READY_TO_SHIP orders ──
+      const allReadyOrders = await db.select().from(ordersTable).where(
+        and(eq(ordersTable.source, "yandex"), eq(ordersTable.yandexStatus, "READY_TO_SHIP"), eq(ordersTable.organizationId, orgId))
+      ).limit(12);
+      const allDeliveries: any[] = [];
+      for (const o of allReadyOrders) {
+        if (!o.externalId) continue;
+        try {
+          const campId = (o as any).ymCampaignId || "124589277";
+          const r = await fetch(`${YANDEX_BASE}/campaigns/${campId}/orders/${o.externalId}`, { headers: authHeaders });
+          if (r.ok) {
+            const d = await r.json();
+            const del = d?.order?.delivery;
+            allDeliveries.push({
+              externalId: o.externalId,
+              outletCode: del?.outletCode,
+              logisticPointId: del?.logisticPointId,
+              shipmentDate: del?.shipments?.[0]?.shipmentDate,
+              cargoUnitId: del?.shipments?.[0]?.id,
+            });
+          }
+        } catch {}
+      }
+
+      res.json({
+        campaigns: campaigns.map((c: any) => ({ id: c.id, domain: c.domain })),
+        businessId,
+        postStatus: postRes.status,
+        postAllowHeader,
+        putStatus: putRes.status,
+        putBody,
+        bizGetStatus: bizGetRes.status,
+        bizGetBody,
+        bizPostStatus: bizPostRes.status,
+        bizPostBody,
+        fullOrderKeys,
+        fullOrderDeliveryKeys,
+        sampleOrderExternalId: sampleOrder?.externalId || null,
+        allDeliveries,
+      });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
