@@ -4289,6 +4289,9 @@ export async function registerRoutes(
 
   // ==================== Yandex Market Shipments ====================
 
+  // Реестр известных session ID (пополняется при каждом успешном detail-запросе)
+  const ymKnownSessionIds = new Set<number>([81780262, 81843179, 81818838, 81857735, 81863339, 81801174]);
+
   app.get("/api/marketplace/yandex/shipments", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
@@ -4513,6 +4516,33 @@ export async function registerRoutes(
         } catch (e: any) { /* ignore */ }
       }
 
+      // Strategy E: detail-endpoint по известным session ID (перекрывает VRT_ → реальный ID)
+      const hasVrtOrUnmapped = readyOrders.some(o => {
+        if (!o.externalId) return false;
+        const sid = externalIdToSession.get(o.externalId);
+        return !sid || String(sid).startsWith('VRT_');
+      });
+      if (hasVrtOrUnmapped) {
+        for (const candId of ymKnownSessionIds) {
+          for (const campId of [...campaignIds, "124589277"]) {
+            try {
+              const r = await fetch(`${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments/${candId}`, { headers: authHeaders });
+              if (r.ok) {
+                const d = await r.json();
+                const det = d?.result?.shipment || d?.shipment || d?.result || d;
+                const detIds: any[] = det?.orderIds || det?.orders?.map((o: any) => o.id) || [];
+                if (detIds.length > 0) {
+                  detIds.forEach((oid: any) => externalIdToSession.set(String(oid), String(candId)));
+                  ymKnownSessionIds.add(candId);
+                  console.log(`[ym-shipments] Strategy E: session=${candId} camp=${campId} orders=${detIds.join(",")}`);
+                  break;
+                }
+              }
+            } catch {}
+          }
+        }
+      }
+
       // Сохраняем session IDs в БД
       for (const order of readyOrders) {
         if (!order.externalId) continue;
@@ -4713,6 +4743,18 @@ export async function registerRoutes(
         fullOrderDeliveryKeys,
         sampleOrderExternalId: sampleOrder?.externalId || null,
         allDeliveries,
+        knownSessionTests: await (async () => {
+          const knownIds = [81780262, 81843179, 81818838, 81857735, 81863339, 81801174];
+          const results: any[] = [];
+          for (const sid of knownIds) {
+            try {
+              const r = await fetch(`${YANDEX_BASE}/campaigns/124589277/first-mile/shipments/${sid}`, { headers: authHeaders });
+              const body = r.ok ? await r.json().catch(() => null) : await r.text().catch(() => null);
+              results.push({ sessId: sid, status: r.status, body });
+            } catch (e: any) { results.push({ sessId: sid, error: e.message }); }
+          }
+          return results;
+        })(),
       });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
