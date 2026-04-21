@@ -774,7 +774,7 @@ export default function Orders() {
                     onClick={() => setSelectedShipmentId(s.id)}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm font-semibold">{String(s.id).startsWith('VRT_') ? `Отгрузка ${s.planDate ? new Date(s.planDate).toLocaleDateString("ru-RU") : "—"}` : `Отгрузка №${s.id}`}</span>
+                      <span className="text-sm font-semibold">Отгрузка {s.displayId || `№${s.id}`}</span>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${s.status === "CREATED" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-600"}`}>
                         {s.status === "CREATED" ? "Созданный" : "Создание"}
                       </span>
@@ -791,7 +791,7 @@ export default function Orders() {
                 <div className="flex-1 overflow-y-auto border rounded-xl bg-card p-6 space-y-5">
                   <div className="flex items-start justify-between">
                     <div>
-                      <h2 className="text-lg font-bold">{String(selectedShipment.id).startsWith('VRT_') ? `Отгрузка ${selectedShipment.planDate ? new Date(selectedShipment.planDate).toLocaleDateString("ru-RU") : "—"}` : `Отгрузка №${selectedShipment.id}`}</h2>
+                      <h2 className="text-lg font-bold">Отгрузка {selectedShipment.displayId || `№${selectedShipment.id}`}</h2>
                       <p className="text-sm text-muted-foreground mt-0.5">{selectedShipment.warehouseName}</p>
                       {selectedShipment.warehouseAddress && (
                         <p className="text-xs text-muted-foreground">{selectedShipment.warehouseAddress}</p>

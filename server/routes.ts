@@ -4327,15 +4327,16 @@ export async function registerRoutes(
         readyOrders.filter(o => (o as any).ymCampaignId).map(o => (o as any).ymCampaignId as string)
       )];
 
-      // Pre-populate from DB: skip YM API calls for orders already mapped
+      // Pre-populate из DB: реальные session ID берём сразу, VRT_ пропускаем —
+      // чтобы каждый запрос пробовал получить реальный ID через YM API
       for (const order of readyOrders) {
         const existingId = (order as any).ymShipmentId as string | null;
-        if (!existingId || !order.externalId || !isSessionId(existingId)) continue;
-        externalIdToSession.set(order.externalId!, existingId);
-        if (existingId.startsWith('VRT_')) {
-          const m = existingId.match(/^VRT_(\d+)_(.+)$/);
-          if (m && !virtualMeta.has(existingId)) virtualMeta.set(existingId, { logisticPointId: m[1], shipmentDate: m[2] });
+        if (!existingId || !order.externalId) continue;
+        if (!existingId.startsWith('VRT_') && isSessionId(existingId)) {
+          // Реальный session ID — не дёргаем API
+          externalIdToSession.set(order.externalId!, existingId);
         }
+        // VRT_ — не pre-populate, чтобы Strategy D попробовал получить реальный ID
       }
 
       const now2 = new Date();
@@ -4346,19 +4347,56 @@ export async function registerRoutes(
       const fromIso2 = `${fromD2.getFullYear()}-${pad2(fromD2.getMonth() + 1)}-${pad2(fromD2.getDate())}`;
       const toIso2   = `${now2.getFullYear()}-${pad2(now2.getMonth() + 1)}-${pad2(now2.getDate())}`;
 
+      // Вспомогательная функция: попробовать fetch сессий разными методами
+      const fetchSessions = async (url: string, method: string, body?: object): Promise<any[]> => {
+        try {
+          const opts: RequestInit = { method, headers: authHeaders };
+          if (body) opts.body = JSON.stringify(body);
+          const r = await fetch(url, opts);
+          console.log(`[ym-shipments] ${method} ${url.slice(-60)} → ${r.status} Allow=${r.headers.get("Allow") || "-"}`);
+          if (!r.ok) return [];
+          const d = await r.json();
+          return d?.result?.shipments || d?.shipments || d?.result?.items || [];
+        } catch { return []; }
+      };
+
+      // Попытка 0: business-level (охватывает все кампании сразу)
+      const bizId = 131115754;
+      let globalSessions: Array<{ sessions: any[]; campId: string }> = [];
+      const bizDateBody = { dateFrom: fromIso2, dateTo: toIso2, limit: 50 };
+      for (const [bMethod, bBody] of [
+        ["GET", undefined],
+        ["POST", bizDateBody],
+        ["PUT", bizDateBody],
+      ] as Array<[string, any]>) {
+        const url = bBody
+          ? `${YANDEX_BASE}/businesses/${bizId}/first-mile/shipments`
+          : `${YANDEX_BASE}/businesses/${bizId}/first-mile/shipments?dateFrom=${fromIso2}&dateTo=${toIso2}&limit=50`;
+        const ss = await fetchSessions(url, bMethod, bBody);
+        if (ss.length > 0) {
+          // business sessions могут содержать campaignId; используем первую известную кампанию как fallback
+          ss.forEach(s => {
+            const sid = String(s.campaignId || campaignIds[0] || "");
+            globalSessions.push({ sessions: [s], campId: sid });
+          });
+          console.log(`[ym-shipments] biz-level ${bMethod} → ${ss.length} sessions`);
+          break;
+        }
+      }
+
       for (const campId of campaignIds) {
         try {
-          const sessRes = await fetch(
-            `${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments`,
-            {
-              method: "POST",
-              headers: authHeaders,
-              body: JSON.stringify({ dateFrom: fromIso2, dateTo: toIso2, limit: 50 })
-            }
-          );
-          if (!sessRes.ok) { console.log(`[ym-shipments] sessions HTTP ${sessRes.status} camp=${campId}`); continue; }
-          const sessData = await sessRes.json();
-          const sessions: any[] = sessData?.result?.shipments || sessData?.shipments || [];
+          // Попытки в порядке: POST ISO, PUT ISO, POST DD-MM
+          let sessions: any[] = [];
+          for (const [method, body] of [
+            ["POST", { dateFrom: fromIso2, dateTo: toIso2, limit: 50 }],
+            ["PUT",  { dateFrom: fromIso2, dateTo: toIso2, limit: 50 }],
+            ["POST", { dateFrom: dateFrom2, dateTo: `${pad2(now2.getDate())}-${pad2(now2.getMonth()+1)}-${now2.getFullYear()}`, limit: 50 }],
+          ] as Array<[string, object]>) {
+            sessions = await fetchSessions(`${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments`, method, body);
+            if (sessions.length > 0) break;
+          }
+          if (!sessions.length) { console.log(`[ym-shipments] all methods failed camp=${campId}`); continue; }
           console.log(`[ym-shipments] camp=${campId} sessions=${sessions.length} first-raw=${JSON.stringify(sessions[0] || {}).slice(0, 400)}`);
 
           for (const sess of sessions) {
@@ -4407,6 +4445,35 @@ export async function registerRoutes(
           }
         } catch (e: any) {
           console.log(`[ym-shipments] sessions-list err camp=${campId}: ${e.message}`);
+        }
+      }
+
+      // Обработка business-level сессий (если нашлись)
+      for (const { sessions: bSessions, campId: bCampId } of globalSessions) {
+        for (const sess of bSessions) {
+          const sessionId = String(sess.id);
+          if (externalIdToSession.has(sessionId)) continue; // уже обработан через кампанийный цикл
+          const directIds: any[] = sess.orderIds || sess.orders?.map((o: any) => o.id) || [];
+          if (directIds.length > 0) {
+            directIds.forEach((oid: any) => externalIdToSession.set(String(oid), sessionId));
+            continue;
+          }
+          // Strategy C-biz: detail через business или кампанийный уровень
+          const detUrls = [
+            `${YANDEX_BASE}/businesses/${bizId}/first-mile/shipments/${sessionId}`,
+            ...(bCampId ? [`${YANDEX_BASE}/campaigns/${bCampId}/first-mile/shipments/${sessionId}`] : []),
+          ];
+          for (const dUrl of detUrls) {
+            try {
+              const dr = await fetch(dUrl, { headers: authHeaders });
+              if (dr.ok) {
+                const dd = await dr.json();
+                const det = dd?.result?.shipment || dd?.shipment || dd?.result || dd;
+                const dIds: any[] = det?.orderIds || det?.orders?.map((o: any) => o.id) || [];
+                if (dIds.length > 0) { dIds.forEach((oid: any) => externalIdToSession.set(String(oid), sessionId)); break; }
+              }
+            } catch {}
+          }
         }
       }
 
@@ -4515,7 +4582,18 @@ export async function registerRoutes(
         });
       }
 
+      // Сортировка: ISO дата (YYYY-MM-DD) сортируется правильно
       allShipments.sort((a, b) => (b.planDate || "").localeCompare(a.planDate || ""));
+      // Для виртуальных сессий добавляем порядковый номер
+      let vrtIdx = 0;
+      for (const s of allShipments) {
+        if (String(s.id).startsWith('VRT_')) {
+          vrtIdx++;
+          s.displayId = `#${vrtIdx}`;
+        } else {
+          s.displayId = `№${s.id}`;
+        }
+      }
       console.log(`[ym-shipments] org=${orgId} shipments=${allShipments.length}`);
       res.json({ shipments: allShipments });
     } catch (e: any) {
