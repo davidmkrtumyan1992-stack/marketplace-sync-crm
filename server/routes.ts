@@ -3863,20 +3863,16 @@ export async function registerRoutes(
                 if (rawStatus === "PROCESSING") {
                   if (yOrder.substatus === "READY_TO_SHIP") {
                     yStatus = "READY_TO_SHIP";
-                    const listSession = yOrder.delivery?.shipment;
-                    if (listSession?.id) yShipmentId = String(listSession.id);
                   } else {
                     try {
                       const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
                       if (dRes.ok) {
                         const d = await dRes.json(); const fo = d?.order;
                         const fSub = fo?.substatus;
-                        const sessionShipment = fo?.delivery?.shipment;
                         const cargoUnits: any[] = fo?.delivery?.shipments || [];
-                        const inShipment = !!sessionShipment?.id || cargoUnits.length > 0;
+                        const inShipment = cargoUnits.length > 0;
                         if (fSub === "READY_TO_SHIP" || inShipment) yStatus = "READY_TO_SHIP";
-                        if (sessionShipment?.id) yShipmentId = String(sessionShipment.id);
-                        console.log(`[ym-single] ${yOrderId} sub="${fSub}" inShipment=${inShipment} shipmentId=${yShipmentId} → ${yStatus}`);
+                        console.log(`[ym-single] ${yOrderId} sub="${fSub}" inShipment=${inShipment} → ${yStatus}`);
                       } else { console.log(`[ym-single] ${yOrderId} HTTP ${dRes.status}`); }
                     } catch (e: any) { console.log(`[ym-single] ${yOrderId} err=${(e as any).message}`); }
                   }
@@ -4319,42 +4315,76 @@ export async function registerRoutes(
       );
       console.log(`[ym-shipments] org=${orgId} readyOrders=${readyOrders.length}`);
 
-      // Разделяем: правильный ymShipmentId (сессия ~80M, ≤9 цифр) vs нет/неправильный (груз.единица >100M)
-      const withShipment = readyOrders.filter(o => {
-        const sId = (o as any).ymShipmentId;
-        return sId && Number(sId) <= 100_000_000;
-      });
-      const withoutShipment = readyOrders.filter(o => {
-        const sId = (o as any).ymShipmentId;
-        return (!sId || Number(sId) > 100_000_000) && (o as any).ymCampaignId && o.externalId;
-      });
+      // Получаем сессии через first-mile/shipments API и матчим к нашим заказам
+      const campaignIds = [...new Set(
+        readyOrders.filter(o => (o as any).ymCampaignId).map(o => (o as any).ymCampaignId as string)
+      )];
 
-      // Для заказов без/с неправильным ymShipmentId — вызываем single-order API и сохраняем сессионный ID
-      for (const order of withoutShipment) {
-        const campaignId = (order as any).ymCampaignId;
+      const now = new Date();
+      const fromD = new Date(now); fromD.setDate(fromD.getDate() - 30);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const dateFrom = `${pad(fromD.getDate())}-${pad(fromD.getMonth() + 1)}-${fromD.getFullYear()}`;
+      const dateTo   = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}`;
+
+      // externalId → sessionId
+      const externalIdToSession = new Map<string, string>();
+
+      for (const campId of campaignIds) {
         try {
-          const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${order.externalId}`, { headers: authHeaders });
-          if (dRes.ok) {
-            const d = await dRes.json();
-            const fo = d?.order;
-            const sessionId = fo?.delivery?.shipment?.id;
-            if (sessionId) {
-              const sId = String(sessionId);
-              await db.update(ordersTable).set({ ymShipmentId: sId } as any).where(eq(ordersTable.id, order.id));
-              (order as any).ymShipmentId = sId;
-              withShipment.push(order);
-              console.log(`[ym-shipments] enriched order=${order.externalId} sessionShipmentId=${sId}`);
+          const sessRes = await fetch(
+            `${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments?dateFrom=${dateFrom}&dateTo=${dateTo}&pageSize=50`,
+            { headers: authHeaders }
+          );
+          if (!sessRes.ok) { console.log(`[ym-shipments] sessions HTTP ${sessRes.status} camp=${campId}`); continue; }
+          const sessData = await sessRes.json();
+          const sessions: any[] = sessData?.result?.shipments || sessData?.shipments || [];
+          console.log(`[ym-shipments] camp=${campId} sessions=${sessions.length} raw=${JSON.stringify(sessData).slice(0, 300)}`);
+
+          for (const sess of sessions) {
+            const sessionId = String(sess.id);
+            try {
+              const ordRes = await fetch(
+                `${YANDEX_BASE}/campaigns/${campId}/orders?supplierShipmentId=${sessionId}&pageSize=200`,
+                { headers: authHeaders }
+              );
+              if (ordRes.ok) {
+                const ordData = await ordRes.json();
+                const orders: any[] = ordData?.orders || [];
+                console.log(`[ym-shipments] session=${sessionId} orders=${orders.length}`);
+                for (const o of orders) {
+                  if (o.id) externalIdToSession.set(String(o.id), sessionId);
+                }
+              } else {
+                console.log(`[ym-shipments] supplierShipmentId HTTP ${ordRes.status} session=${sessionId}`);
+              }
+            } catch (e: any) {
+              console.log(`[ym-shipments] session-orders err session=${sessionId}: ${e.message}`);
             }
           }
         } catch (e: any) {
-          console.log(`[ym-shipments] enrich error order=${order.externalId}: ${e.message}`);
+          console.log(`[ym-shipments] sessions-list err camp=${campId}: ${e.message}`);
+        }
+      }
+
+      // Назначаем sessionId заказам из DB и сохраняем в БД
+      for (const order of readyOrders) {
+        if (!order.externalId) continue;
+        const sessionId = externalIdToSession.get(order.externalId);
+        if (sessionId) {
+          const current = (order as any).ymShipmentId;
+          if (current !== sessionId) {
+            await db.update(ordersTable).set({ ymShipmentId: sessionId } as any).where(eq(ordersTable.id, order.id));
+            (order as any).ymShipmentId = sessionId;
+            console.log(`[ym-shipments] matched order=${order.externalId} → session=${sessionId}`);
+          }
         }
       }
 
       // Группируем заказы по ymShipmentId
       const shipmentMap = new Map<string, { orderIds: string[]; campaignId: string; }>();
-      for (const order of withShipment) {
-        const sId = (order as any).ymShipmentId as string;
+      for (const order of readyOrders) {
+        const sId = (order as any).ymShipmentId as string | null;
+        if (!sId) continue;
         const cId = (order as any).ymCampaignId as string || "";
         if (!shipmentMap.has(sId)) shipmentMap.set(sId, { orderIds: [], campaignId: cId });
         if (order.externalId) shipmentMap.get(sId)!.orderIds.push(order.externalId);
@@ -5031,20 +5061,16 @@ export async function registerRoutes(
                   if (rawStatus === "PROCESSING") {
                     if (yOrder.substatus === "READY_TO_SHIP") {
                       yStatus = "READY_TO_SHIP";
-                      const listSession = yOrder.delivery?.shipment;
-                      if (listSession?.id) yShipmentId = String(listSession.id);
                     } else {
                       try {
                         const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
                         if (dRes.ok) {
                           const d = await dRes.json(); const fo = d?.order;
                           const fSub = fo?.substatus;
-                          const sessionShipment = fo?.delivery?.shipment;
                           const cargoUnits: any[] = fo?.delivery?.shipments || [];
-                          const inShipment = !!sessionShipment?.id || cargoUnits.length > 0;
+                          const inShipment = cargoUnits.length > 0;
                           if (fSub === "READY_TO_SHIP" || inShipment) yStatus = "READY_TO_SHIP";
-                          if (sessionShipment?.id) yShipmentId = String(sessionShipment.id);
-                          console.log(`[ym-single] ${yOrderId} sub="${fSub}" inShipment=${inShipment} shipmentId=${yShipmentId} → ${yStatus}`);
+                          console.log(`[ym-single] ${yOrderId} sub="${fSub}" inShipment=${inShipment} → ${yStatus}`);
                         } else { console.log(`[ym-single] ${yOrderId} HTTP ${dRes.status}`); }
                       } catch (e: any) { console.log(`[ym-single] ${yOrderId} err=${(e as any).message}`); }
                     }
@@ -5181,20 +5207,16 @@ export async function registerRoutes(
                 if (rawStatus === "PROCESSING") {
                   if (yOrder.substatus === "READY_TO_SHIP") {
                     yStatus = "READY_TO_SHIP";
-                    const listSession = yOrder.delivery?.shipment;
-                    if (listSession?.id) yShipmentId = String(listSession.id);
                   } else {
                     try {
                       const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/orders/${yOrderId}`, { method: "GET", headers: authHeaders });
                       if (dRes.ok) {
                         const d = await dRes.json(); const fo = d?.order;
                         const fSub = fo?.substatus;
-                        const sessionShipment = fo?.delivery?.shipment;
                         const cargoUnits: any[] = fo?.delivery?.shipments || [];
-                        const inShipment = !!sessionShipment?.id || cargoUnits.length > 0;
+                        const inShipment = cargoUnits.length > 0;
                         if (fSub === "READY_TO_SHIP" || inShipment) yStatus = "READY_TO_SHIP";
-                        if (sessionShipment?.id) yShipmentId = String(sessionShipment.id);
-                        console.log(`[ym-single] ${yOrderId} sub="${fSub}" inShipment=${inShipment} shipmentId=${yShipmentId} → ${yStatus}`);
+                        console.log(`[ym-single] ${yOrderId} sub="${fSub}" inShipment=${inShipment} → ${yStatus}`);
                       } else { console.log(`[ym-single] ${yOrderId} HTTP ${dRes.status}`); }
                     } catch (e: any) { console.log(`[ym-single] ${yOrderId} err=${(e as any).message}`); }
                   }
