@@ -4315,33 +4315,43 @@ export async function registerRoutes(
       );
       console.log(`[ym-shipments] org=${orgId} readyOrders=${readyOrders.length}`);
 
-      // Получаем сессии через first-mile/shipments API и матчим к нашим заказам
+      // externalId → sessionId mapping (строим через multiple strategies)
+      const externalIdToSession = new Map<string, string>();
+      const isSessionId = (v: any) => v != null && Number(String(v)) > 0 && Number(String(v)) <= 200_000_000;
+
       const campaignIds = [...new Set(
         readyOrders.filter(o => (o as any).ymCampaignId).map(o => (o as any).ymCampaignId as string)
       )];
 
-      const now = new Date();
-      const fromD = new Date(now); fromD.setDate(fromD.getDate() - 30);
-      const pad = (n: number) => String(n).padStart(2, "0");
-      const dateFrom = `${pad(fromD.getDate())}-${pad(fromD.getMonth() + 1)}-${fromD.getFullYear()}`;
-      const dateTo   = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}`;
-
-      // externalId → sessionId
-      const externalIdToSession = new Map<string, string>();
+      const now2 = new Date();
+      const fromD2 = new Date(now2); fromD2.setDate(fromD2.getDate() - 30);
+      const pad2 = (n: number) => String(n).padStart(2, "0");
+      const dateFrom2 = `${pad2(fromD2.getDate())}-${pad2(fromD2.getMonth() + 1)}-${fromD2.getFullYear()}`;
+      const dateTo2   = `${pad2(now2.getDate())}-${pad2(now2.getMonth() + 1)}-${now2.getFullYear()}`;
 
       for (const campId of campaignIds) {
         try {
           const sessRes = await fetch(
-            `${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments?dateFrom=${dateFrom}&dateTo=${dateTo}&pageSize=50`,
+            `${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments?dateFrom=${dateFrom2}&dateTo=${dateTo2}&pageSize=50`,
             { headers: authHeaders }
           );
           if (!sessRes.ok) { console.log(`[ym-shipments] sessions HTTP ${sessRes.status} camp=${campId}`); continue; }
           const sessData = await sessRes.json();
           const sessions: any[] = sessData?.result?.shipments || sessData?.shipments || [];
-          console.log(`[ym-shipments] camp=${campId} sessions=${sessions.length} raw=${JSON.stringify(sessData).slice(0, 300)}`);
+          console.log(`[ym-shipments] camp=${campId} sessions=${sessions.length} first-raw=${JSON.stringify(sessions[0] || {}).slice(0, 400)}`);
 
           for (const sess of sessions) {
             const sessionId = String(sess.id);
+
+            // Strategy A: orderIds directly in the sessions list response
+            const directIds: any[] = sess.orderIds || sess.orders?.map((o: any) => o.id) || [];
+            if (directIds.length > 0) {
+              directIds.forEach((oid: any) => externalIdToSession.set(String(oid), sessionId));
+              console.log(`[ym-shipments] session=${sessionId} direct-ids=${directIds.length}`);
+              continue;
+            }
+
+            // Strategy B: supplierShipmentId filter on orders endpoint
             try {
               const ordRes = await fetch(
                 `${YANDEX_BASE}/campaigns/${campId}/orders?supplierShipmentId=${sessionId}&pageSize=200`,
@@ -4350,23 +4360,61 @@ export async function registerRoutes(
               if (ordRes.ok) {
                 const ordData = await ordRes.json();
                 const orders: any[] = ordData?.orders || [];
-                console.log(`[ym-shipments] session=${sessionId} orders=${orders.length}`);
-                for (const o of orders) {
-                  if (o.id) externalIdToSession.set(String(o.id), sessionId);
+                console.log(`[ym-shipments] session=${sessionId} supplierShipmentId-orders=${orders.length}`);
+                if (orders.length > 0) {
+                  orders.forEach((o: any) => { if (o.id) externalIdToSession.set(String(o.id), sessionId); });
+                  continue;
                 }
               } else {
                 console.log(`[ym-shipments] supplierShipmentId HTTP ${ordRes.status} session=${sessionId}`);
               }
-            } catch (e: any) {
-              console.log(`[ym-shipments] session-orders err session=${sessionId}: ${e.message}`);
-            }
+            } catch (e: any) { /* ignore */ }
+
+            // Strategy C: first-mile/shipments/{id} detail — check for embedded order IDs
+            try {
+              const detRes = await fetch(`${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments/${sessionId}`, { headers: authHeaders });
+              if (detRes.ok) {
+                const detData = await detRes.json();
+                const det = detData?.result?.shipment || detData?.shipment || detData?.result || detData;
+                const detIds: any[] = det?.orderIds || det?.orders?.map((o: any) => o.id) || [];
+                console.log(`[ym-shipments] session=${sessionId} detail-orderIds=${detIds.length} detail-raw=${JSON.stringify(detData).slice(0, 400)}`);
+                if (detIds.length > 0) {
+                  detIds.forEach((oid: any) => externalIdToSession.set(String(oid), sessionId));
+                }
+              }
+            } catch (e: any) { /* ignore */ }
           }
         } catch (e: any) {
           console.log(`[ym-shipments] sessions-list err camp=${campId}: ${e.message}`);
         }
       }
 
-      // Назначаем sessionId заказам из DB и сохраняем в БД
+      // Strategy D: fallback — single-order API for orders still not matched
+      const unmapped = readyOrders.filter(o => o.externalId && !externalIdToSession.has(o.externalId!));
+      console.log(`[ym-shipments] unmapped after sessions-API=${unmapped.length}`);
+      for (const order of unmapped) {
+        const campId = (order as any).ymCampaignId;
+        if (!campId || !order.externalId) continue;
+        try {
+          const dRes = await fetch(`${YANDEX_BASE}/campaigns/${campId}/orders/${order.externalId}`, { headers: authHeaders });
+          if (dRes.ok) {
+            const d = await dRes.json();
+            const del = d?.order?.delivery;
+            const candidates = [
+              del?.supplierShipmentId, del?.firstMileShipmentId,
+              del?.shipments?.[0]?.externalId, del?.shipments?.[0]?.supplierShipmentId,
+            ].filter(isSessionId);
+            if (candidates[0]) {
+              externalIdToSession.set(order.externalId!, String(candidates[0]));
+              console.log(`[ym-shipments] single-API order=${order.externalId} → session=${candidates[0]}`);
+            } else {
+              console.log(`[ym-shipments] no-session order=${order.externalId} delivery=${JSON.stringify(del).slice(0, 500)}`);
+            }
+          }
+        } catch (e: any) { /* ignore */ }
+      }
+
+      // Сохраняем session IDs в БД
       for (const order of readyOrders) {
         if (!order.externalId) continue;
         const sessionId = externalIdToSession.get(order.externalId);
@@ -4375,16 +4423,15 @@ export async function registerRoutes(
           if (current !== sessionId) {
             await db.update(ordersTable).set({ ymShipmentId: sessionId } as any).where(eq(ordersTable.id, order.id));
             (order as any).ymShipmentId = sessionId;
-            console.log(`[ym-shipments] matched order=${order.externalId} → session=${sessionId}`);
           }
         }
       }
 
-      // Группируем заказы по ymShipmentId
+      // Группируем заказы — только сессионные ID (≤200M, не cargo unit ≥800M)
       const shipmentMap = new Map<string, { orderIds: string[]; campaignId: string; }>();
       for (const order of readyOrders) {
         const sId = (order as any).ymShipmentId as string | null;
-        if (!sId) continue;
+        if (!sId || !isSessionId(sId)) continue;
         const cId = (order as any).ymCampaignId as string || "";
         if (!shipmentMap.has(sId)) shipmentMap.set(sId, { orderIds: [], campaignId: cId });
         if (order.externalId) shipmentMap.get(sId)!.orderIds.push(order.externalId);
@@ -4454,22 +4501,66 @@ export async function registerRoutes(
       };
       const YANDEX_BASE = "https://api.partner.market.yandex.ru";
 
+      const now = new Date();
+      const fromD = new Date(now); fromD.setDate(fromD.getDate() - 30);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const dateFrom = `${pad(fromD.getDate())}-${pad(fromD.getMonth() + 1)}-${fromD.getFullYear()}`;
+      const dateTo   = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}`;
+
       const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { headers: authHeaders });
       const campData = await campRes.json();
       const campaigns: any[] = campData?.campaigns || [];
 
+      // Get first READY_TO_SHIP order from DB for single-order delivery debug
+      const sampleOrders = await db.select().from(ordersTable).where(
+        and(eq(ordersTable.source, "yandex"), eq(ordersTable.yandexStatus, "READY_TO_SHIP"), eq(ordersTable.organizationId, orgId))
+      ).limit(1);
+      const sampleOrder = sampleOrders[0];
+
       const results: any[] = [];
-      for (const c of campaigns.slice(0, 3)) {
-        const urls: Record<string, any> = {};
-        for (const url of [
-          `${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments?limit=10`,
-          `${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments?dateFrom=20-03-2026&limit=10`,
-        ]) {
-          const r = await fetch(url, { headers: authHeaders });
-          const txt = await r.text();
-          urls[url.split("campaigns/")[1]] = { status: r.status, body: txt.slice(0, 1000) };
+      for (const c of campaigns.slice(0, 2)) {
+        // 1. Sessions list
+        const sessUrl = `${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments?dateFrom=${dateFrom}&dateTo=${dateTo}&pageSize=10`;
+        const sessR = await fetch(sessUrl, { headers: authHeaders });
+        const sessTxt = await sessR.text();
+        let sessJson: any = null;
+        try { sessJson = JSON.parse(sessTxt); } catch {}
+        const firstSession = sessJson?.result?.shipments?.[0] || sessJson?.shipments?.[0];
+
+        // 2. First session detail
+        let sessionDetailJson: any = null;
+        if (firstSession?.id) {
+          const detR = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/first-mile/shipments/${firstSession.id}`, { headers: authHeaders });
+          try { sessionDetailJson = await detR.json(); } catch {}
         }
-        results.push({ campaignId: c.id, domain: c.domain, tests: urls });
+
+        // 3. supplierShipmentId filter test
+        let supplierFilterJson: any = null;
+        if (firstSession?.id) {
+          const sfR = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/orders?supplierShipmentId=${firstSession.id}&pageSize=10`, { headers: authHeaders });
+          try { supplierFilterJson = { status: sfR.status, body: await sfR.json() }; } catch {}
+        }
+
+        // 4. Single-order delivery structure
+        let sampleDelivery: any = null;
+        if (sampleOrder?.externalId) {
+          const soR = await fetch(`${YANDEX_BASE}/campaigns/${c.id}/orders/${sampleOrder.externalId}`, { headers: authHeaders });
+          if (soR.ok) {
+            try { const soData = await soR.json(); sampleDelivery = soData?.order?.delivery; } catch {}
+          }
+        }
+
+        results.push({
+          campaignId: c.id,
+          domain: c.domain,
+          sessionsListStatus: sessR.status,
+          sessionsListRaw: sessJson,
+          firstSessionObject: firstSession || null,
+          firstSessionDetailRaw: sessionDetailJson,
+          supplierShipmentIdFilterTest: supplierFilterJson,
+          sampleOrderExternalId: sampleOrder?.externalId || null,
+          sampleOrderDelivery: sampleDelivery,
+        });
       }
       res.json({ campaigns: campaigns.map((c: any) => ({ id: c.id, domain: c.domain })), results });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
