@@ -3901,7 +3901,7 @@ export async function registerRoutes(
                 for (const yItem of yOrder.items || []) {
                   const sku = yItem.offerId || yItem.shopSku || "";
                   const qty = yItem.count || 1;
-                  const price = parseFloat(yItem.price || yItem.buyerPrice || "0");
+                  const price = parseFloat(yItem.buyerPrice || yItem.price || "0");
 
                   if (sku) {
                     const [dbProduct] = await db.select().from(productsTable)
@@ -4283,6 +4283,78 @@ export async function registerRoutes(
       res.send(html);
     } catch (error: any) {
       console.error("[ym-order-list-pdf] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Исправление цен товаров в существующих ЯМ заказах (buyerPrice вместо price)
+  app.post("/api/marketplace/yandex/fix-item-prices", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+      const ymSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
+      if (!ymSettings.length) return res.status(400).json({ message: "Нет активных ЯМ магазинов" });
+
+      const ymOrders = await db.select({
+        id: ordersTable.id,
+        externalId: ordersTable.externalId,
+        ymCampaignId: ordersTable.ymCampaignId,
+      }).from(ordersTable).where(
+        and(eq(ordersTable.source, "yandex"), eq(ordersTable.organizationId, orgId),
+          sql`${ordersTable.status} NOT IN ('cancelled')`,
+          sql`${ordersTable.externalId} IS NOT NULL`)
+      );
+
+      let fixed = 0;
+      let errors = 0;
+
+      for (const order of ymOrders) {
+        try {
+          const setting = ymSettings[0];
+          const authHeaders: Record<string, string> = setting.apiKey!.startsWith("ACMA:")
+            ? { "Api-Key": setting.apiKey!, "Content-Type": "application/json" }
+            : { "Authorization": `OAuth ${setting.apiKey!}`, "Content-Type": "application/json" };
+
+          const campId = order.ymCampaignId || setting.warehouseId || "99063023";
+          const r = await fetch(`${YANDEX_BASE}/campaigns/${campId}/orders/${order.externalId}`, { method: "GET", headers: authHeaders });
+          if (!r.ok) { errors++; continue; }
+          const d = await r.json();
+          const yOrder = d?.order;
+          if (!yOrder?.items?.length) { errors++; continue; }
+
+          let newTotal = 0;
+          for (const yItem of yOrder.items) {
+            const sku = yItem.offerId || yItem.shopSku || "";
+            const qty = yItem.count || 1;
+            const newPrice = parseFloat(yItem.buyerPrice || yItem.price || "0");
+            if (!sku || !newPrice) continue;
+
+            const [dbProduct] = await db.select({ id: productsTable.id }).from(productsTable)
+              .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+            if (!dbProduct) continue;
+
+            await db.update(orderItemsTable)
+              .set({ price: newPrice.toFixed(2) })
+              .where(and(eq(orderItemsTable.orderId, order.id), eq(orderItemsTable.productId, dbProduct.id)));
+
+            newTotal += newPrice * qty;
+          }
+
+          if (newTotal > 0) {
+            await db.update(ordersTable).set({ totalAmount: newTotal.toFixed(2) }).where(eq(ordersTable.id, order.id));
+          }
+          fixed++;
+        } catch (e: any) {
+          console.error(`[fix-item-prices] order ${order.id}: ${e.message}`);
+          errors++;
+        }
+      }
+
+      console.log(`[fix-item-prices] fixed=${fixed} errors=${errors} total=${ymOrders.length}`);
+      res.json({ fixed, errors, total: ymOrders.length });
+    } catch (error: any) {
+      console.error("[fix-item-prices] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });
@@ -5376,7 +5448,7 @@ export async function registerRoutes(
                     for (const yItem of yOrder.items || []) {
                       const sku = yItem.offerId || yItem.shopSku || "";
                       const qty = yItem.count || 1;
-                      const price = parseFloat(yItem.price || yItem.buyerPrice || "0");
+                      const price = parseFloat(yItem.buyerPrice || yItem.price || "0");
                       if (sku) {
                         const [dbProduct] = await db.select().from(productsTable)
                           .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
