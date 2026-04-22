@@ -4296,31 +4296,51 @@ export async function registerRoutes(
       const ymSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
       if (!ymSettings.length) return res.status(400).json({ message: "Нет активных ЯМ магазинов" });
 
+      const setting = ymSettings[0];
+      const authHeaders: Record<string, string> = setting.apiKey!.startsWith("ACMA:")
+        ? { "Api-Key": setting.apiKey!, "Content-Type": "application/json" }
+        : { "Authorization": `OAuth ${setting.apiKey!}`, "Content-Type": "application/json" };
+
+      // Только активные заказы за последние 30 дней
       const ymOrders = await db.select({
         id: ordersTable.id,
         externalId: ordersTable.externalId,
         ymCampaignId: ordersTable.ymCampaignId,
       }).from(ordersTable).where(
-        and(eq(ordersTable.source, "yandex"), eq(ordersTable.organizationId, orgId),
+        and(
+          eq(ordersTable.source, "yandex"),
+          eq(ordersTable.organizationId, orgId),
           sql`${ordersTable.status} NOT IN ('cancelled')`,
-          sql`${ordersTable.externalId} IS NOT NULL`)
+          sql`${ordersTable.externalId} IS NOT NULL`,
+          sql`${ordersTable.createdAt} >= NOW() - INTERVAL '30 days'`
+        )
       );
+
+      console.log(`[fix-item-prices] found ${ymOrders.length} active YM orders to fix`);
 
       let fixed = 0;
       let errors = 0;
+      const campaignIds = ["99063023", "124589277"];
 
       for (const order of ymOrders) {
         try {
-          const setting = ymSettings[0];
-          const authHeaders: Record<string, string> = setting.apiKey!.startsWith("ACMA:")
-            ? { "Api-Key": setting.apiKey!, "Content-Type": "application/json" }
-            : { "Authorization": `OAuth ${setting.apiKey!}`, "Content-Type": "application/json" };
+          // Пробуем campaign из DB, потом оба известных campaign ID
+          const campCandidates = order.ymCampaignId
+            ? [order.ymCampaignId, ...campaignIds.filter(c => c !== order.ymCampaignId)]
+            : campaignIds;
 
-          const campId = order.ymCampaignId || setting.warehouseId || "99063023";
-          const r = await fetch(`${YANDEX_BASE}/campaigns/${campId}/orders/${order.externalId}`, { method: "GET", headers: authHeaders });
-          if (!r.ok) { errors++; continue; }
-          const d = await r.json();
-          const yOrder = d?.order;
+          let yOrder: any = null;
+          for (const campId of campCandidates) {
+            try {
+              const ctrl = new AbortController();
+              const t = setTimeout(() => ctrl.abort(), 8000);
+              const r = await fetch(`${YANDEX_BASE}/campaigns/${campId}/orders/${order.externalId}`,
+                { method: "GET", headers: authHeaders, signal: ctrl.signal });
+              clearTimeout(t);
+              if (r.ok) { const d = await r.json(); yOrder = d?.order; break; }
+            } catch { /* try next */ }
+          }
+
           if (!yOrder?.items?.length) { errors++; continue; }
 
           let newTotal = 0;
@@ -4345,13 +4365,14 @@ export async function registerRoutes(
             await db.update(ordersTable).set({ totalAmount: newTotal.toFixed(2) }).where(eq(ordersTable.id, order.id));
           }
           fixed++;
+          console.log(`[fix-item-prices] fixed order ${order.externalId} total=${newTotal}`);
         } catch (e: any) {
           console.error(`[fix-item-prices] order ${order.id}: ${e.message}`);
           errors++;
         }
       }
 
-      console.log(`[fix-item-prices] fixed=${fixed} errors=${errors} total=${ymOrders.length}`);
+      console.log(`[fix-item-prices] done: fixed=${fixed} errors=${errors} total=${ymOrders.length}`);
       res.json({ fixed, errors, total: ymOrders.length });
     } catch (error: any) {
       console.error("[fix-item-prices] Error:", error);
