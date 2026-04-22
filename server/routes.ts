@@ -3878,7 +3878,9 @@ export async function registerRoutes(
                   }
                 }
                 console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
-                const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
+                const yCreatedAt = yOrder.creationDate
+                  ? new Date(Number(yOrder.creationDate) * 1000)
+                  : (yOrder.createdAt ? new Date(yOrder.createdAt) : undefined);
 
                 const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
 
@@ -4381,6 +4383,87 @@ export async function registerRoutes(
       res.json({ fixed, errors, total: ymOrders.length });
     } catch (error: any) {
       console.error("[fix-item-prices] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Исправление created_at для всех ЯМ заказов (было записано NOW() вместо реальной даты заказа)
+  app.post("/api/marketplace/yandex/fix-order-dates", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const YANDEX_BASE = "https://api.partner.market.yandex.ru";
+      const ymSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
+      if (!ymSettings.length) return res.status(400).json({ message: "Нет активных ЯМ магазинов" });
+
+      const setting = ymSettings[0];
+      const authHeaders: Record<string, string> = setting.apiKey!.startsWith("ACMA:")
+        ? { "Api-Key": setting.apiKey!, "Content-Type": "application/json" }
+        : { "Authorization": `OAuth ${setting.apiKey!}`, "Content-Type": "application/json" };
+
+      // Все ЯМ заказы из БД
+      const ymOrders = await db.select({
+        id: ordersTable.id,
+        externalId: ordersTable.externalId,
+        ymCampaignId: ordersTable.ymCampaignId,
+      }).from(ordersTable).where(
+        and(eq(ordersTable.source, "yandex"), eq(ordersTable.organizationId, orgId), sql`${ordersTable.externalId} IS NOT NULL`)
+      );
+      console.log(`[fix-order-dates] found ${ymOrders.length} YM orders in DB`);
+
+      // Собираем creationDate из ЯМ API постранично (50 за раз) — за 2 года
+      const creationDateMap = new Map<string, Date>();
+      const campaignIds = ["99063023", "124589277"];
+      const since2y = new Date(); since2y.setDate(since2y.getDate() - 730);
+      const fromDateStr = [String(since2y.getDate()).padStart(2,'0'), String(since2y.getMonth()+1).padStart(2,'0'), since2y.getFullYear()].join('-');
+
+      for (const campId of campaignIds) {
+        let page = 1; let hasMore = true;
+        while (hasMore) {
+          try {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 15000);
+            const r = await fetch(
+              `${YANDEX_BASE}/campaigns/${campId}/orders?fromDate=${fromDateStr}&pageSize=50&page=${page}`,
+              { method: "GET", headers: authHeaders, signal: ctrl.signal }
+            );
+            clearTimeout(t);
+            if (!r.ok) { hasMore = false; break; }
+            const data = await r.json();
+            const ordersList: any[] = data?.orders || [];
+            const pager = data?.pager;
+            for (const yOrder of ordersList) {
+              if (yOrder.creationDate) {
+                creationDateMap.set(String(yOrder.id), new Date(Number(yOrder.creationDate) * 1000));
+              }
+            }
+            if (!pager || page >= (pager.pagesCount || 1) || ordersList.length === 0) hasMore = false;
+            else page++;
+          } catch { hasMore = false; }
+        }
+        console.log(`[fix-order-dates] campaign ${campId}: done, total map size=${creationDateMap.size}`);
+      }
+
+      console.log(`[fix-order-dates] fetched ${creationDateMap.size} order dates from YM API`);
+
+      // Обновляем created_at в БД
+      let fixed = 0; let errors = 0;
+      for (const order of ymOrders) {
+        if (!order.externalId) { errors++; continue; }
+        const realDate = creationDateMap.get(order.externalId);
+        if (realDate) {
+          await db.update(ordersTable).set({ createdAt: realDate }).where(eq(ordersTable.id, order.id));
+          fixed++;
+          if (fixed % 100 === 0) console.log(`[fix-order-dates] progress: ${fixed}/${ymOrders.length}`);
+        } else {
+          errors++;
+        }
+      }
+
+      console.log(`[fix-order-dates] done: fixed=${fixed} errors=${errors} total=${ymOrders.length}`);
+      res.json({ fixed, errors, total: ymOrders.length });
+    } catch (error: any) {
+      console.error("[fix-order-dates] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });
@@ -5464,7 +5547,9 @@ export async function registerRoutes(
                     }
                   }
                   console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
-                  const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
+                  const yCreatedAt = yOrder.creationDate
+                    ? new Date(Number(yOrder.creationDate) * 1000)
+                    : (yOrder.createdAt ? new Date(yOrder.createdAt) : undefined);
                   const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
 
                   if (existingOrder) {
@@ -5610,7 +5695,9 @@ export async function registerRoutes(
                   }
                 }
                 console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
-                const yCreatedAt = yOrder.createdAt ? new Date(yOrder.createdAt) : undefined;
+                const yCreatedAt = yOrder.creationDate
+                  ? new Date(Number(yOrder.creationDate) * 1000)
+                  : (yOrder.createdAt ? new Date(yOrder.createdAt) : undefined);
                 const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
                 if (existingOrder) {
                   const statusChanged = existingOrder.yandexStatus !== yStatus;
