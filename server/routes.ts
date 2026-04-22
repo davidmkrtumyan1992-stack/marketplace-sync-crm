@@ -3879,7 +3879,7 @@ export async function registerRoutes(
                 }
                 console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
                 const yCreatedAt = yOrder.creationDate
-                  ? new Date(Number(yOrder.creationDate) * 1000)
+                  ? (() => { const m = String(yOrder.creationDate).match(/^(\d{1,2})-(\d{1,2})-(\d{4})(?:\s+(\d{1,2}):(\d{1,2}):(\d{1,2}))?/); if (m) { const d = new Date(Date.UTC(+m[3], +m[2]-1, +m[1], (+m[4]||12)-3, +m[5]||0, +m[6]||0)); return isNaN(d.getTime()) ? undefined : d; } const n = Number(yOrder.creationDate); return Number.isFinite(n) && n > 0 ? new Date(n > 1e11 ? n : n*1000) : undefined; })()
                   : (yOrder.createdAt ? new Date(yOrder.createdAt) : undefined);
 
                 const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
@@ -4463,14 +4463,22 @@ export async function registerRoutes(
             for (const yOrder of ordersList) {
               const raw = yOrder.creationDate;
               if (raw == null) continue;
+              // ЯМ API возвращает creationDate как строку "DD-MM-YYYY HH:MM:SS" (московское время UTC+3)
+              const s = String(raw);
               let secs: number;
-              const asNum = Number(raw);
-              if (Number.isFinite(asNum) && asNum > 0) {
-                secs = asNum > 1e11 ? Math.floor(asNum / 1000) : asNum;
+              const m = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})(?:\s+(\d{1,2}):(\d{1,2}):(\d{1,2}))?/);
+              if (m) {
+                const dd = Number(m[1]), mo = Number(m[2]), yyyy = Number(m[3]);
+                const hh = Number(m[4] ?? 12), min = Number(m[5] ?? 0), ss2 = Number(m[6] ?? 0);
+                // Конвертируем из МСК (UTC+3) в UTC
+                const utcMs = Date.UTC(yyyy, mo - 1, dd, hh - 3, min, ss2);
+                if (isNaN(utcMs)) continue;
+                secs = Math.floor(utcMs / 1000);
               } else {
-                const d = new Date(String(raw));
-                if (isNaN(d.getTime())) continue;
-                secs = Math.floor(d.getTime() / 1000);
+                // Числовой fallback: секунды или мс
+                const asNum = Number(raw);
+                if (!Number.isFinite(asNum) || asNum <= 0) continue;
+                secs = asNum > 1e11 ? Math.floor(asNum / 1000) : asNum;
               }
               if (secs > 1262304000 && secs < 2051222400) {
                 creationSecsMap.set(String(yOrder.id), secs);
@@ -5732,7 +5740,7 @@ export async function registerRoutes(
                 }
                 console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
                 const yCreatedAt = yOrder.creationDate
-                  ? new Date(Number(yOrder.creationDate) * 1000)
+                  ? (() => { const m = String(yOrder.creationDate).match(/^(\d{1,2})-(\d{1,2})-(\d{4})(?:\s+(\d{1,2}):(\d{1,2}):(\d{1,2}))?/); if (m) { const d = new Date(Date.UTC(+m[3], +m[2]-1, +m[1], (+m[4]||12)-3, +m[5]||0, +m[6]||0)); return isNaN(d.getTime()) ? undefined : d; } const n = Number(yOrder.creationDate); return Number.isFinite(n) && n > 0 ? new Date(n > 1e11 ? n : n*1000) : undefined; })()
                   : (yOrder.createdAt ? new Date(yOrder.createdAt) : undefined);
                 const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
                 if (existingOrder) {
