@@ -4389,33 +4389,45 @@ export async function registerRoutes(
 
   // Исправление created_at для всех ЯМ заказов (было записано NOW() вместо реальной даты заказа)
   app.post("/api/marketplace/yandex/fix-order-dates", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    console.log("[fix-order-dates] START");
     try {
       const orgId = getOrgId(req);
-      const allSettings = await storage.getMarketplaceSettings(orgId);
+      console.log("[fix-order-dates] orgId:", orgId);
+
+      // Шаг 1: ЯМ API ключ через raw SQL чтобы избежать Drizzle timestamp parsing
+      const settingsRows = await db.execute(sql`
+        SELECT api_key FROM marketplace_settings
+        WHERE organization_id = ${orgId} AND marketplace = 'yandex' AND is_active = true AND api_key IS NOT NULL
+        LIMIT 1
+      `);
+      const rows = settingsRows.rows as any[];
+      if (!rows.length) return res.status(400).json({ message: "Нет активных ЯМ магазинов" });
+      const apiKey: string = rows[0].api_key;
+      console.log("[fix-order-dates] apiKey prefix:", apiKey.substring(0, 10));
+
       const YANDEX_BASE = "https://api.partner.market.yandex.ru";
-      const ymSettings = allSettings.filter(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
-      if (!ymSettings.length) return res.status(400).json({ message: "Нет активных ЯМ магазинов" });
+      const authHeaders: Record<string, string> = apiKey.startsWith("ACMA:")
+        ? { "Api-Key": apiKey, "Content-Type": "application/json" }
+        : { "Authorization": `OAuth ${apiKey}`, "Content-Type": "application/json" };
 
-      const setting = ymSettings[0];
-      const authHeaders: Record<string, string> = setting.apiKey!.startsWith("ACMA:")
-        ? { "Api-Key": setting.apiKey!, "Content-Type": "application/json" }
-        : { "Authorization": `OAuth ${setting.apiKey!}`, "Content-Type": "application/json" };
-
-      // Все ЯМ заказы из БД
-      const ymOrders = await db.select({
-        id: ordersTable.id,
-        externalId: ordersTable.externalId,
-        ymCampaignId: ordersTable.ymCampaignId,
-      }).from(ordersTable).where(
-        and(eq(ordersTable.source, "yandex"), eq(ordersTable.organizationId, orgId), sql`${ordersTable.externalId} IS NOT NULL`)
-      );
+      // Шаг 2: Все ЯМ заказы из БД (только id и external_id, без timestamp колонок)
+      const ordersRows = await db.execute(sql`
+        SELECT id, external_id FROM orders
+        WHERE source = 'yandex' AND organization_id = ${orgId} AND external_id IS NOT NULL
+      `);
+      const ymOrders = ordersRows.rows as { id: number; external_id: string }[];
       console.log(`[fix-order-dates] found ${ymOrders.length} YM orders in DB`);
 
-      // Собираем creationDate из ЯМ API постранично (50 за раз) — за 2 года
-      const creationDateMap = new Map<string, Date>();
+      // Шаг 3: Собираем creationDate из ЯМ API — храним Unix секунды (не Date объекты)
+      const creationSecsMap = new Map<string, number>(); // externalId → Unix seconds
       const campaignIds = ["99063023", "124589277"];
-      const since2y = new Date(); since2y.setDate(since2y.getDate() - 730);
-      const fromDateStr = [String(since2y.getDate()).padStart(2,'0'), String(since2y.getMonth()+1).padStart(2,'0'), since2y.getFullYear()].join('-');
+      const d730 = new Date(Date.now() - 730 * 24 * 3600 * 1000);
+      const fromDateStr = [
+        String(d730.getDate()).padStart(2, '0'),
+        String(d730.getMonth() + 1).padStart(2, '0'),
+        String(d730.getFullYear()),
+      ].join('-');
+      console.log("[fix-order-dates] fromDate:", fromDateStr);
 
       for (const campId of campaignIds) {
         let page = 1; let hasMore = true;
@@ -4428,40 +4440,43 @@ export async function registerRoutes(
               { method: "GET", headers: authHeaders, signal: ctrl.signal }
             );
             clearTimeout(t);
-            if (!r.ok) { hasMore = false; break; }
+            if (!r.ok) { console.log(`[fix-order-dates] camp=${campId} page=${page} status=${r.status}`); hasMore = false; break; }
             const data = await r.json();
             const ordersList: any[] = data?.orders || [];
             const pager = data?.pager;
-            if (page === 1 && ordersList.length > 0) {
-              console.log(`[fix-order-dates] sample creationDate=${ordersList[0].creationDate} id=${ordersList[0].id}`);
+            if (page === 1) {
+              console.log(`[fix-order-dates] camp=${campId} pagesCount=${pager?.pagesCount} ordersOnPage=${ordersList.length} sample_creationDate=${ordersList[0]?.creationDate}`);
             }
             for (const yOrder of ordersList) {
-              if (yOrder.creationDate) {
-                const ts = Number(yOrder.creationDate);
-                // creationDate может быть в секундах (10 цифр) или мс (13 цифр)
-                const ms = ts > 1e11 ? ts : ts * 1000;
-                const d = new Date(ms);
-                if (!isNaN(d.getTime()) && d.getFullYear() > 2000 && d.getFullYear() < 2100) {
-                  creationDateMap.set(String(yOrder.id), d);
-                }
+              const raw = yOrder.creationDate;
+              if (raw == null) continue;
+              const ts = Number(raw);
+              if (!Number.isFinite(ts) || ts <= 0) continue;
+              // Авто-определение: секунды (10 цифр) или мс (13 цифр)
+              const secs = ts > 1e11 ? Math.floor(ts / 1000) : ts;
+              // Разумный диапазон: 2010-2030
+              if (secs > 1262304000 && secs < 1893456000) {
+                creationSecsMap.set(String(yOrder.id), secs);
               }
             }
             if (!pager || page >= (pager.pagesCount || 1) || ordersList.length === 0) hasMore = false;
             else page++;
-          } catch { hasMore = false; }
+          } catch (e: any) {
+            console.log(`[fix-order-dates] camp=${campId} page=${page} fetch error:`, e?.message);
+            hasMore = false;
+          }
         }
-        console.log(`[fix-order-dates] campaign ${campId}: done, total map size=${creationDateMap.size}`);
+        console.log(`[fix-order-dates] camp=${campId} done, map size=${creationSecsMap.size}`);
       }
 
-      console.log(`[fix-order-dates] fetched ${creationDateMap.size} order dates from YM API`);
+      console.log(`[fix-order-dates] total from API: ${creationSecsMap.size}`);
 
-      // Обновляем created_at в БД
+      // Шаг 4: Обновляем created_at через raw SQL — to_timestamp() принимает Unix секунды напрямую
       let fixed = 0; let errors = 0;
       for (const order of ymOrders) {
-        if (!order.externalId) { errors++; continue; }
-        const realDate = creationDateMap.get(order.externalId);
-        if (realDate && !isNaN(realDate.getTime())) {
-          await db.update(ordersTable).set({ createdAt: realDate }).where(eq(ordersTable.id, order.id));
+        const secs = creationSecsMap.get(order.external_id);
+        if (secs != null) {
+          await db.execute(sql`UPDATE orders SET created_at = to_timestamp(${secs}) WHERE id = ${order.id}`);
           fixed++;
           if (fixed % 100 === 0) console.log(`[fix-order-dates] progress: ${fixed}/${ymOrders.length}`);
         } else {
