@@ -4343,29 +4343,34 @@ export async function registerRoutes(
 
           if (!yOrder?.items?.length) { errors++; continue; }
 
+          // Считаем новый total из buyerPrice — независимо от SKU в БД
           let newTotal = 0;
           for (const yItem of yOrder.items) {
-            const sku = yItem.offerId || yItem.shopSku || "";
             const qty = yItem.count || 1;
             const newPrice = parseFloat(yItem.buyerPrice || yItem.price || "0");
-            if (!sku || !newPrice) continue;
-
-            const [dbProduct] = await db.select({ id: productsTable.id }).from(productsTable)
-              .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
-            if (!dbProduct) continue;
-
-            await db.update(orderItemsTable)
-              .set({ price: newPrice.toFixed(2) })
-              .where(and(eq(orderItemsTable.orderId, order.id), eq(orderItemsTable.productId, dbProduct.id)));
-
             newTotal += newPrice * qty;
+
+            // Обновляем order_items если SKU найден в products
+            const sku = yItem.offerId || yItem.shopSku || "";
+            if (sku && newPrice) {
+              const [dbProduct] = await db.select({ id: productsTable.id }).from(productsTable)
+                .where(and(eq(productsTable.sku, sku), eq(productsTable.organizationId, orgId)));
+              if (dbProduct) {
+                await db.update(orderItemsTable)
+                  .set({ price: newPrice.toFixed(2) })
+                  .where(and(eq(orderItemsTable.orderId, order.id), eq(orderItemsTable.productId, dbProduct.id)));
+              }
+            }
           }
 
+          // Всегда обновляем totalAmount если получили данные из API
           if (newTotal > 0) {
             await db.update(ordersTable).set({ totalAmount: newTotal.toFixed(2) }).where(eq(ordersTable.id, order.id));
+            fixed++;
+            console.log(`[fix-item-prices] fixed order ${order.externalId} newTotal=${newTotal}`);
+          } else {
+            errors++;
           }
-          fixed++;
-          console.log(`[fix-item-prices] fixed order ${order.externalId} total=${newTotal}`);
         } catch (e: any) {
           console.error(`[fix-item-prices] order ${order.id}: ${e.message}`);
           errors++;
