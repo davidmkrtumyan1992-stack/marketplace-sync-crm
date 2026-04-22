@@ -4432,9 +4432,18 @@ export async function registerRoutes(
             const data = await r.json();
             const ordersList: any[] = data?.orders || [];
             const pager = data?.pager;
+            if (page === 1 && ordersList.length > 0) {
+              console.log(`[fix-order-dates] sample creationDate=${ordersList[0].creationDate} id=${ordersList[0].id}`);
+            }
             for (const yOrder of ordersList) {
               if (yOrder.creationDate) {
-                creationDateMap.set(String(yOrder.id), new Date(Number(yOrder.creationDate) * 1000));
+                const ts = Number(yOrder.creationDate);
+                // creationDate может быть в секундах (10 цифр) или мс (13 цифр)
+                const ms = ts > 1e11 ? ts : ts * 1000;
+                const d = new Date(ms);
+                if (!isNaN(d.getTime()) && d.getFullYear() > 2000 && d.getFullYear() < 2100) {
+                  creationDateMap.set(String(yOrder.id), d);
+                }
               }
             }
             if (!pager || page >= (pager.pagesCount || 1) || ordersList.length === 0) hasMore = false;
@@ -4451,7 +4460,7 @@ export async function registerRoutes(
       for (const order of ymOrders) {
         if (!order.externalId) { errors++; continue; }
         const realDate = creationDateMap.get(order.externalId);
-        if (realDate) {
+        if (realDate && !isNaN(realDate.getTime())) {
           await db.update(ordersTable).set({ createdAt: realDate }).where(eq(ordersTable.id, order.id));
           fixed++;
           if (fixed % 100 === 0) console.log(`[fix-order-dates] progress: ${fixed}/${ymOrders.length}`);
