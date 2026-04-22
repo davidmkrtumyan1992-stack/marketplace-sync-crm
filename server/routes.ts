@@ -4421,11 +4421,12 @@ export async function registerRoutes(
       // Шаг 3: Собираем creationDate из ЯМ API — храним Unix секунды (не Date объекты)
       const creationSecsMap = new Map<string, number>(); // externalId → Unix seconds
       const campaignIds = ["99063023", "124589277"];
-      const d730 = new Date(Date.now() - 730 * 24 * 3600 * 1000);
+      // Используем 30 дней — то же окно что и sync-orders, YM API не поддерживает большой диапазон
+      const d30 = new Date(Date.now() - 30 * 24 * 3600 * 1000);
       const fromDateStr = [
-        String(d730.getDate()).padStart(2, '0'),
-        String(d730.getMonth() + 1).padStart(2, '0'),
-        String(d730.getFullYear()),
+        String(d30.getDate()).padStart(2, '0'),
+        String(d30.getMonth() + 1).padStart(2, '0'),
+        String(d30.getFullYear()),
       ].join('-');
       console.log("[fix-order-dates] fromDate:", fromDateStr);
 
