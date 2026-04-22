@@ -390,7 +390,11 @@ export default function Orders() {
   }, [marketplaceOrders]);
 
   const yandexStatusCounts = useMemo(() => {
-    const yOrders = marketplaceOrders;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+    const yOrders = (orders || []).filter((o: any) =>
+      o.source === "yandex" && new Date(o.createdAt) >= cutoff
+    );
     return {
       all:           yOrders.length,
       NEW:           yOrders.filter((o: any) => o.yandexStatus === "NEW").length,
@@ -404,7 +408,7 @@ export default function Orders() {
         o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED" || o.yandexStatus === "UNPAID"
       ).length,
     };
-  }, [marketplaceOrders]);
+  }, [orders]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
