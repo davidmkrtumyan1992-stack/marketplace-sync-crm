@@ -290,7 +290,9 @@ export default function Orders() {
     if (marketplaceTab === "ozon") {
       result = result.filter((o: any) => o.source === "ozon" || o.source === "direct" || o.source === "manual");
     } else if (marketplaceTab === "yandex") {
-      result = result.filter((o: any) => o.source === "yandex");
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      result = result.filter((o: any) => o.source === "yandex" && new Date(o.createdAt) >= cutoff);
     } else if (marketplaceTab === "wildberries") {
       result = result.filter((o: any) => o.source === "wildberries" || o.source === "wb");
     }
