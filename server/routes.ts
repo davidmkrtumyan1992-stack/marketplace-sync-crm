@@ -4430,6 +4430,9 @@ export async function registerRoutes(
       ].join('-');
       console.log("[fix-order-dates] fromDate:", fromDateStr);
 
+      // Диагностика: что реально возвращает API
+      const diagInfo: any[] = [];
+
       for (const campId of campaignIds) {
         let page = 1; let hasMore = true;
         while (hasMore) {
@@ -4441,14 +4444,21 @@ export async function registerRoutes(
               { method: "GET", headers: authHeaders, signal: ctrl.signal }
             );
             clearTimeout(t);
-            if (!r.ok) { console.log(`[fix-order-dates] camp=${campId} page=${page} status=${r.status}`); hasMore = false; break; }
+            if (!r.ok) {
+              diagInfo.push({ camp: campId, page, httpStatus: r.status, error: await r.text().catch(() => '') });
+              hasMore = false; break;
+            }
             const data = await r.json();
             const ordersList: any[] = data?.orders || [];
             const pager = data?.pager;
             if (page === 1) {
               const s = ordersList[0];
-              console.log(`[fix-order-dates] camp=${campId} pagesCount=${pager?.pagesCount} ordersOnPage=${ordersList.length}`);
-              if (s) console.log(`[fix-order-dates] first order: id=${s.id} creationDate=${JSON.stringify(s.creationDate)} typeof=${typeof s.creationDate} status=${s.status}`);
+              diagInfo.push({
+                camp: campId,
+                pagesCount: pager?.pagesCount,
+                ordersOnPage: ordersList.length,
+                firstOrder: s ? { id: s.id, creationDate: s.creationDate, creationDateType: typeof s.creationDate, status: s.status } : null,
+              });
             }
             for (const yOrder of ordersList) {
               const raw = yOrder.creationDate;
@@ -4456,15 +4466,12 @@ export async function registerRoutes(
               let secs: number;
               const asNum = Number(raw);
               if (Number.isFinite(asNum) && asNum > 0) {
-                // Числовой timestamp: секунды или мс
                 secs = asNum > 1e11 ? Math.floor(asNum / 1000) : asNum;
               } else {
-                // Строковая дата: "YYYY-MM-DD" или ISO
                 const d = new Date(String(raw));
                 if (isNaN(d.getTime())) continue;
                 secs = Math.floor(d.getTime() / 1000);
               }
-              // Разумный диапазон: 2010-2035
               if (secs > 1262304000 && secs < 2051222400) {
                 creationSecsMap.set(String(yOrder.id), secs);
               }
@@ -4472,30 +4479,25 @@ export async function registerRoutes(
             if (!pager || page >= (pager.pagesCount || 1) || ordersList.length === 0) hasMore = false;
             else page++;
           } catch (e: any) {
-            console.log(`[fix-order-dates] camp=${campId} page=${page} fetch error:`, e?.message);
+            diagInfo.push({ camp: campId, page, fetchError: e?.message });
             hasMore = false;
           }
         }
-        console.log(`[fix-order-dates] camp=${campId} done, map size=${creationSecsMap.size}`);
       }
 
-      console.log(`[fix-order-dates] total from API: ${creationSecsMap.size}`);
-
-      // Шаг 4: Обновляем created_at через raw SQL — to_timestamp() принимает Unix секунды напрямую
+      // Шаг 4: Обновляем created_at через raw SQL
       let fixed = 0; let errors = 0;
       for (const order of ymOrders) {
         const secs = creationSecsMap.get(order.external_id);
         if (secs != null) {
           await db.execute(sql`UPDATE orders SET created_at = to_timestamp(${secs}) WHERE id = ${order.id}`);
           fixed++;
-          if (fixed % 100 === 0) console.log(`[fix-order-dates] progress: ${fixed}/${ymOrders.length}`);
         } else {
           errors++;
         }
       }
 
-      console.log(`[fix-order-dates] done: fixed=${fixed} errors=${errors} total=${ymOrders.length}`);
-      res.json({ fixed, errors, total: ymOrders.length });
+      res.json({ fixed, errors, total: ymOrders.length, mapSize: creationSecsMap.size, diag: diagInfo });
     } catch (error: any) {
       console.error("[fix-order-dates] Error:", error);
       res.status(500).json({ message: error.message });
