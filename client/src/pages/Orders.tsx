@@ -343,9 +343,9 @@ export default function Orders() {
       } else if (yandexSubFilter === "NOT_SHIPPED") {
         result = [];
       } else if (yandexSubFilter === "PICKUP") {
-        result = result.filter((o: any) => o.yandexStatus === "PICKUP");
+        result = [];
       } else if (yandexSubFilter === "DELIVERY") {
-        result = result.filter((o: any) => o.yandexStatus === "DELIVERY");
+        result = result.filter((o: any) => o.yandexStatus === "DELIVERY" || o.yandexStatus === "PICKUP");
       } else if (yandexSubFilter === "DELIVERED") {
         result = result.filter((o: any) => o.yandexStatus === "DELIVERED");
       } else if (yandexSubFilter === "CANCELLED") {
@@ -395,8 +395,8 @@ export default function Orders() {
       PROCESSING:    yOrders.filter((o: any) => o.yandexStatus === "PROCESSING" || o.yandexStatus === "RESERVED" || o.yandexStatus === "READY_TO_SHIP").length,
       READY_TO_SHIP: yOrders.filter((o: any) => o.yandexStatus === "READY_TO_SHIP").length,
       NOT_SHIPPED:   0,
-      PICKUP:        yOrders.filter((o: any) => o.yandexStatus === "PICKUP").length,
-      DELIVERY:      yOrders.filter((o: any) => o.yandexStatus === "DELIVERY").length,
+      PICKUP:        0,
+      DELIVERY:      yOrders.filter((o: any) => o.yandexStatus === "DELIVERY" || o.yandexStatus === "PICKUP").length,
       DELIVERED:     yOrders.filter((o: any) => o.yandexStatus === "DELIVERED").length,
       CANCELLED:     yOrders.filter((o: any) =>
         o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED" || o.yandexStatus === "UNPAID"
