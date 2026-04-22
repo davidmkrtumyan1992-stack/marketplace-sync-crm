@@ -4389,10 +4389,24 @@ export async function registerRoutes(
 
   // Реестр известных session ID (пополняется при каждом успешном detail-запросе)
   const ymKnownSessionIds = new Set<number>([81780262, 81843179, 81818838, 81857735, 81863339, 81801174]);
+  // Кэш ответов /api/marketplace/yandex/shipments (5 мин TTL, ключ = orgId)
+  const ymShipmentsCache = new Map<string, { data: any; ts: number }>();
+  const YM_SHIPMENTS_CACHE_TTL = 5 * 60 * 1000;
 
   app.get("/api/marketplace/yandex/shipments", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
+      const forceRefresh = req.query.refresh === "1";
+
+      // Вернуть из кэша если данные свежие (< 5 мин)
+      if (!forceRefresh) {
+        const cached = ymShipmentsCache.get(orgId);
+        if (cached && Date.now() - cached.ts < YM_SHIPMENTS_CACHE_TTL) {
+          console.log(`[ym-shipments] cache hit for org=${orgId}, age=${Math.round((Date.now()-cached.ts)/1000)}s`);
+          return res.json(cached.data);
+        }
+      }
+
       const allSettings = await storage.getMarketplaceSettings(orgId);
       const ymSetting = allSettings.find(s => s.marketplace === "yandex" && s.isActive && s.apiKey);
       if (!ymSetting) return res.status(400).json({ message: "Настройки Яндекс Маркет не найдены" });
@@ -4621,24 +4635,28 @@ export async function registerRoutes(
         return !sid || String(sid).startsWith('VRT_');
       });
       if (hasVrtOrUnmapped) {
+        // Параллельный запрос для всех известных сессий × кампаний
+        const eTasks: Promise<void>[] = [];
         for (const candId of ymKnownSessionIds) {
           for (const campId of [...campaignIds, "124589277"]) {
-            try {
-              const r = await fetch(`${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments/${candId}`, { headers: authHeaders });
-              if (r.ok) {
-                const d = await r.json();
-                const det = d?.result?.shipment || d?.shipment || d?.result || d;
-                const detIds: any[] = det?.orderIds || det?.orders?.map((o: any) => o.id) || [];
-                if (detIds.length > 0) {
-                  detIds.forEach((oid: any) => externalIdToSession.set(String(oid), String(candId)));
-                  ymKnownSessionIds.add(candId);
-                  console.log(`[ym-shipments] Strategy E: session=${candId} camp=${campId} orders=${detIds.join(",")}`);
-                  break;
+            eTasks.push((async () => {
+              try {
+                const r = await fetch(`${YANDEX_BASE}/campaigns/${campId}/first-mile/shipments/${candId}`, { headers: authHeaders });
+                if (r.ok) {
+                  const d = await r.json();
+                  const det = d?.result?.shipment || d?.shipment || d?.result || d;
+                  const detIds: any[] = det?.orderIds || det?.orders?.map((o: any) => o.id) || [];
+                  if (detIds.length > 0) {
+                    detIds.forEach((oid: any) => externalIdToSession.set(String(oid), String(candId)));
+                    ymKnownSessionIds.add(candId);
+                    console.log(`[ym-shipments] Strategy E: session=${candId} camp=${campId} orders=${detIds.join(",")}`);
+                  }
                 }
-              }
-            } catch {}
+              } catch {}
+            })());
           }
         }
+        await Promise.all(eTasks);
       }
 
       // Сохраняем session IDs в БД
@@ -4664,51 +4682,37 @@ export async function registerRoutes(
         if (order.externalId) shipmentMap.get(sId)!.orderIds.push(order.externalId);
       }
 
-      // Для каждой уникальной отгрузки получаем детали через YM API
-      const allShipments: any[] = [];
-      for (const [shipmentId, { orderIds, campaignId }] of shipmentMap.entries()) {
-        let shipmentStatus = "CREATED";
-        let warehouseName = `Кампания ${campaignId}`;
-        let warehouseAddress: string | null = null;
-        let planDate: string | null = null;
+      // Для каждой уникальной отгрузки получаем детали через YM API — параллельно
+      const allShipments: any[] = await Promise.all(
+        Array.from(shipmentMap.entries()).map(async ([shipmentId, { orderIds, campaignId }]) => {
+          let shipmentStatus = "CREATED";
+          let warehouseName = `Кампания ${campaignId}`;
+          let warehouseAddress: string | null = null;
+          let planDate: string | null = null;
 
-        if (shipmentId.startsWith('VRT_')) {
-          const vm = virtualMeta.get(shipmentId);
-          planDate = vm?.shipmentDate || null;
-          warehouseName = vm ? `Яндекс Маркет · ${vm.logisticPointId}` : `Кампания ${campaignId}`;
-        } else {
-          try {
-            const sRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/first-mile/shipments/${shipmentId}`, { headers: authHeaders });
-            if (sRes.ok) {
-              const sData = await sRes.json();
-              const s = sData?.result || sData?.shipment || sData;
-              shipmentStatus = s?.status || "CREATED";
-              warehouseName = s?.warehouseFrom?.description || s?.warehouseFrom?.address?.street || warehouseName;
-              if (s?.warehouseFrom?.address) {
-                warehouseAddress = [s.warehouseFrom.address.street, s.warehouseFrom.address.city].filter(Boolean).join(", ");
+          if (shipmentId.startsWith('VRT_')) {
+            const vm = virtualMeta.get(shipmentId);
+            planDate = vm?.shipmentDate || null;
+            warehouseName = vm ? `Яндекс Маркет · ${vm.logisticPointId}` : `Кампания ${campaignId}`;
+          } else {
+            try {
+              const sRes = await fetch(`${YANDEX_BASE}/campaigns/${campaignId}/first-mile/shipments/${shipmentId}`, { headers: authHeaders });
+              if (sRes.ok) {
+                const sData = await sRes.json();
+                const s = sData?.result || sData?.shipment || sData;
+                shipmentStatus = s?.status || "CREATED";
+                warehouseName = s?.warehouseFrom?.description || s?.warehouseFrom?.address?.street || warehouseName;
+                if (s?.warehouseFrom?.address) {
+                  warehouseAddress = [s.warehouseFrom.address.street, s.warehouseFrom.address.city].filter(Boolean).join(", ");
+                }
+                planDate = s?.planIntervalFrom || null;
               }
-              planDate = s?.planIntervalFrom || null;
-              console.log(`[ym-shipments] shipment=${shipmentId} status=${shipmentStatus} raw=${JSON.stringify(sData).slice(0,200)}`);
-            } else {
-              console.log(`[ym-shipments] single-shipment API ${shipmentId} HTTP ${sRes.status}`);
-            }
-          } catch (e: any) {
-            console.log(`[ym-shipments] single-shipment error: ${e.message}`);
+            } catch {}
           }
-        }
 
-        allShipments.push({
-          id: shipmentId,
-          campaignId,
-          status: shipmentStatus,
-          warehouseName,
-          warehouseAddress,
-          planDate,
-          orderCount: orderIds.length,
-          orderIds,
-          availableActions: [],
-        });
-      }
+          return { id: shipmentId, campaignId, status: shipmentStatus, warehouseName, warehouseAddress, planDate, orderCount: orderIds.length, orderIds, availableActions: [] };
+        })
+      );
 
       // Сортировка: ISO дата (YYYY-MM-DD) сортируется правильно
       allShipments.sort((a, b) => (b.planDate || "").localeCompare(a.planDate || ""));
@@ -4722,8 +4726,10 @@ export async function registerRoutes(
           s.displayId = `№${s.id}`;
         }
       }
-      console.log(`[ym-shipments] org=${orgId} shipments=${allShipments.length}`);
-      res.json({ shipments: allShipments });
+      const result = { shipments: allShipments };
+      ymShipmentsCache.set(orgId, { data: result, ts: Date.now() });
+      console.log(`[ym-shipments] org=${orgId} shipments=${allShipments.length} (cached)`);
+      res.json(result);
     } catch (e: any) {
       console.error("[ym-shipments]", e);
       res.status(500).json({ message: e.message });

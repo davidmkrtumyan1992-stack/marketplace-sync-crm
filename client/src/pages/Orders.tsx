@@ -204,6 +204,7 @@ export default function Orders() {
     queryKey: ["/api/marketplace/yandex/shipments"],
     enabled: marketplaceTab === "yandex" && yandexSubFilter === "READY_TO_SHIP",
     refetchInterval: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000,
   });
   const ymShipments = shipmentsData?.shipments || [];
   const selectedShipment = ymShipments.find((s: any) => s.id === selectedShipmentId) || ymShipments[0] || null;
