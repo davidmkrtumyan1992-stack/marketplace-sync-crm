@@ -4446,17 +4446,26 @@ export async function registerRoutes(
             const ordersList: any[] = data?.orders || [];
             const pager = data?.pager;
             if (page === 1) {
-              console.log(`[fix-order-dates] camp=${campId} pagesCount=${pager?.pagesCount} ordersOnPage=${ordersList.length} sample_creationDate=${ordersList[0]?.creationDate}`);
+              const s = ordersList[0];
+              console.log(`[fix-order-dates] camp=${campId} pagesCount=${pager?.pagesCount} ordersOnPage=${ordersList.length}`);
+              if (s) console.log(`[fix-order-dates] first order: id=${s.id} creationDate=${JSON.stringify(s.creationDate)} typeof=${typeof s.creationDate} status=${s.status}`);
             }
             for (const yOrder of ordersList) {
               const raw = yOrder.creationDate;
               if (raw == null) continue;
-              const ts = Number(raw);
-              if (!Number.isFinite(ts) || ts <= 0) continue;
-              // Авто-определение: секунды (10 цифр) или мс (13 цифр)
-              const secs = ts > 1e11 ? Math.floor(ts / 1000) : ts;
-              // Разумный диапазон: 2010-2030
-              if (secs > 1262304000 && secs < 1893456000) {
+              let secs: number;
+              const asNum = Number(raw);
+              if (Number.isFinite(asNum) && asNum > 0) {
+                // Числовой timestamp: секунды или мс
+                secs = asNum > 1e11 ? Math.floor(asNum / 1000) : asNum;
+              } else {
+                // Строковая дата: "YYYY-MM-DD" или ISO
+                const d = new Date(String(raw));
+                if (isNaN(d.getTime())) continue;
+                secs = Math.floor(d.getTime() / 1000);
+              }
+              // Разумный диапазон: 2010-2035
+              if (secs > 1262304000 && secs < 2051222400) {
                 creationSecsMap.set(String(yOrder.id), secs);
               }
             }
