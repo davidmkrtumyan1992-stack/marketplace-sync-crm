@@ -16,7 +16,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store, type StockSyncLogEntry, type InventorySyncSetting, type MarketplaceSetting, type Company } from "@shared/schema";
-import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2, Loader2, PlugZap } from "lucide-react";
+import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2, Loader2, PlugZap, Eye, EyeOff, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -544,6 +544,13 @@ function EditStoreDialog({ store, companyId, onClose }: { store: Store; companyI
   const { toast } = useToast();
   const marketplace = store.marketplace;
   const [connectionStatus, setConnectionStatus] = useState<{ success: boolean; message: string } | null>(null);
+  const [showApiKey, setShowApiKey] = useState(false);
+
+  const copyToClipboard = (value: string, label: string) => {
+    navigator.clipboard.writeText(value).then(() => {
+      toast({ title: `${label} скопирован` });
+    });
+  };
 
   const form = useForm<z.infer<typeof storeFormSchema>>({
     resolver: zodResolver(storeFormSchema),
@@ -644,12 +651,35 @@ function EditStoreDialog({ store, companyId, onClose }: { store: Store; companyI
 
           <div className="space-y-2">
             <Label>API-ключ</Label>
-            <Input
-              type="password"
-              {...form.register("apiKey")}
-              placeholder={marketplace === "wildberries" ? "eyJ... (JWT-токен WB)" : "API ключ"}
-              data-testid="input-edit-api-key"
-            />
+            <div className="relative flex items-center gap-2">
+              <Input
+                type={showApiKey ? "text" : "password"}
+                {...form.register("apiKey")}
+                placeholder={marketplace === "wildberries" ? "eyJ... (JWT-токен WB)" : "API ключ"}
+                data-testid="input-edit-api-key"
+                className="pr-10 flex-1"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-8 h-8 w-8 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowApiKey((v) => !v)}
+                tabIndex={-1}
+              >
+                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground shrink-0"
+                onClick={() => copyToClipboard(form.getValues("apiKey"), "API-ключ")}
+                tabIndex={-1}
+              >
+                <Copy className="h-4 w-4" />
+              </Button>
+            </div>
             {form.formState.errors.apiKey && (
               <span className="text-xs text-destructive">{form.formState.errors.apiKey.message}</span>
             )}
@@ -658,7 +688,19 @@ function EditStoreDialog({ store, companyId, onClose }: { store: Store; companyI
           {marketplace === "ozon" && (
             <div className="space-y-2">
               <Label>Client ID</Label>
-              <Input {...form.register("clientId")} placeholder="Client ID" data-testid="input-edit-client-id" />
+              <div className="flex items-center gap-2">
+                <Input {...form.register("clientId")} placeholder="Client ID" data-testid="input-edit-client-id" className="flex-1" />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground shrink-0"
+                  onClick={() => copyToClipboard(form.getValues("clientId"), "Client ID")}
+                  tabIndex={-1}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
               {form.formState.errors.clientId && (
                 <span className="text-xs text-destructive">{form.formState.errors.clientId.message}</span>
               )}
