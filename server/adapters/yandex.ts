@@ -1,0 +1,115 @@
+import type { Store } from "@shared/schema";
+import type { MarketplaceAdapter, StockUpdate, StockInfo, AdapterResult } from "./base";
+import { sleep } from "./base";
+
+const YM_API = "https://api.partner.market.yandex.ru";
+const BATCH_SIZE = 100;
+
+export class YandexMarketAdapter implements MarketplaceAdapter {
+  constructor(private store: Store) {}
+
+  getName(): string {
+    return `YM(${this.store.name})`;
+  }
+
+  private get campaignId(): string {
+    return this.store.warehouseId || "";
+  }
+
+  async updateStocks(updates: StockUpdate[]): Promise<AdapterResult> {
+    if (!this.store.apiKey) {
+      return { success: false, errors: [`API-ключ не настроен для «${this.store.name}»`] };
+    }
+    if (!this.campaignId) {
+      return { success: false, errors: [`Campaign ID не указан для «${this.store.name}»`] };
+    }
+
+    const errors: string[] = [];
+    let updatedCount = 0;
+
+    for (let i = 0; i < updates.length; i += BATCH_SIZE) {
+      const batch = updates.slice(i, i + BATCH_SIZE);
+
+      const skus = batch.map(u => ({
+        sku: u.externalSku,
+        items: [{ type: "FIT", count: Math.max(0, u.quantity) }],
+      }));
+
+      try {
+        const res = await fetch(
+          `${YM_API}/campaigns/${this.campaignId}/offers/stocks`,
+          {
+            method: "PUT",
+            headers: {
+              "Api-Key": this.store.apiKey!,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ skus }),
+            signal: AbortSignal.timeout(15_000),
+          }
+        );
+
+        const data = await res.json() as any;
+
+        if (!res.ok) {
+          errors.push(`YM HTTP ${res.status}: ${data?.errors?.[0]?.message || res.statusText}`);
+          continue;
+        }
+
+        updatedCount += batch.length;
+        console.log(`[ym-adapter] ${this.store.name}: batch ${i / BATCH_SIZE + 1}, updated=${batch.length}`);
+      } catch (e: any) {
+        errors.push(`YM batch ${i}: ${e.message}`);
+      }
+
+      if (i + BATCH_SIZE < updates.length) await sleep(500);
+    }
+
+    return { success: errors.length === 0, errors, updatedCount };
+  }
+
+  async getStocks(skus: string[]): Promise<StockInfo[]> {
+    if (!this.store.apiKey || !this.campaignId) return [];
+
+    try {
+      const res = await fetch(
+        `${YM_API}/campaigns/${this.campaignId}/offers/stocks`,
+        {
+          method: "POST",
+          headers: {
+            "Api-Key": this.store.apiKey!,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ withTurnover: false, archived: false, limit: 200 }),
+          signal: AbortSignal.timeout(15_000),
+        }
+      );
+
+      if (!res.ok) return [];
+
+      const data = await res.json() as any;
+      const warehouses = data?.result?.warehouses || [];
+      const skuSet = new Set(skus);
+      const result: StockInfo[] = [];
+
+      for (const wh of warehouses) {
+        for (const offer of wh.offers || []) {
+          if (skus.length && !skuSet.has(offer.offerId)) continue;
+          const stocks = Object.fromEntries(
+            (offer.stocks || []).map((s: any) => [s.type, s.count])
+          );
+          result.push({
+            externalSku: offer.offerId,
+            available: stocks["AVAILABLE"] || 0,
+            reserved: stocks["FREEZE"] || 0,
+          });
+        }
+      }
+
+      return result;
+    } catch (e: any) {
+      console.error(`[ym-adapter] getStocks error: ${e.message}`);
+      return [];
+    }
+  }
+}

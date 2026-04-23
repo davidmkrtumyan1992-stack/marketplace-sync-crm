@@ -66,6 +66,8 @@ export const products = pgTable("products", {
   dimensionWidth: decimal("dimension_width", { precision: 10, scale: 2 }),
   dimensionHeight: decimal("dimension_height", { precision: 10, scale: 2 }),
   centralStock: integer("central_stock").notNull().default(0),
+  availableQuantity: integer("available_quantity").notNull().default(0),
+  reservedQuantity: integer("reserved_quantity").notNull().default(0),
   stockQuantity: integer("stock_quantity").notNull().default(0),
   stockLocal: integer("stock_local").notNull().default(0),
   stockOzon: integer("stock_ozon").notNull().default(0),
@@ -240,6 +242,12 @@ export const stockSyncLog = pgTable("stock_sync_log", {
   syncResults: jsonb("sync_results"),
   status: text("status").notNull().default("success"),
   details: text("details"),
+  direction: text("direction").default("outbound"),
+  marketplace: text("marketplace"),
+  requestBody: text("request_body"),
+  responseBody: text("response_body"),
+  durationMs: integer("duration_ms"),
+  retryCount: integer("retry_count").default(0),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -257,6 +265,10 @@ export const productMarketplaceLinks = pgTable("product_marketplace_links", {
   productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
   storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
   marketplaceProductId: text("marketplace_product_id"),
+  externalSku: text("external_sku"),
+  matchType: text("match_type").notNull().default("manual"),
+  confidenceScore: decimal("confidence_score", { precision: 3, scale: 2 }).default("1.0"),
+  linkStatus: text("link_status").notNull().default("active"),
   isActive: boolean("is_active").default(true),
   lastSyncAt: timestamp("last_sync_at"),
   lastSyncStatus: text("last_sync_status"),
@@ -264,6 +276,26 @@ export const productMarketplaceLinks = pgTable("product_marketplace_links", {
   organizationId: text("organization_id").notNull(),
 }, (table) => ({
   productStoreUnique: uniqueIndex("pml_product_store_idx").on(table.productId, table.storeId),
+}));
+
+export const stockEvents = pgTable("stock_events", {
+  id: serial("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  productId: integer("product_id").references(() => products.id),
+  marketplace: text("marketplace").notNull(),
+  storeId: integer("store_id").references(() => stores.id),
+  eventType: text("event_type").notNull(),
+  quantityDelta: integer("quantity_delta").notNull(),
+  externalEventId: text("external_event_id"),
+  payload: jsonb("payload"),
+  status: text("status").notNull().default("pending"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+  processedAt: timestamp("processed_at"),
+}, (table) => ({
+  externalEventUnique: uniqueIndex("stock_events_external_unique")
+    .on(table.marketplace, table.externalEventId)
+    .where(sql`external_event_id IS NOT NULL`),
 }));
 
 // === RELATIONS ===
@@ -338,6 +370,7 @@ export const insertWebhookLogSchema = createInsertSchema(webhookLogs).omit({ id:
 export const insertInventorySyncSettingsSchema = createInsertSchema(inventorySyncSettings).omit({ id: true, updatedAt: true });
 export const insertProductStoreExclusionSchema = createInsertSchema(productStoreExclusions).omit({ id: true, createdAt: true });
 export const insertProductMarketplaceLinkSchema = createInsertSchema(productMarketplaceLinks).omit({ id: true });
+export const insertStockEventSchema = createInsertSchema(stockEvents).omit({ id: true, createdAt: true, processedAt: true });
 
 // === TYPES ===
 
@@ -377,6 +410,8 @@ export type WebhookLog = typeof webhookLogs.$inferSelect;
 export type InsertWebhookLog = z.infer<typeof insertWebhookLogSchema>;
 export type ProductMarketplaceLink = typeof productMarketplaceLinks.$inferSelect;
 export type InsertProductMarketplaceLink = z.infer<typeof insertProductMarketplaceLinkSchema>;
+export type StockEvent = typeof stockEvents.$inferSelect;
+export type InsertStockEvent = z.infer<typeof insertStockEventSchema>;
 
 // Product store status for SyncPriceDialog
 export type ProductStoreStatus = {

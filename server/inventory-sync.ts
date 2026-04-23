@@ -2,6 +2,7 @@ import { db } from "./db";
 import { products, stores, stockSyncLog, inventorySyncSettings, companies, syncHistory, productStoreExclusions } from "@shared/schema";
 import type { Store, StockSyncLogEntry, InsertStockSyncLog, InventorySyncSetting } from "@shared/schema";
 import { eq, and, desc, sql, inArray, gte } from "drizzle-orm";
+import { createAdapter } from "./adapters/factory";
 
 type StoreSyncResult = {
   storeId: number;
@@ -163,10 +164,19 @@ export class InventorySyncEngine {
   }
 
   private async sendStockToMarketplace(store: Store, sku: string, stockLevel: number): Promise<void> {
-    await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
-
     if (!store.apiKey) {
       throw new Error(`API-ключ не настроен для «${store.name}»`);
+    }
+
+    const adapter = createAdapter(store);
+    const t0 = Date.now();
+    const result = await adapter.updateStocks([{ externalSku: sku, quantity: stockLevel }]);
+    const durationMs = Date.now() - t0;
+
+    console.log(`[inventory-sync] ${adapter.getName()}: sku=${sku}, qty=${stockLevel}, success=${result.success}, dur=${durationMs}ms`);
+
+    if (!result.success) {
+      throw new Error(result.errors.join("; "));
     }
   }
 
