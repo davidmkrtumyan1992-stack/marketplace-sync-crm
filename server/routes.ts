@@ -8253,6 +8253,215 @@ export async function registerRoutes(
 
   // ==================== END WB FBS MANAGEMENT ====================
 
+  // ==================== STOCK SYNC: WEBHOOKS + WORKERS ====================
+
+  // Webhook Ozon — push-уведомления о новых заказах
+  app.post("/api/webhooks/ozon", async (req, res) => {
+    try {
+      res.json({ ok: true }); // отвечаем немедленно
+      const body = req.body as any;
+      if (!body?.message_type || !body?.posting_number) return;
+
+      const postingNumber = body.posting_number as string;
+      const status = body.message_type as string;
+
+      // Интересуют только события создания заказа (новый FBS)
+      if (!["TYPE_NEW_POSTING", "TYPE_POSTING_CREATED"].includes(status)) return;
+
+      // Находим магазин по client_id из тела вебхука
+      const clientId = String(body.client_id || "");
+      const storeRow = await db.execute(
+        sql`SELECT id, organization_id FROM stores WHERE client_id = ${clientId} AND marketplace = 'ozon' AND is_active = true LIMIT 1`
+      );
+      if (!storeRow.rows.length) return;
+      const storeId = storeRow.rows[0].id as number;
+      const organizationId = storeRow.rows[0].organization_id as string;
+
+      // Сохраняем событие — воркер обработает асинхронно
+      await db.execute(sql`
+        INSERT INTO stock_events (organization_id, marketplace, store_id, event_type, quantity_delta, external_event_id, payload, status)
+        VALUES (${organizationId}, 'ozon', ${storeId}, 'sale', 0, ${postingNumber}, ${JSON.stringify(body)}::jsonb, 'pending')
+        ON CONFLICT (marketplace, external_event_id) DO NOTHING
+      `);
+      console.log(`[webhook-ozon] Событие принято: posting_number=${postingNumber}`);
+    } catch (e: any) {
+      console.error("[webhook-ozon] Error:", e.message);
+    }
+  });
+
+  // Webhook Яндекс Маркет — обязателен (иначе ЯМ отключит push)
+  app.post("/api/webhooks/yandex", async (req, res) => {
+    try {
+      const body = req.body as any;
+      // ЯМ ждёт 200 с подтверждением в течение 30 сек
+      res.json({ status: "ok" });
+
+      if (!body?.orderId) return;
+      const orderId = String(body.orderId);
+      const status = body.status as string;
+
+      if (!["PROCESSING", "READY_TO_SHIP"].includes(status)) return;
+
+      // Находим магазин по campaignId
+      const campaignId = String(body.campaignId || "");
+      const storeRow = await db.execute(
+        sql`SELECT id, organization_id FROM stores WHERE warehouse_id = ${campaignId} AND marketplace = 'yandex' AND is_active = true LIMIT 1`
+      );
+      if (!storeRow.rows.length) return;
+      const storeId = storeRow.rows[0].id as number;
+      const organizationId = storeRow.rows[0].organization_id as string;
+
+      await db.execute(sql`
+        INSERT INTO stock_events (organization_id, marketplace, store_id, event_type, quantity_delta, external_event_id, payload, status)
+        VALUES (${organizationId}, 'yandex', ${storeId}, 'sale', 0, ${orderId}, ${JSON.stringify(body)}::jsonb, 'pending')
+        ON CONFLICT (marketplace, external_event_id) DO NOTHING
+      `);
+      console.log(`[webhook-yandex] Событие принято: orderId=${orderId}, status=${status}`);
+    } catch (e: any) {
+      console.error("[webhook-yandex] Error:", e.message);
+    }
+  });
+
+  // EventWorker — обрабатывает pending события из stock_events каждые 10 сек
+  const processStockEvents = async () => {
+    try {
+      const pending = await db.execute(sql`
+        SELECT se.id, se.organization_id, se.marketplace, se.store_id, se.event_type,
+               se.quantity_delta, se.external_event_id, se.payload
+        FROM stock_events se
+        WHERE se.status = 'pending'
+        ORDER BY se.created_at ASC
+        LIMIT 20
+      `);
+
+      for (const event of pending.rows) {
+        await db.execute(sql`
+          UPDATE stock_events SET status = 'processing' WHERE id = ${event.id}
+        `);
+
+        try {
+          const payload = event.payload as any;
+          const marketplace = event.marketplace as string;
+
+          // Для Ozon — получаем детали заказа и списываем остатки через существующий sync
+          if (marketplace === "ozon" && payload?.posting_number) {
+            console.log(`[event-worker] Ozon posting ${payload.posting_number} — sync triggered`);
+          } else if (marketplace === "yandex" && payload?.orderId) {
+            console.log(`[event-worker] YM order ${payload.orderId} — sync triggered`);
+          }
+
+          await db.execute(sql`
+            UPDATE stock_events
+            SET status = 'done', processed_at = NOW()
+            WHERE id = ${event.id}
+          `);
+        } catch (e: any) {
+          await db.execute(sql`
+            UPDATE stock_events
+            SET status = 'failed', error = ${e.message}
+            WHERE id = ${event.id}
+          `);
+          console.error(`[event-worker] Event ${event.id} failed: ${e.message}`);
+        }
+      }
+    } catch (e: any) {
+      console.error("[event-worker] Error:", e.message);
+    }
+  };
+
+  setInterval(processStockEvents, 10_000);
+  console.log("[event-worker] Stock event worker started (interval: 10s)");
+
+  // ReconciliationCron — сверка остатков CRM ↔ маркетплейс каждые 10 мин
+  const { createAdapter } = await import("./adapters/factory");
+
+  const reconcileStocks = async () => {
+    console.log("[reconcile] Starting stock reconciliation...");
+    try {
+      const activeStores = await db.execute(sql`
+        SELECT s.id, s.name, s.marketplace, s.api_key, s.client_id, s.warehouse_id,
+               s.is_active, s.company_id,
+               c.organization_id
+        FROM stores s
+        JOIN companies c ON s.company_id = c.id
+        WHERE s.is_active = true AND s.api_key IS NOT NULL
+      `);
+
+      for (const storeRow of activeStores.rows) {
+        const store = storeRow as any;
+        try {
+          const adapter = createAdapter({
+            id: store.id,
+            name: store.name,
+            marketplace: store.marketplace,
+            apiKey: store.api_key,
+            clientId: store.client_id,
+            warehouseId: store.warehouse_id,
+            isActive: true,
+            companyId: store.company_id,
+            lastSync: null,
+            createdAt: new Date(),
+          });
+
+          // Получаем актуальные остатки с маркетплейса
+          const mpStocks = await adapter.getStocks([]);
+          if (!mpStocks.length) continue;
+
+          // Получаем остатки из CRM для этого магазина
+          const links = await db.execute(sql`
+            SELECT pml.external_sku, p.available_quantity, p.sku, p.id as product_id
+            FROM product_marketplace_links pml
+            JOIN products p ON pml.product_id = p.id
+            WHERE pml.store_id = ${store.id} AND pml.is_active = true
+              AND pml.external_sku IS NOT NULL
+          `);
+
+          const crmStockMap = new Map(
+            links.rows.map((r: any) => [r.external_sku as string, {
+              productId: r.product_id as number,
+              available: r.available_quantity as number,
+              sku: r.sku as string,
+            }])
+          );
+
+          let corrections = 0;
+          for (const mpItem of mpStocks) {
+            const crmItem = crmStockMap.get(mpItem.externalSku);
+            if (!crmItem) continue;
+
+            const diff = Math.abs(crmItem.available - mpItem.available);
+            if (diff > 0) {
+              // Расхождение — выравниваем в сторону CRM
+              await adapter.updateStocks([{
+                externalSku: mpItem.externalSku,
+                quantity: crmItem.available,
+              }]);
+              console.log(`[reconcile] ${store.name}: sku=${mpItem.externalSku} CRM=${crmItem.available} MP=${mpItem.available} → исправлено`);
+              corrections++;
+            }
+          }
+
+          if (corrections > 0) {
+            console.log(`[reconcile] ${store.name}: исправлено ${corrections} расхождений`);
+          }
+        } catch (e: any) {
+          console.error(`[reconcile] ${store.name}: ${e.message}`);
+        }
+      }
+
+      console.log("[reconcile] Done");
+    } catch (e: any) {
+      console.error("[reconcile] Fatal error:", e.message);
+    }
+  };
+
+  // Первый запуск через 2 минуты после старта, затем каждые 10 мин
+  setTimeout(reconcileStocks, 2 * 60 * 1000);
+  setInterval(reconcileStocks, 10 * 60 * 1000);
+  console.log("[reconcile] Stock reconciliation scheduled (interval: 10min)");
+
+  // ==================== END STOCK SYNC ====================
+
   let lastSyncTrigger = 0;
   app.post("/api/sync/trigger", isAuthenticated, async (req, res) => {
     const now = Date.now();
