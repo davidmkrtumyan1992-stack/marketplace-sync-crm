@@ -5411,7 +5411,7 @@ export async function registerRoutes(
                 }
                 if (items.length > 0) {
                   const internalStatus = ozonStatusToInternal(newStatus);
-                  await storage.createOrder({
+                  const newOrder = await storage.createOrder({
                     orderNumber: pn,
                     status: internalStatus,
                     totalAmount: totalAmount.toFixed(2),
@@ -5428,6 +5428,21 @@ export async function registerRoutes(
                   }, items);
                   existingPostingNumbers.add(pn);
                   created++;
+                  // Phase 3: decrement stock for new non-cancelled recent orders
+                  const isRecent = ozonCreatedAt && (Date.now() - ozonCreatedAt.getTime() < 72 * 60 * 60 * 1000);
+                  if (newOrder && internalStatus !== 'cancelled' && isRecent) {
+                    for (const item of items) {
+                      if (!item.productId || !item.quantity) continue;
+                      inventorySyncEngine.processOrderStockUpdate({
+                        organizationId: orgId,
+                        orderId: newOrder.id,
+                        productId: item.productId,
+                        quantity: item.quantity,
+                        sourceStoreId: resolvedStoreId ?? null,
+                        sourceStoreName: resolvedStoreName ?? pn,
+                      }).catch((e: any) => console.error(`[phase3-ozon] ${pn} stock update failed: ${e.message}`));
+                    }
+                  }
                 } else {
                   console.log(`[ozon-auto-sync] Skipped posting ${pn}: no products with offer_id`);
                 }
@@ -5620,9 +5635,10 @@ export async function registerRoutes(
                       }
                     }
                     const orderTotal = totalAmount > 0 ? totalAmount : parseFloat(String(yOrder.itemsTotal || yOrder.buyerTotal || "0"));
-                    await storage.createOrder({
+                    const ymInternalStatus = yandexStatusToInternal(yStatus);
+                    const newYmOrder = await storage.createOrder({
                       orderNumber: `YM-${yOrderId}`,
-                      status: yandexStatusToInternal(yStatus),
+                      status: ymInternalStatus,
                       totalAmount: orderTotal.toFixed(2),
                       source: "yandex",
                       externalId: yOrderId,
@@ -5639,6 +5655,21 @@ export async function registerRoutes(
                       createdAt: yCreatedAt || undefined,
                     }, items);
                     created++;
+                    // Phase 3: decrement stock for new non-cancelled recent YM orders
+                    const ymIsRecent = !yCreatedAt || (Date.now() - yCreatedAt.getTime() < 72 * 60 * 60 * 1000);
+                    if (newYmOrder && ymInternalStatus !== 'cancelled' && ymIsRecent) {
+                      for (const item of items) {
+                        if (!item.productId || !item.quantity) continue;
+                        inventorySyncEngine.processOrderStockUpdate({
+                          organizationId: orgId,
+                          orderId: newYmOrder.id,
+                          productId: item.productId,
+                          quantity: item.quantity,
+                          sourceStoreId: resolvedStoreId ?? null,
+                          sourceStoreName: resolvedStoreName ?? `YM-${yOrderId}`,
+                        }).catch((e: any) => console.error(`[phase3-ym] ${yOrderId} stock update failed: ${e.message}`));
+                      }
+                    }
                   }
                 }
 
@@ -5859,9 +5890,10 @@ export async function registerRoutes(
                       .where(and(eq(productsTable.sku, article), eq(productsTable.organizationId, orgId)));
                     if (dbProduct) productId = dbProduct.id;
                   }
-                  await storage.createOrder({
+                  const wbInternalStatus = wbStatusToInternal(wbStatus);
+                  const newWbOrder = await storage.createOrder({
                     orderNumber: `WB-${wbOrderId}`,
-                    status: wbStatusToInternal(wbStatus),
+                    status: wbInternalStatus,
                     totalAmount: totalAmount.toFixed(2),
                     source: "wildberries",
                     externalId: wbOrderId,
@@ -5882,6 +5914,18 @@ export async function registerRoutes(
                     ? [{ productId, quantity: qty, price: totalAmount }]
                     : [{ productId: null, sku: article || `WB-${wbOrderId}`, productName: wbOrder.subject || "WB товар", quantity: qty, price: totalAmount }]);
                   storeCreated++;
+                  // Phase 3: decrement stock for new non-cancelled recent WB orders
+                  const wbIsRecent = Date.now() - createdAtTs.getTime() < 72 * 60 * 60 * 1000;
+                  if (newWbOrder && wbInternalStatus !== 'cancelled' && wbIsRecent && productId) {
+                    inventorySyncEngine.processOrderStockUpdate({
+                      organizationId: orgId,
+                      orderId: newWbOrder.id,
+                      productId,
+                      quantity: qty,
+                      sourceStoreId: resolvedStoreId ?? null,
+                      sourceStoreName: resolvedStoreName ?? `WB-${wbOrderId}`,
+                    }).catch((e: any) => console.error(`[phase3-wb] ${wbOrderId} stock update failed: ${e.message}`));
+                  }
                 }
               } catch (e: any) {
                 console.error(`[wb-auto-sync] Order ${wbOrder.id} error:`, e.message);
