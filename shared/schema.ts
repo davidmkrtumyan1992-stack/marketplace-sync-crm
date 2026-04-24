@@ -80,6 +80,7 @@ export const products = pgTable("products", {
   wbId: text("wb_id"),
   yandexId: text("yandex_id"),
   imageUrl: text("image_url"),
+  brand: text("brand"),
   safetyStock: integer("safety_stock").notNull().default(0),
   companyId: integer("company_id").references(() => companies.id),
   organizationId: text("organization_id").notNull(),

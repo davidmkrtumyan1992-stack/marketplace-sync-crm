@@ -8578,6 +8578,195 @@ export async function registerRoutes(
 
   // ==================== END STOCK SYNC: AUTO-MATCH ====================
 
+  // ==================== DAVINES ARCHIVE SCHEDULE ====================
+
+  // GET /api/inventory/davines/discover — список архивных товаров Ozon (для идентификации Davines)
+  app.get("/api/inventory/davines/discover", isAuthenticated, async (req, res) => {
+    try {
+      const organizationId = (req as any).user?.organizationId || (req as any).user?.claims?.sub;
+      const allSettings = await db.select().from(marketplaceSettingsTable)
+        .where(and(eq(marketplaceSettingsTable.marketplace, "ozon"), eq(marketplaceSettingsTable.organizationId, organizationId)));
+
+      const found: { offerId: string; name: string; ozonProductId: string; storeId: number | null; storeName: string }[] = [];
+      const seen = new Set<string>();
+
+      for (const setting of allSettings) {
+        if (!setting.apiKey || !setting.clientId) continue;
+        const { storeId, storeName } = await resolveStoreForSetting(setting);
+        const headers = {
+          "Client-Id": String(parseInt(setting.clientId.trim(), 10)),
+          "Api-Key": setting.apiKey.trim(),
+          "Content-Type": "application/json",
+        };
+        let lastId = "";
+        for (let page = 0; page < 20; page++) {
+          const res2 = await fetch("https://api-seller.ozon.ru/v3/product/list", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ filter: { visibility: "ARCHIVED" }, last_id: lastId, limit: 1000 }),
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (!res2.ok) break;
+          const data = await res2.json() as any;
+          const items: any[] = data?.result?.items || [];
+          for (const item of items) {
+            const offerId = String(item.offer_id || "");
+            if (!offerId || seen.has(offerId)) continue;
+            seen.add(offerId);
+            found.push({ offerId, name: item.name || offerId, ozonProductId: String(item.product_id || ""), storeId: storeId ?? null, storeName: storeName ?? setting.clientId ?? "" });
+          }
+          lastId = data?.result?.last_id || "";
+          if (!lastId || items.length < 1000) break;
+        }
+      }
+
+      // Найти соответствия в CRM
+      const result = await Promise.all(found.map(async (item) => {
+        const [link] = await db.execute(sql`
+          SELECT pml.product_id, p.name as crm_name, p.id as crm_id, p.brand
+          FROM product_marketplace_links pml
+          JOIN products p ON pml.product_id = p.id
+          WHERE pml.external_sku = ${item.offerId} AND pml.organization_id = ${organizationId}
+          LIMIT 1
+        `);
+        const row = (link as any)?.rows?.[0];
+        return { ...item, crmProductId: row?.crm_id || null, crmName: row?.crm_name || null, alreadyDavines: row?.brand === "Davines" };
+      }));
+
+      res.json({ total: result.length, items: result });
+    } catch (e: any) {
+      console.error("[davines/discover] Error:", e.message);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // POST /api/inventory/davines/mark — пометить товары как brand='Davines'
+  app.post("/api/inventory/davines/mark", isAuthenticated, async (req, res) => {
+    try {
+      const organizationId = (req as any).user?.organizationId || (req as any).user?.claims?.sub;
+      const { productIds } = req.body as { productIds: number[] };
+      if (!Array.isArray(productIds) || productIds.length === 0) {
+        return res.status(400).json({ message: "productIds array required" });
+      }
+      await db.execute(sql`
+        UPDATE products SET brand = 'Davines'
+        WHERE id = ANY(${sql.raw(`ARRAY[${productIds.join(",")}]::int[]`)})
+        AND organization_id = ${organizationId}
+      `);
+      console.log(`[davines/mark] Marked ${productIds.length} products as Davines for org ${organizationId}`);
+      res.json({ ok: true, marked: productIds.length });
+    } catch (e: any) {
+      console.error("[davines/mark] Error:", e.message);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // POST /api/inventory/davines/apply — ручной запуск (для тестирования)
+  app.post("/api/inventory/davines/apply", isAuthenticated, async (req, res) => {
+    try {
+      const organizationId = (req as any).user?.organizationId || (req as any).user?.claims?.sub;
+      const { action } = req.body as { action: "archive" | "unarchive" };
+      if (action !== "archive" && action !== "unarchive") {
+        return res.status(400).json({ message: 'action must be "archive" or "unarchive"' });
+      }
+      const report = await applyDavinessSchedule(organizationId, action);
+      res.json({ ok: true, action, ...report });
+    } catch (e: any) {
+      console.error("[davines/apply] Error:", e.message);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // Ядро: применить archive/unarchive для всех Davines-товаров организации
+  async function applyDavinessSchedule(organizationId: string, action: "archive" | "unarchive"): Promise<{ updated: number; errors: string[] }> {
+    const davinessProducts = await db.execute(sql`
+      SELECT id, sku, central_stock, name FROM products
+      WHERE brand = 'Davines' AND organization_id = ${organizationId}
+    `);
+    const prods = (davinessProducts as any).rows as { id: number; sku: string; central_stock: number; name: string }[];
+    if (prods.length === 0) return { updated: 0, errors: [] };
+
+    const companyRows = await db.execute(sql`SELECT id FROM companies WHERE organization_id = ${organizationId}`);
+    const companyIds = ((companyRows as any).rows as { id: number }[]).map(r => r.id);
+    if (companyIds.length === 0) return { updated: 0, errors: [] };
+
+    const storeRows = await db.execute(sql`
+      SELECT s.* FROM stores s WHERE s.company_id = ANY(${sql.raw(`ARRAY[${companyIds.join(",")}]::int[]`)}) AND s.is_active = true
+    `);
+    const activeStores = (storeRows as any).rows as any[];
+
+    let updated = 0;
+    const errors: string[] = [];
+
+    for (const prod of prods) {
+      const links = await db.execute(sql`
+        SELECT store_id, external_sku FROM product_marketplace_links
+        WHERE product_id = ${prod.id} AND organization_id = ${organizationId} AND is_active = true
+      `);
+      const linkRows = (links as any).rows as { store_id: number; external_sku: string }[];
+
+      for (const link of linkRows) {
+        const store = activeStores.find((s: any) => s.id === link.store_id);
+        if (!store || !store.api_key) continue;
+        try {
+          const { createAdapter: _createAdapter } = await import("./adapters/factory");
+          const adapter = _createAdapter({ ...store, apiKey: store.api_key, clientId: store.client_id, warehouseId: store.warehouse_id, isActive: store.is_active } as any);
+          const qty = action === "archive" ? 0 : Math.max(0, prod.central_stock || 0);
+          await adapter.updateStocks([{ externalSku: link.external_sku, quantity: qty }]);
+          updated++;
+          console.log(`[davines-schedule] ${action}: ${prod.name} → store ${store.name}, qty=${qty}`);
+        } catch (e: any) {
+          errors.push(`${prod.name} / ${store.name}: ${e.message}`);
+        }
+      }
+    }
+
+    return { updated, errors };
+  }
+
+  // Планировщик расписания Davines (каждые 60 сек)
+  let davinessLastState: "archived" | "active" | null = null;
+
+  function getMskWindow(): "archive" | "active" {
+    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000); // UTC+3
+    const h = msk.getUTCHours(), m = msk.getUTCMinutes(), day = msk.getUTCDay();
+    // Пн-Чт (1-4) 07:30–20:00 → archive
+    const inArchiveWindow = day >= 1 && day <= 4 &&
+      (h > 7 || (h === 7 && m >= 30)) && h < 20;
+    return inArchiveWindow ? "archive" : "active";
+  }
+
+  const runDavinessScheduler = async () => {
+    try {
+      const window = getMskWindow();
+      const targetState: "archived" | "active" = window === "archive" ? "archived" : "active";
+      if (targetState === davinessLastState) return;
+
+      const allOrgs = await db.execute(sql`SELECT DISTINCT organization_id FROM products WHERE brand = 'Davines'`);
+      const orgs = ((allOrgs as any).rows as { organization_id: string }[]).map(r => r.organization_id);
+      if (orgs.length === 0) { davinessLastState = targetState; return; }
+
+      const action = targetState === "archived" ? "archive" : "unarchive";
+      console.log(`[davines-schedule] Transition → ${targetState} (window=${window})`);
+
+      for (const orgId of orgs) {
+        const { updated, errors } = await applyDavinessSchedule(orgId, action);
+        console.log(`[davines-schedule] Org ${orgId}: ${action} applied to ${updated} SKUs, errors=${errors.length}`);
+        if (errors.length > 0) console.error(`[davines-schedule] Errors:`, errors);
+      }
+      davinessLastState = targetState;
+    } catch (e: any) {
+      console.error("[davines-schedule] Error:", e.message);
+    }
+  };
+
+  // Инициализация: применить текущее состояние сразу при старте
+  setTimeout(runDavinessScheduler, 5000);
+  setInterval(runDavinessScheduler, 60_000);
+  console.log("[davines-schedule] Scheduler started (check every 60s, MSK timezone)");
+
+  // ==================== END DAVINES ARCHIVE SCHEDULE ====================
+
   // ==================== STOCK SYNC: WEBHOOKS + WORKERS ====================
 
   // Webhook Ozon — push-уведомления о новых заказах
