@@ -8493,8 +8493,7 @@ export async function registerRoutes(
 
           // ---- WILDBERRIES ----
           if (store.marketplace === "wildberries") {
-            const today = new Date().toISOString().split("T")[0];
-            const r = await fetch(`https://statistics-api.wildberries.ru/api/v1/supplier/stocks?dateFrom=${today}`, {
+            const r = await fetch(`https://statistics-api.wildberries.ru/api/v1/supplier/stocks?dateFrom=2024-01-01`, {
               headers: { "Authorization": store.api_key },
               signal: AbortSignal.timeout(30_000),
             });
