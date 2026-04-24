@@ -383,7 +383,8 @@ export class InventorySyncEngine {
       lastSyncStatus: lastLog?.status || null,
       totalSyncsToday: allLogs.length,
       successCount: allLogs.filter(l => l.status === "success").length,
-      failCount: allLogs.filter(l => l.status === "fail" || l.status === "partial").length,
+      partialCount: allLogs.filter(l => l.status === "partial").length,
+      failCount: allLogs.filter(l => l.status === "fail").length,
       safetyStockTriggeredCount: allLogs.filter(l => l.safetyStockTriggered).length,
       recentLogs,
     };

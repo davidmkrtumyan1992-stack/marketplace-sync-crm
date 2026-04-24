@@ -356,17 +356,17 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <XCircle className="w-4 h-4 text-destructive" />
+                  <RefreshCw className="w-4 h-4 text-amber-500" />
                   <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide">С ошибками</p>
-                    <p className="text-lg font-bold text-destructive" data-testid="text-sync-fail">{formatNumber(syncStatus.failCount)}</p>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Частично</p>
+                    <p className="text-lg font-bold text-amber-600 dark:text-amber-400" data-testid="text-sync-partial">{formatNumber((syncStatus as any).partialCount ?? 0)}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <Shield className="w-4 h-4 text-amber-500" />
+                  <XCircle className="w-4 h-4 text-destructive" />
                   <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Резервный остаток</p>
-                    <p className="text-lg font-bold text-amber-600 dark:text-amber-400" data-testid="text-sync-safety">{formatNumber(syncStatus.safetyStockTriggeredCount)}</p>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Ошибки</p>
+                    <p className="text-lg font-bold text-destructive" data-testid="text-sync-fail">{formatNumber(syncStatus.failCount)}</p>
                   </div>
                 </div>
               </div>
@@ -382,6 +382,8 @@ export default function Dashboard() {
                     <div key={log.id} className="flex items-start gap-2 text-xs p-2 rounded-md bg-muted/50" data-testid={`row-sync-log-${log.id}`}>
                       {log.status === "success" ? (
                         <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 text-green-500 shrink-0" />
+                      ) : log.status === "partial" ? (
+                        <RefreshCw className="w-3.5 h-3.5 mt-0.5 text-amber-500 shrink-0" />
                       ) : (
                         <XCircle className="w-3.5 h-3.5 mt-0.5 text-destructive shrink-0" />
                       )}

@@ -1465,13 +1465,52 @@ function SafetyStockSection() {
 
 function StockSyncLogSection() {
   const [limit, setLimit] = useState(50);
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
+
+  const { data: syncStatus } = useQuery<any>({
+    queryKey: ["/api/inventory-sync/status"],
+    refetchInterval: 30_000,
+  });
 
   const { data: syncLogs, isLoading, isError } = useQuery<StockSyncLogEntry[]>({
     queryKey: [`/api/inventory-sync/logs?limit=${limit}`],
+    refetchInterval: 30_000,
   });
 
   return (
     <div className="space-y-6" data-testid="section-stock-sync-log">
+
+      {/* Статус-карточка */}
+      {syncStatus && (
+        <Card>
+          <CardContent className="pt-5">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="text-center">
+                <p className="text-2xl font-bold">{syncStatus.totalSyncsToday ?? 0}</p>
+                <p className="text-xs text-muted-foreground mt-1">Сегодня</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-green-600 dark:text-green-400">{syncStatus.successCount ?? 0}</p>
+                <p className="text-xs text-muted-foreground mt-1">Успешно</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{syncStatus.partialCount ?? 0}</p>
+                <p className="text-xs text-muted-foreground mt-1">Частично</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-destructive">{syncStatus.failCount ?? 0}</p>
+                <p className="text-xs text-muted-foreground mt-1">Ошибки</p>
+              </div>
+            </div>
+            {syncStatus.lastSyncAt && (
+              <p className="text-xs text-muted-foreground text-center mt-3">
+                Последняя: {new Date(syncStatus.lastSyncAt).toLocaleString("ru-RU")} · обновляется каждые 30 сек
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader className="bg-muted/50 border-b">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -1538,55 +1577,92 @@ function StockSyncLogSection() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {syncLogs.map((log) => (
-                    <TableRow key={log.id} data-testid={`row-stock-sync-log-${log.id}`}>
-                      <TableCell className="whitespace-nowrap text-xs" data-testid={`text-log-date-${log.id}`}>
-                        {log.createdAt
-                          ? format(new Date(log.createdAt), "dd.MM.yy HH:mm", { locale: ru })
-                          : "—"}
-                      </TableCell>
-                      <TableCell className="font-medium max-w-[180px] truncate" data-testid={`text-log-product-${log.id}`}>
-                        {log.productName || "—"}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs" data-testid={`text-log-sku-${log.id}`}>
-                        {log.sku || "—"}
-                      </TableCell>
-                      <TableCell className="text-xs" data-testid={`text-log-action-${log.id}`}>
-                        {log.action === "order_stock_decrement" ? "Заказ" : log.action === "manual_sync" ? "Ручная" : log.action}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums" data-testid={`text-log-prev-stock-${log.id}`}>
-                        {formatNumber(log.previousStock)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums" data-testid={`text-log-new-stock-${log.id}`}>
-                        {formatNumber(log.newStock)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums" data-testid={`text-log-qty-change-${log.id}`}>
-                        <span className={log.quantityChanged < 0 ? "text-destructive" : "text-green-600 dark:text-green-400"}>
-                          {log.quantityChanged > 0 ? "+" : ""}{formatNumber(log.quantityChanged)}
-                        </span>
-                      </TableCell>
-                      <TableCell data-testid={`text-log-safety-${log.id}`}>
-                        {log.safetyStockTriggered && (
-                          <Badge variant="outline" className="text-amber-600 border-amber-400">
-                            <Shield className="w-3 h-3 mr-1" />
-                            Да
-                          </Badge>
+                  {syncLogs.map((log) => {
+                    const syncResults: any[] = Array.isArray((log as any).syncResults) ? (log as any).syncResults : [];
+                    const isExpanded = expandedRow === log.id;
+                    const actionLabel = log.action === "order_stock_decrement" ? "Заказ"
+                      : log.action === "manual_sync" ? "Ручная"
+                      : log.action === "demo_sync" ? "Демо"
+                      : log.action;
+                    return (
+                      <>
+                        <TableRow
+                          key={log.id}
+                          className={syncResults.length > 0 ? "cursor-pointer hover:bg-muted/50" : ""}
+                          onClick={() => syncResults.length > 0 && setExpandedRow(isExpanded ? null : log.id)}
+                          data-testid={`row-stock-sync-log-${log.id}`}
+                        >
+                          <TableCell className="whitespace-nowrap text-xs" data-testid={`text-log-date-${log.id}`}>
+                            {log.createdAt ? format(new Date(log.createdAt), "dd.MM.yy HH:mm", { locale: ru }) : "—"}
+                          </TableCell>
+                          <TableCell className="font-medium max-w-[180px] truncate" data-testid={`text-log-product-${log.id}`}>
+                            {log.productName || "—"}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs" data-testid={`text-log-sku-${log.id}`}>
+                            {log.sku || "—"}
+                          </TableCell>
+                          <TableCell className="text-xs" data-testid={`text-log-action-${log.id}`}>
+                            {actionLabel}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums" data-testid={`text-log-prev-stock-${log.id}`}>
+                            {formatNumber(log.previousStock)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums" data-testid={`text-log-new-stock-${log.id}`}>
+                            {formatNumber(log.newStock)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums" data-testid={`text-log-qty-change-${log.id}`}>
+                            <span className={log.quantityChanged < 0 ? "text-destructive" : "text-green-600 dark:text-green-400"}>
+                              {log.quantityChanged > 0 ? "+" : ""}{formatNumber(log.quantityChanged)}
+                            </span>
+                          </TableCell>
+                          <TableCell data-testid={`text-log-safety-${log.id}`}>
+                            {log.safetyStockTriggered && (
+                              <Badge variant="outline" className="text-amber-600 border-amber-400">
+                                <Shield className="w-3 h-3 mr-1" />
+                                Да
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell data-testid={`text-log-status-${log.id}`}>
+                            {log.status === "success" ? (
+                              <CheckCircle2 className="w-4 h-4 text-green-500" />
+                            ) : log.status === "partial" ? (
+                              <RefreshCw className="w-4 h-4 text-amber-500" />
+                            ) : (
+                              <XCircle className="w-4 h-4 text-destructive" />
+                            )}
+                          </TableCell>
+                          <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground" data-testid={`text-log-details-${log.id}`}>
+                            {syncResults.length > 0 ? (
+                              <span className="text-primary underline-offset-2 underline">
+                                {syncResults.length} магазинов {isExpanded ? "▲" : "▼"}
+                              </span>
+                            ) : log.details || "—"}
+                          </TableCell>
+                        </TableRow>
+                        {isExpanded && syncResults.length > 0 && (
+                          <TableRow key={`${log.id}-expanded`} className="bg-muted/30">
+                            <TableCell colSpan={10} className="py-2 px-4">
+                              <div className="flex flex-wrap gap-2">
+                                {syncResults.map((r: any, i: number) => (
+                                  <div key={i} className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border ${r.status === "success" ? "border-green-400/50 bg-green-500/10 text-green-700 dark:text-green-400" : "border-destructive/40 bg-destructive/10 text-destructive"}`}>
+                                    {r.status === "success"
+                                      ? <CheckCircle2 className="w-3 h-3" />
+                                      : <XCircle className="w-3 h-3" />}
+                                    <span className="font-medium">{r.storeName}</span>
+                                    <span className="opacity-70">({r.marketplace})</span>
+                                    {r.status === "success"
+                                      ? <span>→ {r.sentStock} шт.</span>
+                                      : <span className="opacity-80">{r.error?.slice(0, 40)}</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            </TableCell>
+                          </TableRow>
                         )}
-                      </TableCell>
-                      <TableCell data-testid={`text-log-status-${log.id}`}>
-                        {log.status === "success" ? (
-                          <CheckCircle2 className="w-4 h-4 text-green-500" />
-                        ) : log.status === "partial" ? (
-                          <RefreshCw className="w-4 h-4 text-amber-500" />
-                        ) : (
-                          <XCircle className="w-4 h-4 text-destructive" />
-                        )}
-                      </TableCell>
-                      <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground" data-testid={`text-log-details-${log.id}`}>
-                        {log.details || "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                      </>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
