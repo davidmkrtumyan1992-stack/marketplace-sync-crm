@@ -8704,40 +8704,94 @@ export async function registerRoutes(
       }
     }
 
-    // --- WB: stock=0 или restore ---
-    const wbByStore = new Map<string, { apiKey: string; warehouseId: string; storeName: string; skus: { externalSku: string; quantity: number }[] }>();
-    for (const link of links) {
-      if (link.marketplace !== "wildberries") continue;
-      if (!link.api_key || !link.warehouse_id) continue;
-      const key = String(link.store_id);
-      if (!wbByStore.has(key)) {
-        wbByStore.set(key, { apiKey: link.api_key, warehouseId: link.warehouse_id, storeName: link.store_name, skus: [] });
-      }
-      const prod = prodMap.get(link.product_id);
-      const qty = action === "archive" ? 0 : Math.max(0, prod?.central_stock || 0);
-      wbByStore.get(key)!.skus.push({ externalSku: link.external_sku, quantity: qty });
-    }
+    // --- WB: прямой подход по EAN-префиксу '8004608' (Davines GS1 код) ---
+    // Не используем product_marketplace_links — CRM SKU ≠ WB vendorCode
+    try {
+      const wbStoreResult = await db.execute(sql`
+        SELECT s.api_key, s.warehouse_id, s.name
+        FROM stores s
+        JOIN companies c ON s.company_id = c.id
+        WHERE c.organization_id = ${organizationId}
+        AND s.marketplace = 'wildberries'
+        AND s.is_active = true
+        AND s.api_key IS NOT NULL
+        AND s.warehouse_id IS NOT NULL
+        LIMIT 1
+      `);
+      const wbStore = (wbStoreResult as any).rows?.[0] as { api_key: string; warehouse_id: string; name: string } | undefined;
 
-    for (const { apiKey, warehouseId, storeName, skus } of wbByStore.values()) {
-      if (skus.length === 0) continue;
-      try {
-        const { createAdapter: _ca } = await import("./adapters/factory");
-        const fakeStore = { id: 0, name: storeName, marketplace: "wildberries" as const, apiKey, clientId: null, warehouseId, isActive: true, companyId: 0, createdAt: new Date(), lastSync: null };
-        const adapter = _ca(fakeStore as any);
-        const result = await adapter.updateStocks(skus);
-        if (result.success) {
-          wbUpdated += skus.length;
-          console.log(`[davines-schedule] WB ${action}: «${storeName}» ${skus.length} SKU`);
-        } else {
-          errors.push(`WB «${storeName}»: ${result.errors.join("; ")}`);
+      if (wbStore) {
+        // 1. Получить все WB-товары через goods filter API
+        const goodsR = await fetch(
+          `https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=1000&offset=0`,
+          { headers: { "Authorization": wbStore.api_key }, signal: AbortSignal.timeout(30_000) }
+        );
+        if (goodsR.ok) {
+          const goodsData = await goodsR.json() as any;
+          const allGoods: any[] = goodsData?.data?.listGoods || [];
+          // 2. Фильтр: только Davines (vendorCode начинается с '8004608')
+          const davinessGoods = allGoods.filter(g => String(g.vendorCode || "").startsWith("8004608"));
+
+          if (davinessGoods.length > 0) {
+            // 3. Получить текущий stock через statistics API (для restore)
+            const savedStockMap = new Map<string, number>();
+            if (action === "archive") {
+              const statR = await fetch(
+                `https://statistics-api.wildberries.ru/api/v1/supplier/stocks?dateFrom=2024-01-01`,
+                { headers: { "Authorization": wbStore.api_key }, signal: AbortSignal.timeout(30_000) }
+              );
+              if (statR.ok) {
+                const statItems = await statR.json() as any[];
+                for (const item of statItems) {
+                  const vc = String(item.supplierArticle || "");
+                  if (vc.startsWith("8004608")) savedStockMap.set(vc, item.quantity || 0);
+                }
+              }
+              // Сохранить в глобальный Map для последующего restore
+              for (const [vc, qty] of savedStockMap) davinessWbSavedStock.set(vc, qty);
+            }
+
+            // 4. Сформировать список stocks для WB API
+            const stocks = davinessGoods.map(g => {
+              const vc = String(g.vendorCode);
+              const qty = action === "archive" ? 0 : (davinessWbSavedStock.get(vc) ?? 0);
+              return { sku: vc, amount: qty };
+            });
+
+            // 5. PUT /api/v3/stocks/{warehouseId} — батчами по 1000
+            for (let i = 0; i < stocks.length; i += 1000) {
+              const batch = stocks.slice(i, i + 1000);
+              const stockR = await fetch(
+                `https://marketplace-api.wildberries.ru/api/v3/stocks/${wbStore.warehouse_id}`,
+                {
+                  method: "PUT",
+                  headers: { "Authorization": wbStore.api_key, "Content-Type": "application/json" },
+                  body: JSON.stringify({ stocks: batch }),
+                  signal: AbortSignal.timeout(15_000),
+                }
+              );
+              if (stockR.ok || stockR.status === 204) {
+                wbUpdated += batch.length;
+                console.log(`[davines-schedule] WB ${action}: «${wbStore.name}» ${batch.length} Davines SKU`);
+              } else {
+                const txt = await stockR.text();
+                errors.push(`WB «${wbStore.name}» HTTP ${stockR.status}: ${txt.slice(0, 200)}`);
+              }
+            }
+          } else {
+            console.log(`[davines-schedule] WB: нет Davines-товаров с prefix 8004608`);
+          }
         }
-      } catch (e: any) {
-        errors.push(`WB «${storeName}»: ${e.message}`);
       }
+    } catch (e: any) {
+      errors.push(`WB Davines: ${e.message}`);
     }
 
     return { ozonUpdated, wbUpdated, errors };
   }
+
+  // Сохранённый WB-stock для restore после архивации
+  const davinessWbSavedStock = new Map<string, number>();
 
   // Планировщик расписания Davines (каждые 60 сек, МСК UTC+3)
   let davinessLastState: "archived" | "active" | null = null;
