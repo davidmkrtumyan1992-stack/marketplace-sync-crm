@@ -8622,14 +8622,14 @@ export async function registerRoutes(
 
       // Найти соответствия в CRM
       const result = await Promise.all(found.map(async (item) => {
-        const [link] = await db.execute(sql`
+        const linkResult = await db.execute(sql`
           SELECT pml.product_id, p.name as crm_name, p.id as crm_id, p.brand
           FROM product_marketplace_links pml
           JOIN products p ON pml.product_id = p.id
           WHERE pml.external_sku = ${item.offerId} AND pml.organization_id = ${organizationId}
           LIMIT 1
         `);
-        const row = (link as any)?.rows?.[0];
+        const row = (linkResult as any)?.rows?.[0];
         return { ...item, crmProductId: row?.crm_id || null, crmName: row?.crm_name || null, alreadyDavines: row?.brand === "Davines" };
       }));
 
