@@ -8253,6 +8253,92 @@ export async function registerRoutes(
 
   // ==================== END WB FBS MANAGEMENT ====================
 
+  // ==================== STOCK SYNC: IMPORT SINGLE OFFER ====================
+
+  // Импорт одного оффера с маркетплейса в CRM + создание связи
+  app.post("/api/inventory/import-offer", isAuthenticated, async (req, res) => {
+    try {
+      const organizationId = (req as any).user?.organizationId || (req as any).user?.claims?.sub;
+      if (!organizationId) return res.status(401).json({ message: "Unauthorized" });
+
+      const { storeId, offerId, mpProductId, name, sellingPrice, sku, barcode, stock } = req.body as any;
+      if (!storeId || !offerId) return res.status(400).json({ message: "storeId и offerId обязательны" });
+
+      // Получаем компанию магазина
+      const storeRow = await db.execute(sql`
+        SELECT s.id, s.marketplace, s.name as store_name, s.api_key, s.client_id, s.company_id,
+               c.organization_id
+        FROM stores s JOIN companies c ON s.company_id = c.id
+        WHERE s.id = ${storeId} AND c.organization_id = ${organizationId}
+        LIMIT 1
+      `);
+      if (!storeRow.rows.length) return res.status(404).json({ message: "Магазин не найден" });
+      const store = storeRow.rows[0] as any;
+
+      const effectiveSku = sku || offerId;
+      const effectiveBarcode = barcode || offerId;
+      const effectiveName = name || `Товар ${offerId}`;
+      const effectivePrice = sellingPrice || 0;
+      const effectiveStock = stock ?? 0;
+
+      // Проверяем — вдруг товар уже есть по этому SKU
+      const existing = await db.execute(sql`
+        SELECT id FROM products
+        WHERE organization_id = ${organizationId} AND (sku = ${effectiveSku} OR barcode = ${effectiveBarcode})
+        LIMIT 1
+      `);
+
+      let productId: number;
+      if (existing.rows.length) {
+        productId = (existing.rows[0] as any).id;
+        console.log(`[import-offer] Товар уже есть в CRM: productId=${productId}`);
+      } else {
+        // Создаём новый товар
+        const inserted = await db.execute(sql`
+          INSERT INTO products
+            (name, sku, barcode, selling_price, price, central_stock, stock_quantity, stock_local,
+             available_quantity, reserved_quantity, company_id, organization_id, updated_at)
+          VALUES
+            (${effectiveName}, ${effectiveSku}, ${effectiveBarcode},
+             ${effectivePrice}, ${effectivePrice}, ${effectiveStock}, ${effectiveStock}, ${effectiveStock},
+             ${effectiveStock}, 0,
+             ${store.company_id}, ${organizationId}, NOW())
+          RETURNING id
+        `);
+        productId = (inserted.rows[0] as any).id;
+        console.log(`[import-offer] Создан новый товар: productId=${productId}, sku=${effectiveSku}`);
+      }
+
+      // Создаём или обновляем связь
+      await db.execute(sql`
+        INSERT INTO product_marketplace_links
+          (product_id, store_id, external_sku, marketplace_product_id, match_type, confidence_score, link_status, is_active, organization_id)
+        VALUES
+          (${productId}, ${storeId}, ${offerId}, ${mpProductId || offerId}, 'manual', 1.0, 'active', true, ${organizationId})
+        ON CONFLICT (product_id, store_id) DO UPDATE
+          SET external_sku = EXCLUDED.external_sku,
+              marketplace_product_id = EXCLUDED.marketplace_product_id,
+              match_type = 'manual',
+              link_status = 'active',
+              is_active = true
+      `);
+
+      res.json({
+        ok: true,
+        productId,
+        created: !existing.rows.length,
+        message: existing.rows.length
+          ? `Товар уже был в CRM (id=${productId}), связь обновлена`
+          : `Товар создан в CRM (id=${productId}) и привязан к ${store.store_name}`,
+      });
+    } catch (e: any) {
+      console.error("[import-offer] Error:", e.message);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ==================== END STOCK SYNC: IMPORT SINGLE OFFER ====================
+
   // ==================== STOCK SYNC: AUTO-MATCH ====================
 
   app.post("/api/inventory/auto-match", isAuthenticated, async (req, res) => {
