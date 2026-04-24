@@ -8708,13 +8708,15 @@ export async function registerRoutes(
     // Не используем product_marketplace_links — CRM SKU ≠ WB vendorCode
     try {
       const wbStoreResult = await db.execute(sql`
-        SELECT s.api_key, s.warehouse_id, s.name
+        SELECT COALESCE(ms.api_key, s.api_key) as api_key, s.warehouse_id, s.name
         FROM stores s
         JOIN companies c ON s.company_id = c.id
+        LEFT JOIN marketplace_settings ms
+          ON ms.store_id = s.id AND ms.marketplace = 'wildberries' AND ms.is_active = true
         WHERE c.organization_id = ${organizationId}
         AND s.marketplace = 'wildberries'
         AND s.is_active = true
-        AND s.api_key IS NOT NULL
+        AND COALESCE(ms.api_key, s.api_key) IS NOT NULL
         AND s.warehouse_id IS NOT NULL
         LIMIT 1
       `);
