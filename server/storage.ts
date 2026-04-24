@@ -24,7 +24,7 @@ import {
   type SyncStatusSummary,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, sql, inArray, gte } from "drizzle-orm";
+import { eq, desc, and, or, sql, inArray, gte } from "drizzle-orm";
 import { authStorage } from "./replit_integrations/auth/storage";
 
 export interface IStorage {
@@ -264,7 +264,10 @@ export class DatabaseStorage implements IStorage {
 
   async getProductByBarcode(barcode: string, organizationId: string): Promise<Product | undefined> {
     const [product] = await db.select().from(products)
-      .where(and(eq(products.barcode, barcode), eq(products.organizationId, organizationId)));
+      .where(and(
+        eq(products.organizationId, organizationId),
+        or(eq(products.barcode, barcode), eq(products.sku, barcode))
+      ));
     return product;
   }
 
