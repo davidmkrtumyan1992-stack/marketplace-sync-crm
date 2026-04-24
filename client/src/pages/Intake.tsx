@@ -209,12 +209,12 @@ export default function Intake() {
     if (batch.length === 0) return;
 
     setIsSubmitting(true);
-    let successCount = 0;
-    let errorCount = 0;
+    let successCount = 0, errorCount = 0, totalStoresSynced = 0;
+    const syncErrors: string[] = [];
 
     for (const item of batch) {
       try {
-        await apiRequest("POST", "/api/stock-inflow", {
+        const res = await apiRequest("POST", "/api/stock-inflow", {
           productId: item.product.id,
           quantity: item.quantity,
           toLocal: item.quantity,
@@ -223,7 +223,12 @@ export default function Intake() {
           toYandex: 0,
           organizationId: "1",
         });
+        const data = await res.json();
         successCount++;
+        const results: any[] = data.syncResults ?? [];
+        totalStoresSynced += results.filter((r: any) => r.status === "success").length;
+        results.filter((r: any) => r.status === "fail")
+          .forEach((r: any) => syncErrors.push(`${r.storeName}: ${r.error}`));
       } catch {
         errorCount++;
       }
@@ -236,16 +241,14 @@ export default function Intake() {
       qc.invalidateQueries({ queryKey: ["/api/stock-inflow"] });
       qc.invalidateQueries({ queryKey: ["/api/kpi"] });
       setBatch([]);
-      toast({
-        title: "Приёмка завершена",
-        description: `Оприходовано ${successCount} позиций на центральный склад${errorCount > 0 ? `, ошибок: ${errorCount}` : ""}`,
-      });
+      let description = `Оприходовано ${successCount} позиций`;
+      if (totalStoresSynced > 0) description += `, остатки обновлены в ${totalStoresSynced} магазинах`;
+      if (errorCount > 0) description += `, ошибок: ${errorCount}`;
+      toast({ title: "Приёмка завершена", description });
+      if (syncErrors.length > 0)
+        toast({ title: "Ошибки синхронизации", description: syncErrors.slice(0, 3).join("; "), variant: "destructive" });
     } else {
-      toast({
-        title: "Ошибка приёмки",
-        description: "Не удалось оприходовать товары",
-        variant: "destructive",
-      });
+      toast({ title: "Ошибка приёмки", description: "Не удалось оприходовать товары", variant: "destructive" });
     }
 
     setTimeout(() => barcodeInputRef.current?.focus(), 100);

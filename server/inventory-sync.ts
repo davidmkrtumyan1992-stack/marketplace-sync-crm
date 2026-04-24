@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { products, stores, stockSyncLog, inventorySyncSettings, companies, syncHistory, productStoreExclusions } from "@shared/schema";
+import { products, stores, stockSyncLog, inventorySyncSettings, companies, syncHistory, productStoreExclusions, productMarketplaceLinks } from "@shared/schema";
 import type { Store, StockSyncLogEntry, InsertStockSyncLog, InventorySyncSetting } from "@shared/schema";
 import { eq, and, desc, sql, inArray, gte } from "drizzle-orm";
 import { createAdapter } from "./adapters/factory";
@@ -334,6 +334,21 @@ export class InventorySyncEngine {
     await db.update(stores).set({ lastSync: new Date() }).where(eq(stores.id, store.id));
 
     return logEntry;
+  }
+
+  async syncProductToAllStores(productId: number): Promise<StoreSyncResult[]> {
+    const [product] = await db.select().from(products).where(eq(products.id, productId));
+    if (!product) return [];
+
+    const links = await db.select().from(productMarketplaceLinks)
+      .where(and(eq(productMarketplaceLinks.productId, productId), eq(productMarketplaceLinks.isActive, true)));
+    if (links.length === 0) return [];
+
+    const storeIds = [...new Set(links.map(l => l.storeId))];
+    const storeList = await db.select().from(stores).where(inArray(stores.id, storeIds));
+    const activeStores = storeList.filter(s => s.isActive);
+
+    return await this.broadcastStockUpdate(activeStores, product.sku, product.centralStock || 0, false);
   }
 
   private async getStoresByOrg(organizationId: string): Promise<Store[]> {

@@ -2048,7 +2048,11 @@ export async function registerRoutes(
       const { userId, userName } = getUserInfo(req);
       const input = api.stockInflow.create.input.parse({ ...req.body, organizationId: getOrgId(req) });
       const inflow = await storage.createStockInflow(input, userId, userName);
-      res.status(201).json(inflow);
+
+      const syncResults = await inventorySyncEngine.syncProductToAllStores(input.productId)
+        .catch(e => { console.error(`[stock-inflow] sync failed: ${e.message}`); return []; });
+
+      res.status(201).json({ ...inflow, syncResults });
     } catch (err) {
       if (err instanceof z.ZodError) return res.status(400).json(err);
       throw err;
