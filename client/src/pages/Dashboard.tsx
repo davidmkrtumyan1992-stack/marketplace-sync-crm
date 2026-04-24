@@ -65,10 +65,6 @@ export default function Dashboard() {
     queryKey: [api.stores.list.path],
   });
 
-  const { data: syncStatus } = useQuery<SyncStatusSummary>({
-    queryKey: ["/api/inventory-sync/status"],
-    refetchInterval: 300000,
-  });
 
   const today = useMemo(() => new Date(), []);
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
@@ -319,82 +315,6 @@ export default function Dashboard() {
         </div>
 
 
-        {syncStatus && (syncStatus.totalSyncsToday > 0 || syncStatus.lastSyncAt) && (
-          <Card className="kpi-card" data-testid="card-sync-status">
-            <CardHeader className="flex flex-row items-center justify-between gap-4 pb-4 flex-wrap">
-              <div className="flex items-center gap-3 flex-wrap">
-                <div className="icon-box" style={{ background: "hsl(175 98% 41% / 0.15)" }}>
-                  <RefreshCw className="w-5 h-5 text-primary" />
-                </div>
-                <CardTitle className="text-lg font-bold">
-                  Статус синхронизации
-                </CardTitle>
-              </div>
-              {syncStatus.lastSyncStatus && (
-                <Badge
-                  variant={syncStatus.lastSyncStatus === "success" ? "default" : "destructive"}
-                  data-testid="badge-sync-status"
-                >
-                  {syncStatus.lastSyncStatus === "success" ? "Успешно" : syncStatus.lastSyncStatus === "partial" ? "Частично" : "Ошибка"}
-                </Badge>
-              )}
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="flex items-center gap-3">
-                  <RefreshCw className="w-4 h-4 text-muted-foreground" />
-                  <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Синхронизаций сегодня</p>
-                    <p className="text-lg font-bold" data-testid="text-sync-total-today">{formatNumber(syncStatus.totalSyncsToday)}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="w-4 h-4 text-green-500" />
-                  <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Успешных</p>
-                    <p className="text-lg font-bold text-green-600 dark:text-green-400" data-testid="text-sync-success">{formatNumber(syncStatus.successCount)}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <RefreshCw className="w-4 h-4 text-amber-500" />
-                  <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Частично</p>
-                    <p className="text-lg font-bold text-amber-600 dark:text-amber-400" data-testid="text-sync-partial">{formatNumber((syncStatus as any).partialCount ?? 0)}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <XCircle className="w-4 h-4 text-destructive" />
-                  <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Ошибки</p>
-                    <p className="text-lg font-bold text-destructive" data-testid="text-sync-fail">{formatNumber(syncStatus.failCount)}</p>
-                  </div>
-                </div>
-              </div>
-              {syncStatus.lastSyncAt && (
-                <p className="text-xs text-muted-foreground mt-4" data-testid="text-last-sync-time">
-                  Последняя синхронизация: {new Date(syncStatus.lastSyncAt).toLocaleString("ru-RU")}
-                </p>
-              )}
-              {syncStatus.recentLogs && syncStatus.recentLogs.length > 0 && (
-                <div className="mt-4 space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Последние события</p>
-                  {syncStatus.recentLogs.slice(0, 3).map((log: any) => (
-                    <div key={log.id} className="flex items-start gap-2 text-xs p-2 rounded-md bg-muted/50" data-testid={`row-sync-log-${log.id}`}>
-                      {log.status === "success" ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 text-green-500 shrink-0" />
-                      ) : log.status === "partial" ? (
-                        <RefreshCw className="w-3.5 h-3.5 mt-0.5 text-amber-500 shrink-0" />
-                      ) : (
-                        <XCircle className="w-3.5 h-3.5 mt-0.5 text-destructive shrink-0" />
-                      )}
-                      <span className="text-foreground">{log.details}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
 
         {lowStockProducts && lowStockProducts.length > 0 && (
           <div data-testid="section-low-stock">
