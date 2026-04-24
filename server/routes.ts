@@ -8253,6 +8253,201 @@ export async function registerRoutes(
 
   // ==================== END WB FBS MANAGEMENT ====================
 
+  // ==================== STOCK SYNC: AUTO-MATCH ====================
+
+  app.post("/api/inventory/auto-match", isAuthenticated, async (req, res) => {
+    try {
+      const organizationId = (req as any).user?.organizationId || (req as any).user?.claims?.sub;
+      if (!organizationId) return res.status(401).json({ message: "Unauthorized" });
+
+      // 1. Получаем все активные магазины
+      const storeRows = await db.execute(sql`
+        SELECT s.id, s.name, s.marketplace, s.api_key, s.client_id, s.warehouse_id, s.company_id
+        FROM stores s
+        JOIN companies c ON s.company_id = c.id
+        WHERE c.organization_id = ${organizationId} AND s.is_active = true AND s.api_key IS NOT NULL
+      `);
+      const activeStores = storeRows.rows as any[];
+
+      // 2. Строим карту CRM: sku→productId, barcode→productId
+      const crmRows = await db.execute(sql`
+        SELECT id, sku, barcode FROM products WHERE organization_id = ${organizationId}
+      `);
+      const skuMap = new Map<string, number>();   // sku → productId
+      const barcodeMap = new Map<string, number>(); // barcode → productId
+      for (const p of crmRows.rows as any[]) {
+        if (p.sku)     skuMap.set(String(p.sku).trim().toLowerCase(), p.id);
+        if (p.barcode) barcodeMap.set(String(p.barcode).trim().toLowerCase(), p.id);
+      }
+
+      const stats = { total: 0, matched: 0, bySkuExact: 0, byBarcode: 0, alreadyLinked: 0, unmatched: 0 };
+      const unmatchedList: any[] = [];
+
+      // 3. Получаем уже существующие связи
+      const existingLinks = await db.execute(sql`
+        SELECT product_id, store_id FROM product_marketplace_links
+        WHERE organization_id = ${organizationId}
+      `);
+      const linkedSet = new Set(existingLinks.rows.map((r: any) => `${r.product_id}:${r.store_id}`));
+
+      // Помощник: найти productId по offer_id и barcode маркетплейса
+      function findProduct(offerId: string, mpBarcode?: string): { productId: number; matchType: string; confidence: number } | null {
+        const oKey = offerId.trim().toLowerCase();
+
+        if (skuMap.has(oKey))      return { productId: skuMap.get(oKey)!, matchType: "auto_sku",     confidence: 1.0 };
+        if (barcodeMap.has(oKey))  return { productId: barcodeMap.get(oKey)!, matchType: "auto_barcode", confidence: 0.95 };
+
+        if (mpBarcode) {
+          const bKey = mpBarcode.trim().toLowerCase();
+          if (skuMap.has(bKey))     return { productId: skuMap.get(bKey)!, matchType: "auto_barcode", confidence: 0.90 };
+          if (barcodeMap.has(bKey)) return { productId: barcodeMap.get(bKey)!, matchType: "auto_barcode", confidence: 0.85 };
+        }
+        return null;
+      }
+
+      // Помощник: сохранить связь
+      async function saveLink(productId: number, storeId: number, offerId: string, mpProductId: string, matchType: string, confidence: number, orgId: string) {
+        const key = `${productId}:${storeId}`;
+        if (linkedSet.has(key)) { stats.alreadyLinked++; return; }
+        await db.execute(sql`
+          INSERT INTO product_marketplace_links
+            (product_id, store_id, external_sku, marketplace_product_id, match_type, confidence_score, link_status, is_active, organization_id)
+          VALUES
+            (${productId}, ${storeId}, ${offerId}, ${mpProductId}, ${matchType}, ${confidence}, 'active', true, ${orgId})
+          ON CONFLICT (product_id, store_id) DO UPDATE
+            SET external_sku = EXCLUDED.external_sku,
+                marketplace_product_id = EXCLUDED.marketplace_product_id,
+                match_type = EXCLUDED.match_type,
+                confidence_score = EXCLUDED.confidence_score,
+                link_status = 'active',
+                is_active = true
+        `);
+        linkedSet.add(key);
+        stats.matched++;
+      }
+
+      for (const store of activeStores) {
+        try {
+          // ---- OZON ----
+          if (store.marketplace === "ozon" && store.client_id) {
+            let lastId = "";
+            while (true) {
+              const r = await fetch("https://api-seller.ozon.ru/v3/product/list", {
+                method: "POST",
+                headers: { "Client-Id": store.client_id, "Api-Key": store.api_key, "Content-Type": "application/json" },
+                body: JSON.stringify({ filter: {}, last_id: lastId, limit: 1000 }),
+                signal: AbortSignal.timeout(20_000),
+              });
+              const data = await r.json() as any;
+              const items: any[] = data?.result?.items || [];
+              if (!items.length) break;
+              stats.total += items.length;
+
+              for (const item of items) {
+                const offerId = String(item.offer_id || "");
+                const mpProductId = String(item.product_id || "");
+                const match = findProduct(offerId);
+                if (match) {
+                  if (match.matchType === "auto_sku") stats.bySkuExact++; else stats.byBarcode++;
+                  await saveLink(match.productId, store.id, offerId, mpProductId, match.matchType, match.confidence, organizationId);
+                } else {
+                  stats.unmatched++;
+                  if (unmatchedList.length < 50) unmatchedList.push({ marketplace: "ozon", storeId: store.id, storeName: store.name, offerId, mpProductId });
+                }
+              }
+
+              lastId = data?.result?.last_id || "";
+              if (!lastId || items.length < 1000) break;
+            }
+          }
+
+          // ---- WILDBERRIES ----
+          if (store.marketplace === "wildberries") {
+            const today = new Date().toISOString().split("T")[0];
+            const r = await fetch(`https://statistics-api.wildberries.ru/api/v1/supplier/stocks?dateFrom=${today}`, {
+              headers: { "Authorization": store.api_key },
+              signal: AbortSignal.timeout(30_000),
+            });
+            if (r.ok) {
+              const items = await r.json() as any[];
+              stats.total += items.length;
+              for (const item of items) {
+                const offerId = String(item.supplierArticle || "");
+                const barcode = String(item.barcode || "");
+                const mpProductId = String(item.nmId || "");
+                const match = findProduct(offerId, barcode);
+                if (match) {
+                  if (match.matchType === "auto_sku") stats.bySkuExact++; else stats.byBarcode++;
+                  await saveLink(match.productId, store.id, offerId, mpProductId, match.matchType, match.confidence, organizationId);
+                } else {
+                  stats.unmatched++;
+                  if (unmatchedList.length < 50) unmatchedList.push({ marketplace: "wildberries", storeId: store.id, storeName: store.name, offerId, mpProductId });
+                }
+              }
+            }
+          }
+
+          // ---- ЯНДЕКС МАРКЕТ ----
+          if (store.marketplace === "yandex") {
+            // Получаем bizId из campaigns
+            const campR = await fetch("https://api.partner.market.yandex.ru/campaigns?pageSize=10", {
+              headers: { "Api-Key": store.api_key },
+              signal: AbortSignal.timeout(15_000),
+            });
+            if (!campR.ok) continue;
+            const campData = await campR.json() as any;
+            const bizId = campData?.campaigns?.[0]?.business?.id;
+            if (!bizId) continue;
+
+            let pageToken: string | null = null;
+            while (true) {
+              const body: any = { limit: 200 };
+              if (pageToken) body.page_token = pageToken;
+              const r = await fetch(`https://api.partner.market.yandex.ru/businesses/${bizId}/offer-mappings`, {
+                method: "POST",
+                headers: { "Api-Key": store.api_key, "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(20_000),
+              });
+              const data = await r.json() as any;
+              const offers: any[] = data?.result?.offerMappings || [];
+              if (!offers.length) break;
+              stats.total += offers.length;
+
+              for (const item of offers) {
+                const offerId = String(item.offer?.offerId || "");
+                const barcode = String(item.offer?.barcodes?.[0] || "");
+                const mpProductId = String(item.mapping?.marketSku || "");
+                const match = findProduct(offerId, barcode);
+                if (match) {
+                  if (match.matchType === "auto_sku") stats.bySkuExact++; else stats.byBarcode++;
+                  await saveLink(match.productId, store.id, offerId, mpProductId, match.matchType, match.confidence, organizationId);
+                } else {
+                  stats.unmatched++;
+                  if (unmatchedList.length < 50) unmatchedList.push({ marketplace: "yandex", storeId: store.id, storeName: store.name, offerId, mpProductId });
+                }
+              }
+
+              pageToken = data?.result?.paging?.nextPageToken || null;
+              if (!pageToken || offers.length < 200) break;
+            }
+          }
+
+        } catch (storeErr: any) {
+          console.error(`[auto-match] Store ${store.name}: ${storeErr.message}`);
+        }
+      }
+
+      console.log(`[auto-match] Done: total=${stats.total}, matched=${stats.matched}, unmatched=${stats.unmatched}`);
+      res.json({ ...stats, unmatchedList });
+    } catch (e: any) {
+      console.error("[auto-match] Error:", e.message);
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ==================== END STOCK SYNC: AUTO-MATCH ====================
+
   // ==================== STOCK SYNC: WEBHOOKS + WORKERS ====================
 
   // Webhook Ozon — push-уведомления о новых заказах
