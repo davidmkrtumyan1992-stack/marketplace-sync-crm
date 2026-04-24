@@ -8492,19 +8492,24 @@ export async function registerRoutes(
           }
 
           // ---- WILDBERRIES ----
+          // Используем goods filter API — возвращает ВСЕ товары включая нулевые остатки
           if (store.marketplace === "wildberries") {
-            const r = await fetch(`https://statistics-api.wildberries.ru/api/v1/supplier/stocks?dateFrom=2024-01-01`, {
-              headers: { "Authorization": store.api_key },
-              signal: AbortSignal.timeout(30_000),
-            });
-            if (r.ok) {
-              const items = await r.json() as any[];
-              stats.total += items.length;
-              for (const item of items) {
-                const offerId = String(item.supplierArticle || "");
-                const barcode = String(item.barcode || "");
-                const mpProductId = String(item.nmId || "");
-                const match = findProduct(offerId, barcode);
+            let wbOffset = 0;
+            const WB_LIMIT = 1000;
+            while (true) {
+              const r = await fetch(
+                `https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=${WB_LIMIT}&offset=${wbOffset}`,
+                { headers: { "Authorization": store.api_key }, signal: AbortSignal.timeout(30_000) }
+              );
+              if (!r.ok) break;
+              const data = await r.json() as any;
+              const goodsList: any[] = data?.data?.listGoods || [];
+              stats.total += goodsList.length;
+              for (const item of goodsList) {
+                const offerId = String(item.vendorCode || "");
+                const mpProductId = String(item.nmID || "");
+                // WB не возвращает barcode через этот API — используем только vendorCode (supplier article)
+                const match = findProduct(offerId, "");
                 if (match) {
                   if (match.matchType === "auto_sku") stats.bySkuExact++; else stats.byBarcode++;
                   await saveLink(match.productId, store.id, offerId, mpProductId, match.matchType, match.confidence, organizationId);
@@ -8513,6 +8518,8 @@ export async function registerRoutes(
                   if (unmatchedList.length < 50) unmatchedList.push({ marketplace: "wildberries", storeId: store.id, storeName: store.name, offerId, mpProductId });
                 }
               }
+              if (goodsList.length < WB_LIMIT) break;
+              wbOffset += WB_LIMIT;
             }
           }
 
