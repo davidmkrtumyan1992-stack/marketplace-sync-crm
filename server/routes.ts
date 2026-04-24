@@ -8579,89 +8579,31 @@ export async function registerRoutes(
   // ==================== END STOCK SYNC: AUTO-MATCH ====================
 
   // ==================== DAVINES ARCHIVE SCHEDULE ====================
+  // Ozon: реальный archive API (/v1/product/archive)
+  // WB:   stock=0 в рабочие часы, restore вечером
+  // YM:   пропускаем (Davines там без бренда/имени)
+  // Идентификация: name ILIKE '%Davines%' OR brand = 'Davines'
 
-  // GET /api/inventory/davines/discover — список архивных товаров Ozon (для идентификации Davines)
-  app.get("/api/inventory/davines/discover", isAuthenticated, async (req, res) => {
+  // GET /api/inventory/davines/list — список Davines-товаров из CRM
+  app.get("/api/inventory/davines/list", isAuthenticated, async (req, res) => {
     try {
       const organizationId = (req as any).user?.organizationId || (req as any).user?.claims?.sub;
-      const allSettings = await db.select().from(marketplaceSettingsTable)
-        .where(and(eq(marketplaceSettingsTable.marketplace, "ozon"), eq(marketplaceSettingsTable.organizationId, organizationId)));
-
-      const found: { offerId: string; name: string; ozonProductId: string; storeId: number | null; storeName: string }[] = [];
-      const seen = new Set<string>();
-
-      for (const setting of allSettings) {
-        if (!setting.apiKey || !setting.clientId) continue;
-        const { storeId, storeName } = await resolveStoreForSetting(setting);
-        const headers = {
-          "Client-Id": String(parseInt(setting.clientId.trim(), 10)),
-          "Api-Key": setting.apiKey.trim(),
-          "Content-Type": "application/json",
-        };
-        let lastId = "";
-        for (let page = 0; page < 20; page++) {
-          const res2 = await fetch("https://api-seller.ozon.ru/v3/product/list", {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ filter: { visibility: "ARCHIVED" }, last_id: lastId, limit: 1000 }),
-            signal: AbortSignal.timeout(15_000),
-          });
-          if (!res2.ok) break;
-          const data = await res2.json() as any;
-          const items: any[] = data?.result?.items || [];
-          for (const item of items) {
-            const offerId = String(item.offer_id || "");
-            if (!offerId || seen.has(offerId)) continue;
-            seen.add(offerId);
-            found.push({ offerId, name: item.name || offerId, ozonProductId: String(item.product_id || ""), storeId: storeId ?? null, storeName: storeName ?? setting.clientId ?? "" });
-          }
-          lastId = data?.result?.last_id || "";
-          if (!lastId || items.length < 1000) break;
-        }
-      }
-
-      // Найти соответствия в CRM
-      const result = await Promise.all(found.map(async (item) => {
-        const linkResult = await db.execute(sql`
-          SELECT pml.product_id, p.name as crm_name, p.id as crm_id, p.brand
-          FROM product_marketplace_links pml
-          JOIN products p ON pml.product_id = p.id
-          WHERE pml.external_sku = ${item.offerId} AND pml.organization_id = ${organizationId}
-          LIMIT 1
-        `);
-        const row = (linkResult as any)?.rows?.[0];
-        return { ...item, crmProductId: row?.crm_id || null, crmName: row?.crm_name || null, alreadyDavines: row?.brand === "Davines" };
-      }));
-
-      res.json({ total: result.length, items: result });
-    } catch (e: any) {
-      console.error("[davines/discover] Error:", e.message);
-      res.status(500).json({ message: e.message });
-    }
-  });
-
-  // POST /api/inventory/davines/mark — пометить товары как brand='Davines'
-  app.post("/api/inventory/davines/mark", isAuthenticated, async (req, res) => {
-    try {
-      const organizationId = (req as any).user?.organizationId || (req as any).user?.claims?.sub;
-      const { productIds } = req.body as { productIds: number[] };
-      if (!Array.isArray(productIds) || productIds.length === 0) {
-        return res.status(400).json({ message: "productIds array required" });
-      }
-      await db.execute(sql`
-        UPDATE products SET brand = 'Davines'
-        WHERE id = ANY(${sql.raw(`ARRAY[${productIds.join(",")}]::int[]`)})
+      const result = await db.execute(sql`
+        SELECT id, name, sku, brand, central_stock
+        FROM products
+        WHERE (name ILIKE '%Davines%' OR brand = 'Davines')
         AND organization_id = ${organizationId}
+        ORDER BY name
       `);
-      console.log(`[davines/mark] Marked ${productIds.length} products as Davines for org ${organizationId}`);
-      res.json({ ok: true, marked: productIds.length });
+      const rows = (result as any).rows || [];
+      res.json({ total: rows.length, items: rows });
     } catch (e: any) {
-      console.error("[davines/mark] Error:", e.message);
+      console.error("[davines/list] Error:", e.message);
       res.status(500).json({ message: e.message });
     }
   });
 
-  // POST /api/inventory/davines/apply — ручной запуск (для тестирования)
+  // POST /api/inventory/davines/apply — ручной запуск archive/unarchive
   app.post("/api/inventory/davines/apply", isAuthenticated, async (req, res) => {
     try {
       const organizationId = (req as any).user?.organizationId || (req as any).user?.claims?.sub;
@@ -8677,60 +8619,127 @@ export async function registerRoutes(
     }
   });
 
-  // Ядро: применить archive/unarchive для всех Davines-товаров организации
-  async function applyDavinessSchedule(organizationId: string, action: "archive" | "unarchive"): Promise<{ updated: number; errors: string[] }> {
-    const davinessProducts = await db.execute(sql`
-      SELECT id, sku, central_stock, name FROM products
-      WHERE brand = 'Davines' AND organization_id = ${organizationId}
+  // Ядро: archive/unarchive для Davines-товаров
+  // Ozon: /v1/product/archive или /v1/product/unarchive (по marketplace_product_id)
+  // WB: updateStocks qty=0 или restore centralStock
+  // YM: пропускается
+  async function applyDavinessSchedule(organizationId: string, action: "archive" | "unarchive"): Promise<{ ozonUpdated: number; wbUpdated: number; errors: string[] }> {
+    // Найти все Davines-товары
+    const prodsResult = await db.execute(sql`
+      SELECT id, name, sku, central_stock FROM products
+      WHERE (name ILIKE '%Davines%' OR brand = 'Davines')
+      AND organization_id = ${organizationId}
     `);
-    const prods = (davinessProducts as any).rows as { id: number; sku: string; central_stock: number; name: string }[];
-    if (prods.length === 0) return { updated: 0, errors: [] };
+    const prods = (prodsResult as any).rows as { id: number; name: string; sku: string; central_stock: number }[];
+    if (prods.length === 0) return { ozonUpdated: 0, wbUpdated: 0, errors: [] };
 
-    const companyRows = await db.execute(sql`SELECT id FROM companies WHERE organization_id = ${organizationId}`);
-    const companyIds = ((companyRows as any).rows as { id: number }[]).map(r => r.id);
-    if (companyIds.length === 0) return { updated: 0, errors: [] };
+    const prodIds = prods.map(p => p.id);
+    const prodMap = new Map(prods.map(p => [p.id, p]));
 
-    const storeRows = await db.execute(sql`
-      SELECT s.* FROM stores s WHERE s.company_id = ANY(${sql.raw(`ARRAY[${companyIds.join(",")}]::int[]`)}) AND s.is_active = true
+    // Получить все активные связи для этих товаров + данные магазина
+    const linksResult = await db.execute(sql`
+      SELECT
+        pml.product_id, pml.external_sku, pml.marketplace_product_id,
+        s.id as store_id, s.name as store_name, s.marketplace,
+        s.api_key, s.client_id, s.warehouse_id
+      FROM product_marketplace_links pml
+      JOIN stores s ON pml.store_id = s.id
+      WHERE pml.product_id = ANY(${sql.raw(`ARRAY[${prodIds.join(",")}]::int[]`)})
+      AND pml.organization_id = ${organizationId}
+      AND pml.is_active = true
+      AND s.is_active = true
+      AND s.marketplace IN ('ozon', 'wildberries')
     `);
-    const activeStores = (storeRows as any).rows as any[];
+    const links = (linksResult as any).rows as {
+      product_id: number; external_sku: string; marketplace_product_id: string | null;
+      store_id: number; store_name: string; marketplace: string;
+      api_key: string; client_id: string | null; warehouse_id: string | null;
+    }[];
 
-    let updated = 0;
     const errors: string[] = [];
+    let ozonUpdated = 0;
+    let wbUpdated = 0;
 
-    for (const prod of prods) {
-      const links = await db.execute(sql`
-        SELECT store_id, external_sku FROM product_marketplace_links
-        WHERE product_id = ${prod.id} AND organization_id = ${organizationId} AND is_active = true
-      `);
-      const linkRows = (links as any).rows as { store_id: number; external_sku: string }[];
+    // --- OZON: batch archive/unarchive по магазинам ---
+    const ozonByStore = new Map<string, { apiKey: string; clientId: string; productIds: number[]; storeName: string }>();
+    for (const link of links) {
+      if (link.marketplace !== "ozon") continue;
+      if (!link.marketplace_product_id || !link.api_key || !link.client_id) continue;
+      const key = String(link.store_id);
+      if (!ozonByStore.has(key)) {
+        ozonByStore.set(key, { apiKey: link.api_key, clientId: link.client_id, productIds: [], storeName: link.store_name });
+      }
+      ozonByStore.get(key)!.productIds.push(Number(link.marketplace_product_id));
+    }
 
-      for (const link of linkRows) {
-        const store = activeStores.find((s: any) => s.id === link.store_id);
-        if (!store || !store.api_key) continue;
+    const ozonEndpoint = action === "archive" ? "/v1/product/archive" : "/v1/product/unarchive";
+    for (const { apiKey, clientId, productIds: ozIds, storeName } of ozonByStore.values()) {
+      if (ozIds.length === 0) continue;
+      // Ozon: max 100 per request
+      for (let i = 0; i < ozIds.length; i += 100) {
+        const batch = ozIds.slice(i, i + 100);
         try {
-          const { createAdapter: _createAdapter } = await import("./adapters/factory");
-          const adapter = _createAdapter({ ...store, apiKey: store.api_key, clientId: store.client_id, warehouseId: store.warehouse_id, isActive: store.is_active } as any);
-          const qty = action === "archive" ? 0 : Math.max(0, prod.central_stock || 0);
-          await adapter.updateStocks([{ externalSku: link.external_sku, quantity: qty }]);
-          updated++;
-          console.log(`[davines-schedule] ${action}: ${prod.name} → store ${store.name}, qty=${qty}`);
+          const r = await fetch(`https://api-seller.ozon.ru${ozonEndpoint}`, {
+            method: "POST",
+            headers: { "Client-Id": clientId, "Api-Key": apiKey, "Content-Type": "application/json" },
+            body: JSON.stringify({ product_id: batch }),
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (!r.ok) {
+            const txt = await r.text();
+            errors.push(`Ozon «${storeName}» HTTP ${r.status}: ${txt.slice(0, 200)}`);
+          } else {
+            ozonUpdated += batch.length;
+            console.log(`[davines-schedule] Ozon ${action}: «${storeName}» ${batch.length} товаров`);
+          }
         } catch (e: any) {
-          errors.push(`${prod.name} / ${store.name}: ${e.message}`);
+          errors.push(`Ozon «${storeName}»: ${e.message}`);
         }
       }
     }
 
-    return { updated, errors };
+    // --- WB: stock=0 или restore ---
+    const wbByStore = new Map<string, { apiKey: string; warehouseId: string; storeName: string; skus: { externalSku: string; quantity: number }[] }>();
+    for (const link of links) {
+      if (link.marketplace !== "wildberries") continue;
+      if (!link.api_key || !link.warehouse_id) continue;
+      const key = String(link.store_id);
+      if (!wbByStore.has(key)) {
+        wbByStore.set(key, { apiKey: link.api_key, warehouseId: link.warehouse_id, storeName: link.store_name, skus: [] });
+      }
+      const prod = prodMap.get(link.product_id);
+      const qty = action === "archive" ? 0 : Math.max(0, prod?.central_stock || 0);
+      wbByStore.get(key)!.skus.push({ externalSku: link.external_sku, quantity: qty });
+    }
+
+    for (const { apiKey, warehouseId, storeName, skus } of wbByStore.values()) {
+      if (skus.length === 0) continue;
+      try {
+        const { createAdapter: _ca } = await import("./adapters/factory");
+        const fakeStore = { id: 0, name: storeName, marketplace: "wildberries" as const, apiKey, clientId: null, warehouseId, isActive: true, companyId: 0, createdAt: new Date(), lastSync: null };
+        const adapter = _ca(fakeStore as any);
+        const result = await adapter.updateStocks(skus);
+        if (result.success) {
+          wbUpdated += skus.length;
+          console.log(`[davines-schedule] WB ${action}: «${storeName}» ${skus.length} SKU`);
+        } else {
+          errors.push(`WB «${storeName}»: ${result.errors.join("; ")}`);
+        }
+      } catch (e: any) {
+        errors.push(`WB «${storeName}»: ${e.message}`);
+      }
+    }
+
+    return { ozonUpdated, wbUpdated, errors };
   }
 
-  // Планировщик расписания Davines (каждые 60 сек)
+  // Планировщик расписания Davines (каждые 60 сек, МСК UTC+3)
   let davinessLastState: "archived" | "active" | null = null;
 
   function getMskWindow(): "archive" | "active" {
-    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000); // UTC+3
+    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
     const h = msk.getUTCHours(), m = msk.getUTCMinutes(), day = msk.getUTCDay();
-    // Пн-Чт (1-4) 07:30–20:00 → archive
+    // Пн-Чт (1-4) 07:30–20:00 МСК → archive
     const inArchiveWindow = day >= 1 && day <= 4 &&
       (h > 7 || (h === 7 && m >= 30)) && h < 20;
     return inArchiveWindow ? "archive" : "active";
@@ -8742,7 +8751,10 @@ export async function registerRoutes(
       const targetState: "archived" | "active" = window === "archive" ? "archived" : "active";
       if (targetState === davinessLastState) return;
 
-      const allOrgs = await db.execute(sql`SELECT DISTINCT organization_id FROM products WHERE brand = 'Davines'`);
+      const allOrgs = await db.execute(sql`
+        SELECT DISTINCT organization_id FROM products
+        WHERE name ILIKE '%Davines%' OR brand = 'Davines'
+      `);
       const orgs = ((allOrgs as any).rows as { organization_id: string }[]).map(r => r.organization_id);
       if (orgs.length === 0) { davinessLastState = targetState; return; }
 
@@ -8750,9 +8762,9 @@ export async function registerRoutes(
       console.log(`[davines-schedule] Transition → ${targetState} (window=${window})`);
 
       for (const orgId of orgs) {
-        const { updated, errors } = await applyDavinessSchedule(orgId, action);
-        console.log(`[davines-schedule] Org ${orgId}: ${action} applied to ${updated} SKUs, errors=${errors.length}`);
-        if (errors.length > 0) console.error(`[davines-schedule] Errors:`, errors);
+        const { ozonUpdated, wbUpdated, errors } = await applyDavinessSchedule(orgId, action);
+        console.log(`[davines-schedule] Org ${orgId}: Ozon=${ozonUpdated} WB=${wbUpdated} errors=${errors.length}`);
+        if (errors.length > 0) console.error("[davines-schedule] Errors:", errors);
       }
       davinessLastState = targetState;
     } catch (e: any) {
@@ -8760,10 +8772,9 @@ export async function registerRoutes(
     }
   };
 
-  // Инициализация: применить текущее состояние сразу при старте
   setTimeout(runDavinessScheduler, 5000);
   setInterval(runDavinessScheduler, 60_000);
-  console.log("[davines-schedule] Scheduler started (check every 60s, MSK timezone)");
+  console.log("[davines-schedule] Scheduler started (60s, MSK UTC+3): Ozon=archive API, WB=stock 0/restore, YM=skip");
 
   // ==================== END DAVINES ARCHIVE SCHEDULE ====================
 
