@@ -8472,13 +8472,15 @@ export async function registerRoutes(
 
       let updated = 0;
       for (const [productId, stock] of stockMap.entries()) {
-        await db.update(products).set({
-          centralStock: stock,
-          stockQuantity: stock,
-          stockLocal: stock,
-          availableQuantity: stock,
-          updatedAt: new Date(),
-        }).where(eq(products.id, productId));
+        await db.execute(sql`
+          UPDATE products SET
+            central_stock = ${stock},
+            stock_quantity = ${stock},
+            stock_local = ${stock},
+            available_quantity = ${stock},
+            updated_at = NOW()
+          WHERE id = ${productId}
+        `);
         updated++;
       }
 
