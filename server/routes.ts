@@ -8415,6 +8415,81 @@ export async function registerRoutes(
 
   // ==================== END WB FBS MANAGEMENT ====================
 
+  // ==================== STOCK SYNC: PULL STOCKS FROM MARKETPLACES ====================
+
+  // POST /api/inventory/pull-marketplace-stocks — разовая инициализация centralStock из МП
+  app.post("/api/inventory/pull-marketplace-stocks", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { createAdapter } = await import("./adapters/factory");
+
+      const activeStores = await db.execute(sql`
+        SELECT s.id, s.name, s.marketplace, s.api_key, s.client_id, s.warehouse_id, s.company_id
+        FROM stores s JOIN companies c ON s.company_id = c.id
+        WHERE c.organization_id = ${orgId} AND s.is_active = true AND s.api_key IS NOT NULL
+      `);
+
+      const stockMap = new Map<number, number>();
+      const storeResults: any[] = [];
+
+      for (const storeRow of (activeStores as any).rows) {
+        try {
+          const adapter = createAdapter({
+            id: storeRow.id, name: storeRow.name, marketplace: storeRow.marketplace,
+            apiKey: storeRow.api_key, clientId: storeRow.client_id, warehouseId: storeRow.warehouse_id,
+            isActive: true, companyId: storeRow.company_id, lastSync: null, createdAt: new Date(),
+          });
+
+          const mpStocks = await adapter.getStocks([]);
+          if (!mpStocks.length) {
+            storeResults.push({ store: storeRow.name, fetched: 0, matched: 0 });
+            continue;
+          }
+
+          const links = await db.execute(sql`
+            SELECT pml.external_sku, pml.product_id
+            FROM product_marketplace_links pml
+            WHERE pml.store_id = ${storeRow.id} AND pml.is_active = true AND pml.external_sku IS NOT NULL
+          `);
+          const skuToProduct = new Map(
+            (links as any).rows.map((r: any) => [r.external_sku as string, r.product_id as number])
+          );
+
+          let matched = 0;
+          for (const item of mpStocks) {
+            const productId = skuToProduct.get(item.externalSku);
+            if (!productId) continue;
+            const current = stockMap.get(productId) ?? 0;
+            stockMap.set(productId, Math.max(current, item.available));
+            matched++;
+          }
+          storeResults.push({ store: storeRow.name, fetched: mpStocks.length, matched });
+        } catch (e: any) {
+          console.error(`[pull-stocks] ${storeRow.name}: ${e.message}`);
+          storeResults.push({ store: storeRow.name, error: e.message });
+        }
+      }
+
+      let updated = 0;
+      for (const [productId, stock] of stockMap.entries()) {
+        await db.update(products).set({
+          centralStock: stock,
+          stockQuantity: stock,
+          stockLocal: stock,
+          availableQuantity: stock,
+          updatedAt: new Date(),
+        }).where(eq(products.id, productId));
+        updated++;
+      }
+
+      console.log(`[pull-stocks] Обновлено ${updated} товаров`);
+      res.json({ ok: true, updated, stores: storeResults });
+    } catch (e: any) {
+      console.error("[pull-marketplace-stocks]", e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ==================== STOCK SYNC: IMPORT SINGLE OFFER ====================
 
   // Импорт одного оффера с маркетплейса в CRM + создание связи
@@ -9113,7 +9188,7 @@ export async function registerRoutes(
 
           // Получаем остатки из CRM для этого магазина
           const links = await db.execute(sql`
-            SELECT pml.external_sku, p.available_quantity, p.sku, p.id as product_id
+            SELECT pml.external_sku, p.central_stock as available_quantity, p.sku, p.id as product_id
             FROM product_marketplace_links pml
             JOIN products p ON pml.product_id = p.id
             WHERE pml.store_id = ${store.id} AND pml.is_active = true

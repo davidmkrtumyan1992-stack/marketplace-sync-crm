@@ -631,6 +631,7 @@ export class DatabaseStorage implements IStorage {
           centralStock: newCentralStock,
           stockQuantity: newCentralStock,
           stockLocal: newCentralStock,
+          availableQuantity: newCentralStock,
           purchasePrice: inflow.purchasePrice || product.purchasePrice,
           updatedAt: new Date()
         }).where(eq(products.id, inflow.productId));
@@ -679,6 +680,7 @@ export class DatabaseStorage implements IStorage {
           centralStock: newStock,
           stockQuantity: newStock,
           stockLocal: newStock,
+          availableQuantity: newStock,
           updatedAt: new Date(),
         }).where(eq(products.id, writeoff.productId));
       }

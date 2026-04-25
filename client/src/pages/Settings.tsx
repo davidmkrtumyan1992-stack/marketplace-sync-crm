@@ -16,7 +16,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store, type StockSyncLogEntry, type InventorySyncSetting, type MarketplaceSetting, type Company } from "@shared/schema";
-import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2, Loader2, PlugZap, Eye, EyeOff, Copy } from "lucide-react";
+import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2, Loader2, PlugZap, Eye, EyeOff, Copy, Download } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -98,7 +98,8 @@ export default function Settings() {
             <StockSyncLogSection />
           </TabsContent>
 
-          <TabsContent value="sync-history" className="mt-6">
+          <TabsContent value="sync-history" className="mt-6 space-y-6">
+            <PullMarketplaceStocksCard />
             <SyncHistorySection />
           </TabsContent>
         </Tabs>
@@ -966,6 +967,71 @@ function AddStoreDialog({ companies, onClose }: { companies: Company[]; onClose:
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function PullMarketplaceStocksCard() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [isPulling, setIsPulling] = useState(false);
+  const [lastResult, setLastResult] = useState<any>(null);
+
+  const handlePull = async () => {
+    setIsPulling(true);
+    try {
+      const res = await apiRequest("POST", "/api/inventory/pull-marketplace-stocks");
+      const data = await res.json();
+      setLastResult(data);
+      if (data.ok) {
+        queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+        const storesSummary = data.stores
+          .filter((s: any) => s.matched > 0)
+          .map((s: any) => `${s.store}: ${s.matched}`)
+          .join(", ");
+        toast({
+          title: "Остатки импортированы",
+          description: `Обновлено товаров: ${data.updated}${storesSummary ? ` (${storesSummary})` : ""}`,
+        });
+      } else {
+        toast({ title: "Ошибка", description: data.error || "Что-то пошло не так", variant: "destructive" });
+      }
+    } catch (e: any) {
+      toast({ title: "Ошибка", description: e.message, variant: "destructive" });
+    } finally {
+      setIsPulling(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Download className="w-5 h-5" />
+          Импорт остатков с маркетплейсов
+        </CardTitle>
+        <CardDescription>
+          Разовая инициализация: заберёт текущие остатки с Ozon, Яндекс Маркет и WB
+          и запишет их как актуальный остаток склада в CRM. Используйте при первом подключении.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Button onClick={handlePull} disabled={isPulling} className="gap-2">
+          {isPulling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+          {isPulling ? "Импорт..." : "Импортировать остатки с маркетплейсов"}
+        </Button>
+        {lastResult && (
+          <div className="text-sm text-muted-foreground space-y-1">
+            <p className="font-medium text-foreground">Результат: обновлено {lastResult.updated} товаров</p>
+            {lastResult.stores?.map((s: any) => (
+              <p key={s.store}>
+                {s.store}: получено {s.fetched ?? "–"}, совпало {s.matched ?? "–"}
+                {s.error && <span className="text-destructive"> — {s.error}</span>}
+              </p>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

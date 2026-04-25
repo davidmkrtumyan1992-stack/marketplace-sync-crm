@@ -120,11 +120,15 @@ export class YandexMarketAdapter implements MarketplaceAdapter {
   }
 
   async getStocks(skus: string[]): Promise<StockInfo[]> {
-    if (!this.store.apiKey || !this.campaignId) return [];
+    if (!this.store.apiKey || !this.businessId) return [];
+
+    const campaignIds = await this.resolveCampaignIds();
+    if (campaignIds.length === 0) return [];
+    const primaryCampaignId = campaignIds[0];
 
     try {
       const res = await fetch(
-        `${YM_API}/campaigns/${this.campaignId}/offers/stocks`,
+        `${YM_API}/campaigns/${primaryCampaignId}/offers/stocks`,
         {
           method: "POST",
           headers: {
