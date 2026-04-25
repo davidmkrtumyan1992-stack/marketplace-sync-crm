@@ -8594,7 +8594,7 @@ export async function registerRoutes(
               }
 
               pageToken = data?.result?.paging?.nextPageToken || null;
-              if (!pageToken || offers.length < 200) break;
+              if (!pageToken) break;
             }
           }
 
