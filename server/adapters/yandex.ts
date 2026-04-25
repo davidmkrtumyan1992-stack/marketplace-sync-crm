@@ -56,41 +56,63 @@ export class YandexMarketAdapter implements MarketplaceAdapter {
       return { success: false, errors: [`Не удалось получить Campaign IDs для «${this.store.name}» (Business ID: ${this.businessId})`] };
     }
 
+    const [primaryCampaignId, ...secondaryCampaignIds] = campaignIds;
     const errors: string[] = [];
     let updatedCount = 0;
 
-    for (const campaignId of campaignIds) {
-      for (let i = 0; i < updates.length; i += BATCH_SIZE) {
-        const batch = updates.slice(i, i + BATCH_SIZE);
-        const skus = batch.map(u => ({
-          sku: u.externalSku,
-          items: [{ type: "FIT", count: Math.max(0, u.quantity) }],
-        }));
+    // Обновляем остатки только в первичной кампании
+    for (let i = 0; i < updates.length; i += BATCH_SIZE) {
+      const batch = updates.slice(i, i + BATCH_SIZE);
+      const skus = batch.map(u => ({
+        sku: u.externalSku,
+        items: [{ type: "FIT", count: Math.max(0, u.quantity) }],
+      }));
 
-        try {
-          const res = await fetch(
-            `${YM_API}/campaigns/${campaignId}/offers/stocks`,
-            {
-              method: "PUT",
-              headers: { "Api-Key": this.store.apiKey!, "Content-Type": "application/json" },
-              body: JSON.stringify({ skus }),
-              signal: AbortSignal.timeout(15_000),
-            }
-          );
-
-          const data = await res.json() as any;
-          if (!res.ok) {
-            errors.push(`YM campaign ${campaignId} HTTP ${res.status}: ${data?.errors?.[0]?.message || res.statusText}`);
-            continue;
+      try {
+        const res = await fetch(
+          `${YM_API}/campaigns/${primaryCampaignId}/offers/stocks`,
+          {
+            method: "PUT",
+            headers: { "Api-Key": this.store.apiKey!, "Content-Type": "application/json" },
+            body: JSON.stringify({ skus }),
+            signal: AbortSignal.timeout(15_000),
           }
+        );
 
-          updatedCount += batch.length;
-          console.log(`[ym-adapter] ${this.store.name} campaign=${campaignId}: batch ${i / BATCH_SIZE + 1}, updated=${batch.length}`);
-        } catch (e: any) {
-          errors.push(`YM campaign ${campaignId} batch ${i}: ${e.message}`);
+        const data = await res.json() as any;
+        if (!res.ok) {
+          errors.push(`YM campaign ${primaryCampaignId} HTTP ${res.status}: ${data?.errors?.[0]?.message || res.statusText}`);
+          continue;
         }
 
-        if (i + BATCH_SIZE < updates.length) await sleep(500);
+        updatedCount += batch.length;
+        console.log(`[ym-adapter] ${this.store.name} campaign=${primaryCampaignId}: batch ${i / BATCH_SIZE + 1}, updated=${batch.length}`);
+      } catch (e: any) {
+        errors.push(`YM campaign ${primaryCampaignId} batch ${i}: ${e.message}`);
+      }
+
+      if (i + BATCH_SIZE < updates.length) await sleep(500);
+    }
+
+    // Обнуляем вторичные кампании чтобы убрать фантомный остаток (не влияет на success)
+    for (const secondaryCampaignId of secondaryCampaignIds) {
+      const zeroSkus = updates.map(u => ({
+        sku: u.externalSku,
+        items: [{ type: "FIT", count: 0 }],
+      }));
+      try {
+        await fetch(
+          `${YM_API}/campaigns/${secondaryCampaignId}/offers/stocks`,
+          {
+            method: "PUT",
+            headers: { "Api-Key": this.store.apiKey!, "Content-Type": "application/json" },
+            body: JSON.stringify({ skus: zeroSkus }),
+            signal: AbortSignal.timeout(15_000),
+          }
+        );
+        console.log(`[ym-adapter] ${this.store.name}: zeroed secondary campaign=${secondaryCampaignId}`);
+      } catch (e: any) {
+        console.warn(`[ym-adapter] secondary campaign zero failed (non-fatal): ${e.message}`);
       }
     }
 
