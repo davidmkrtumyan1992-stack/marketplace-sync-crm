@@ -29,7 +29,11 @@ export class YandexMarketAdapter implements MarketplaceAdapter {
       const campaigns: any[] = data?.campaigns || [];
       const bizId = this.businessId;
       const filtered = bizId
-        ? campaigns.filter(c => String(c.business?.id) === bizId || String(c.id) === bizId)
+        ? campaigns.filter(c =>
+            String(c.business?.id) === bizId ||
+            String(c.clientId) === bizId ||
+            String(c.id) === bizId
+          )
         : campaigns;
       const ids = filtered.map(c => String(c.id)).filter(id => id !== bizId);
       console.log(`[ym-adapter] ${this.store.name}: resolved campaign IDs: [${ids.join(", ")}]`);

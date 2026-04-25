@@ -8529,14 +8529,8 @@ export async function registerRoutes(
 
           // ---- ЯНДЕКС МАРКЕТ ----
           if (store.marketplace === "yandex") {
-            // Получаем bizId из campaigns
-            const campR = await fetch("https://api.partner.market.yandex.ru/campaigns?pageSize=10", {
-              headers: { "Api-Key": store.api_key },
-              signal: AbortSignal.timeout(15_000),
-            });
-            if (!campR.ok) continue;
-            const campData = await campR.json() as any;
-            const bizId = campData?.campaigns?.[0]?.business?.id;
+            // bizId берём из warehouse_id (Business ID хранится там)
+            const bizId = store.warehouse_id;
             if (!bizId) continue;
 
             let pageToken: string | null = null;
