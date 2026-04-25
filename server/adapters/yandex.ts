@@ -56,63 +56,71 @@ export class YandexMarketAdapter implements MarketplaceAdapter {
       return { success: false, errors: [`Не удалось получить Campaign IDs для «${this.store.name}» (Business ID: ${this.businessId})`] };
     }
 
-    const [primaryCampaignId, ...secondaryCampaignIds] = campaignIds;
     const errors: string[] = [];
     let updatedCount = 0;
+    const allSkus = updates.map(u => u.externalSku);
 
-    // Обновляем остатки только в первичной кампании
-    for (let i = 0; i < updates.length; i += BATCH_SIZE) {
-      const batch = updates.slice(i, i + BATCH_SIZE);
-      const skus = batch.map(u => ({
-        sku: u.externalSku,
-        items: [{ type: "FIT", count: Math.max(0, u.quantity) }],
-      }));
-
+    for (const campaignId of campaignIds) {
+      // Проверяем какие из наших SKU реально есть в этой кампании
+      let skusInCampaign: Set<string>;
       try {
-        const res = await fetch(
-          `${YM_API}/campaigns/${primaryCampaignId}/offers/stocks`,
+        const checkRes = await fetch(
+          `${YM_API}/campaigns/${campaignId}/offers/stocks`,
           {
-            method: "PUT",
+            method: "POST",
             headers: { "Api-Key": this.store.apiKey!, "Content-Type": "application/json" },
-            body: JSON.stringify({ skus }),
-            signal: AbortSignal.timeout(15_000),
+            body: JSON.stringify({ withTurnover: false, archived: false, offerIds: allSkus }),
+            signal: AbortSignal.timeout(10_000),
           }
         );
-
-        const data = await res.json() as any;
-        if (!res.ok) {
-          errors.push(`YM campaign ${primaryCampaignId} HTTP ${res.status}: ${data?.errors?.[0]?.message || res.statusText}`);
-          continue;
+        if (checkRes.ok) {
+          const checkData = await checkRes.json() as any;
+          const warehouses = checkData?.result?.warehouses || [];
+          skusInCampaign = new Set(
+            warehouses.flatMap((wh: any) => (wh.offers || []).map((o: any) => o.offerId as string))
+          );
+        } else {
+          skusInCampaign = campaignIds[0] === campaignId ? new Set(allSkus) : new Set();
         }
-
-        updatedCount += batch.length;
-        console.log(`[ym-adapter] ${this.store.name} campaign=${primaryCampaignId}: batch ${i / BATCH_SIZE + 1}, updated=${batch.length}`);
-      } catch (e: any) {
-        errors.push(`YM campaign ${primaryCampaignId} batch ${i}: ${e.message}`);
+      } catch {
+        skusInCampaign = campaignIds[0] === campaignId ? new Set(allSkus) : new Set();
       }
 
-      if (i + BATCH_SIZE < updates.length) await sleep(500);
-    }
+      const campaignUpdates = updates.filter(u => skusInCampaign.has(u.externalSku));
+      if (campaignUpdates.length === 0) {
+        console.log(`[ym-adapter] ${this.store.name} campaign=${campaignId}: нет товаров — пропуск`);
+        continue;
+      }
 
-    // Обнуляем вторичные кампании чтобы убрать фантомный остаток (не влияет на success)
-    for (const secondaryCampaignId of secondaryCampaignIds) {
-      const zeroSkus = updates.map(u => ({
-        sku: u.externalSku,
-        items: [{ type: "FIT", count: 0 }],
-      }));
-      try {
-        await fetch(
-          `${YM_API}/campaigns/${secondaryCampaignId}/offers/stocks`,
-          {
-            method: "PUT",
-            headers: { "Api-Key": this.store.apiKey!, "Content-Type": "application/json" },
-            body: JSON.stringify({ skus: zeroSkus }),
-            signal: AbortSignal.timeout(15_000),
+      for (let i = 0; i < campaignUpdates.length; i += BATCH_SIZE) {
+        const batch = campaignUpdates.slice(i, i + BATCH_SIZE);
+        const skus = batch.map(u => ({
+          sku: u.externalSku,
+          items: [{ type: "FIT", count: Math.max(0, u.quantity) }],
+        }));
+
+        try {
+          const res = await fetch(
+            `${YM_API}/campaigns/${campaignId}/offers/stocks`,
+            {
+              method: "PUT",
+              headers: { "Api-Key": this.store.apiKey!, "Content-Type": "application/json" },
+              body: JSON.stringify({ skus }),
+              signal: AbortSignal.timeout(15_000),
+            }
+          );
+          const data = await res.json() as any;
+          if (!res.ok) {
+            errors.push(`YM campaign ${campaignId} HTTP ${res.status}: ${data?.errors?.[0]?.message || res.statusText}`);
+            continue;
           }
-        );
-        console.log(`[ym-adapter] ${this.store.name}: zeroed secondary campaign=${secondaryCampaignId}`);
-      } catch (e: any) {
-        console.warn(`[ym-adapter] secondary campaign zero failed (non-fatal): ${e.message}`);
+          updatedCount += batch.length;
+          console.log(`[ym-adapter] ${this.store.name} campaign=${campaignId}: batch ${i / BATCH_SIZE + 1}, updated=${batch.length}`);
+        } catch (e: any) {
+          errors.push(`YM campaign ${campaignId} batch ${i}: ${e.message}`);
+        }
+
+        if (i + BATCH_SIZE < campaignUpdates.length) await sleep(500);
       }
     }
 
