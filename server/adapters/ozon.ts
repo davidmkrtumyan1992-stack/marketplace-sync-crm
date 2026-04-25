@@ -13,6 +13,27 @@ export class OzonAdapter implements MarketplaceAdapter {
     return `Ozon(${this.store.name})`;
   }
 
+  private async fetchWarehouseId(): Promise<number | null> {
+    try {
+      const res = await fetch(`${OZON_API}/v1/warehouse/list`, {
+        method: "POST",
+        headers: {
+          "Client-Id": this.store.clientId!,
+          "Api-Key": this.store.apiKey!,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const data = await res.json() as any;
+      const warehouses: any[] = data?.result || [];
+      const fbs = warehouses.find(w => w.warehouse_type === "FBS" || w.is_rfbs) || warehouses[0];
+      return fbs?.warehouse_id ? Number(fbs.warehouse_id) : null;
+    } catch {
+      return null;
+    }
+  }
+
   async updateStocks(updates: StockUpdate[]): Promise<AdapterResult> {
     if (!this.store.apiKey || !this.store.clientId) {
       return { success: false, errors: [`API-ключ или Client ID не настроен для «${this.store.name}»`] };
@@ -21,8 +42,14 @@ export class OzonAdapter implements MarketplaceAdapter {
     const errors: string[] = [];
     let updatedCount = 0;
 
-    // Ozon: warehouseId нужен для FBS. Берём из store.warehouseId или пропускаем (FBO не требует).
-    const warehouseId = this.store.warehouseId || null;
+    let warehouseId: number | null = this.store.warehouseId ? Number(this.store.warehouseId) : null;
+    if (!warehouseId) {
+      warehouseId = await this.fetchWarehouseId();
+      if (!warehouseId) {
+        return { success: false, errors: [`FBS склад не найден для «${this.store.name}». Укажите Warehouse ID в настройках магазина.`] };
+      }
+      console.log(`[ozon-adapter] ${this.store.name}: auto-detected warehouseId=${warehouseId}`);
+    }
 
     for (let i = 0; i < updates.length; i += BATCH_SIZE) {
       const batch = updates.slice(i, i + BATCH_SIZE);
@@ -30,7 +57,7 @@ export class OzonAdapter implements MarketplaceAdapter {
       const stocks = batch.map(u => ({
         offer_id: u.externalSku,
         stock: Math.max(0, u.quantity),
-        ...(warehouseId ? { warehouse_id: Number(warehouseId) } : {}),
+        warehouse_id: warehouseId,
       }));
 
       const t0 = Date.now();
