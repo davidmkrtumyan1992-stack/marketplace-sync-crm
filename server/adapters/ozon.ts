@@ -85,7 +85,13 @@ export class OzonAdapter implements MarketplaceAdapter {
         const result = data?.result || [];
         for (const item of result) {
           if (item.errors?.length) {
-            errors.push(`SKU ${item.offer_id}: ${item.errors.map((e: any) => e.message).join(', ')}`);
+            const msg = item.errors.map((e: any) => e.message).join(', ');
+            // Товар не в каталоге этого магазина — не ошибка, просто пропускаем
+            if (/not found|не найден|does not exist|SKU not found/i.test(msg)) {
+              console.log(`[ozon-adapter] ${this.store.name}: SKU ${item.offer_id} не в каталоге — пропуск`);
+            } else {
+              errors.push(`SKU ${item.offer_id}: ${msg}`);
+            }
           } else {
             updatedCount++;
           }

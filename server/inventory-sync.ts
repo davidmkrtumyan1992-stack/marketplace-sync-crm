@@ -343,6 +343,7 @@ export class InventorySyncEngine {
         JOIN companies c ON s.company_id = c.id
         WHERE c.organization_id = ${product.organizationId}
           AND s.is_active = true AND s.api_key IS NOT NULL
+          AND s.marketplace != 'wildberries'
       `);
 
       const externalSku = product.sku || product.barcode;
