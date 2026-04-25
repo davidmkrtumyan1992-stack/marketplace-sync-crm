@@ -8544,7 +8544,12 @@ export async function registerRoutes(
                 signal: AbortSignal.timeout(20_000),
               });
               const data = await r.json() as any;
+              if (!r.ok) {
+                console.error(`[auto-match] Yandex offer-mappings HTTP ${r.status} for biz=${bizId}:`, JSON.stringify(data).slice(0, 300));
+                break;
+              }
               const offers: any[] = data?.result?.offerMappings || [];
+              console.log(`[auto-match] Yandex biz=${bizId}: fetched ${offers.length} offers`);
               if (!offers.length) break;
               stats.total += offers.length;
 
