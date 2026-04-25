@@ -688,6 +688,60 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/debug/ym-stock-test — тест пуша остатков на ЯМ (временный)
+  app.post("/api/debug/ym-stock-test", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const { sku, qty = 1 } = req.body;
+      if (!sku) return res.status(400).json({ error: "sku required" });
+      const orgId = getOrgId(req);
+      const storeRows = await db.execute(sql`
+        SELECT s.id, s.name, s.api_key, s.warehouse_id
+        FROM stores s JOIN companies c ON s.company_id = c.id
+        WHERE c.organization_id = ${orgId} AND s.marketplace = 'yandex' AND s.is_active = true
+        LIMIT 1
+      `);
+      const store = (storeRows as any).rows?.[0];
+      if (!store) return res.json({ error: "Яндекс-магазин не найден" });
+
+      // Получаем кампании
+      const campRes = await fetch("https://api.partner.market.yandex.ru/campaigns", {
+        headers: { "Api-Key": store.api_key, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const campData = await campRes.json() as any;
+      const campaigns: any[] = campData?.campaigns || [];
+      const bizId = store.warehouse_id;
+      const filtered = bizId
+        ? campaigns.filter((c: any) =>
+            String(c.business?.id) === bizId || String(c.clientId) === bizId || String(c.id) === bizId)
+        : campaigns;
+      const campaignIds = filtered.map((c: any) => String(c.id)).filter((id: string) => id !== bizId);
+
+      const results: any[] = [];
+      for (let idx = 0; idx < campaignIds.length; idx++) {
+        const campaignId = campaignIds[idx];
+        const isPrimary = idx === 0;
+        const count = isPrimary ? Number(qty) : 0;
+        const body = { skus: [{ sku, items: [{ type: "FIT", count }] }] };
+        const r = await fetch(
+          `https://api.partner.market.yandex.ru/campaigns/${campaignId}/offers/stocks`,
+          {
+            method: "PUT",
+            headers: { "Api-Key": store.api_key, "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(15_000),
+          }
+        );
+        const data = await r.json();
+        results.push({ campaignId, isPrimary, sentQty: count, status: r.status, response: data });
+      }
+
+      res.json({ storeName: store.name, bizId, campaignIds, results });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // POST /api/admin/migrate-product-links — миграция ozonId в product_marketplace_links
   app.post("/api/admin/migrate-product-links", isAuthenticated, requireRole("owner"), async (req, res) => {
     try {
