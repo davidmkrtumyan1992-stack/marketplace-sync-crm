@@ -202,6 +202,20 @@ export const stockInflow = pgTable("stock_inflow", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const stockWriteoff = pgTable("stock_writeoff", {
+  id: serial("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  quantity: integer("quantity").notNull(),
+  reason: text("reason").notNull(),
+  notes: text("notes"),
+  userId: text("user_id"),
+  userName: text("user_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export type StockWriteoff = typeof stockWriteoff.$inferSelect;
+export type InsertStockWriteoff = typeof stockWriteoff.$inferInsert;
+
 export const webhookLogs = pgTable("webhook_logs", {
   id: serial("id").primaryKey(),
   organizationId: text("organization_id"),

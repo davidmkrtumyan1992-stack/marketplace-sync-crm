@@ -12,6 +12,7 @@ import {
   X,
   FileBarChart,
   ScanLine,
+  MinusCircle,
   Shield,
   Radio
 } from "lucide-react";
@@ -46,6 +47,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/orders", label: "Заказы", icon: ShoppingCart, visible: canAccessOrders },
     { href: "/customers", label: "Клиенты", icon: Users, visible: canAccessCustomers },
     { href: "/intake", label: "Приёмка", icon: ScanLine, visible: canAccessIntake },
+    { href: "/writeoff", label: "Списание", icon: MinusCircle, visible: canAccessIntake },
     { href: "/reports", label: "Отчёты", icon: FileBarChart, visible: canAccessReports },
     { href: "/settings", label: "Настройки", icon: Settings, visible: canAccessSettings },
   ];

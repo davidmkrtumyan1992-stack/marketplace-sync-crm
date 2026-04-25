@@ -1,6 +1,6 @@
 import { 
   companies, stores, userRoles, expenses,
-  products, customers, orders, orderItems, marketplaceSettings, taxSettings, auditLog, stockInflow, syncHistory,
+  products, customers, orders, orderItems, marketplaceSettings, taxSettings, auditLog, stockInflow, stockWriteoff, syncHistory,
   stockSyncLog, inventorySyncSettings, productStoreExclusions, webhookLogs, productMarketplaceLinks,
   type Company, type InsertCompany,
   type Store, type InsertStore,
@@ -13,6 +13,7 @@ import {
   type TaxSetting, type InsertTaxSetting,
   type AuditLogEntry, type InsertAuditLog,
   type StockInflow, type InsertStockInflow,
+  type StockWriteoff, type InsertStockWriteoff,
   type SyncHistoryEntry, type InsertSyncHistory,
   type StockSyncLogEntry, type InsertStockSyncLog,
   type InventorySyncSetting, type InsertInventorySyncSettings,
@@ -105,6 +106,10 @@ export interface IStorage {
   // Stock Inflow
   createStockInflow(inflow: InsertStockInflow, userId: string, userName: string): Promise<StockInflow>;
   getStockInflows(organizationId: string): Promise<StockInflow[]>;
+
+  // Stock Writeoff
+  createStockWriteoff(writeoff: InsertStockWriteoff, userId: string, userName: string): Promise<StockWriteoff>;
+  getStockWriteoffs(organizationId: string): Promise<StockWriteoff[]>;
 
   // Dashboard KPI
   getDashboardKPI(organizationId: string): Promise<DashboardKPI>;
@@ -654,6 +659,50 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(stockInflow)
       .where(eq(stockInflow.organizationId, organizationId))
       .orderBy(desc(stockInflow.createdAt));
+  }
+
+  // Stock Writeoff
+  async createStockWriteoff(writeoff: InsertStockWriteoff, userId: string, userName: string): Promise<StockWriteoff> {
+    return await db.transaction(async (tx) => {
+      const [created] = await tx.insert(stockWriteoff).values({
+        ...writeoff,
+        userId,
+        userName,
+      }).returning();
+
+      const [product] = await tx.select().from(products)
+        .where(eq(products.id, writeoff.productId))
+        .for("update");
+      if (product) {
+        const newStock = Math.max(0, (product.centralStock || 0) - writeoff.quantity);
+        await tx.update(products).set({
+          centralStock: newStock,
+          stockQuantity: newStock,
+          stockLocal: newStock,
+          updatedAt: new Date(),
+        }).where(eq(products.id, writeoff.productId));
+      }
+
+      await tx.insert(auditLog).values({
+        organizationId: writeoff.organizationId,
+        userId,
+        userName,
+        action: "stock_writeoff",
+        entityType: "product",
+        entityId: writeoff.productId,
+        delta: -writeoff.quantity,
+        details: JSON.stringify({ reason: writeoff.reason, notes: writeoff.notes }),
+      });
+
+      return created;
+    });
+  }
+
+  async getStockWriteoffs(organizationId: string): Promise<StockWriteoff[]> {
+    return await db.select().from(stockWriteoff)
+      .where(eq(stockWriteoff.organizationId, organizationId))
+      .orderBy(desc(stockWriteoff.createdAt))
+      .limit(200);
   }
 
   // Dashboard KPI

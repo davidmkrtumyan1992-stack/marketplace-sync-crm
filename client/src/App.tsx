@@ -13,6 +13,7 @@ import Customers from "@/pages/Customers";
 import Settings from "@/pages/Settings";
 import Reports from "@/pages/Reports";
 import Intake from "@/pages/Intake";
+import Writeoff from "@/pages/Writeoff";
 import { useAuth } from "@/hooks/use-auth";
 import { useRole } from "@/hooks/use-role";
 import { ShieldAlert, Database, Shield, BarChart3, Package } from "lucide-react";
@@ -185,6 +186,7 @@ function Router() {
       <Route path="/reports" component={() => <RoleGuard component={Reports} allowed={canAccessReports} />} />
       <Route path="/settings" component={() => <RoleGuard component={Settings} allowed={canAccessSettings} />} />
       <Route path="/intake" component={() => <RoleGuard component={Intake} allowed={canAccessIntake} />} />
+      <Route path="/writeoff" component={() => <RoleGuard component={Writeoff} allowed={canAccessIntake} />} />
       <Route component={NotFound} />
     </Switch>
   );

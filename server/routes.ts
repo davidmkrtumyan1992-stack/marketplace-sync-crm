@@ -2139,6 +2139,40 @@ export async function registerRoutes(
     }
   });
 
+  // Stock Writeoff (owner & administrator)
+  app.get("/api/stock-writeoff", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const writeoffs = await storage.getStockWriteoffs(getOrgId(req));
+      res.json(writeoffs);
+    } catch (err) {
+      console.error("[GET /api/stock-writeoff]", err);
+      throw err;
+    }
+  });
+
+  app.post("/api/stock-writeoff", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const { userId, userName } = getUserInfo(req);
+      const input = z.object({
+        productId: z.number(),
+        quantity: z.number().min(1),
+        reason: z.string().min(1),
+        notes: z.string().optional(),
+        organizationId: z.string(),
+      }).parse({ ...req.body, organizationId: getOrgId(req) });
+
+      const writeoff = await storage.createStockWriteoff(input as any, userId, userName);
+
+      const syncResults = await inventorySyncEngine.syncProductToAllStores(input.productId)
+        .catch(e => { console.error(`[stock-writeoff] sync failed: ${e.message}`); return []; });
+
+      res.status(201).json({ ...writeoff, syncResults });
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json(err);
+      throw err;
+    }
+  });
+
   // Sync History (owner only)
   app.get(api.syncHistory.list.path, isAuthenticated, requireRole("owner"), async (req, res) => {
     const history = await storage.getSyncHistory(getOrgId(req));
