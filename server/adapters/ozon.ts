@@ -15,7 +15,7 @@ export class OzonAdapter implements MarketplaceAdapter {
 
   private async fetchWarehouseId(): Promise<number | null> {
     try {
-      const res = await fetch(`${OZON_API}/v1/warehouse/list`, {
+      const res = await fetch(`${OZON_API}/v2/warehouse/list`, {
         method: "POST",
         headers: {
           "Client-Id": this.store.clientId!,
@@ -26,8 +26,10 @@ export class OzonAdapter implements MarketplaceAdapter {
         signal: AbortSignal.timeout(10_000),
       });
       const data = await res.json() as any;
-      const warehouses: any[] = data?.result || [];
-      const fbs = warehouses.find(w => w.warehouse_type === "FBS" || w.is_rfbs) || warehouses[0];
+      const warehouses: any[] = data?.warehouses || [];
+      const fbs = warehouses.find(w =>
+        w.warehouse_type === "fbs" && w.status !== "disabled"
+      ) || warehouses.find(w => w.warehouse_type === "fbs");
       return fbs?.warehouse_id ? Number(fbs.warehouse_id) : null;
     } catch {
       return null;
