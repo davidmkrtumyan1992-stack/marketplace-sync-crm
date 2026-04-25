@@ -336,12 +336,45 @@ export class InventorySyncEngine {
     return logEntry;
   }
 
+  private async autoCreateLinks(product: { id: number; sku: string; barcode: string | null; organizationId: string }): Promise<void> {
+    try {
+      const orgStores = await db.execute(sql`
+        SELECT s.id FROM stores s
+        JOIN companies c ON s.company_id = c.id
+        WHERE c.organization_id = ${product.organizationId}
+          AND s.is_active = true AND s.api_key IS NOT NULL
+      `);
+
+      const externalSku = product.sku || product.barcode;
+      if (!externalSku) return;
+
+      for (const row of (orgStores as any).rows) {
+        await db.execute(sql`
+          INSERT INTO product_marketplace_links (product_id, store_id, external_sku, is_active, organization_id)
+          VALUES (${product.id}, ${(row as any).id}, ${externalSku}, true, ${product.organizationId})
+          ON CONFLICT DO NOTHING
+        `);
+      }
+      console.log(`[auto-link] product ${product.id} sku=${externalSku}: создано ссылок для ${(orgStores as any).rows.length} магазинов`);
+    } catch (e: any) {
+      console.warn(`[auto-link] product ${product.id}: ${e.message}`);
+    }
+  }
+
   async syncProductToAllStores(productId: number): Promise<StoreSyncResult[]> {
     const [product] = await db.select().from(products).where(eq(products.id, productId));
     if (!product) return [];
 
-    const links = await db.select().from(productMarketplaceLinks)
+    let links = await db.select().from(productMarketplaceLinks)
       .where(and(eq(productMarketplaceLinks.productId, productId), eq(productMarketplaceLinks.isActive, true)));
+
+    // Если ссылок нет — автоматически создать по SKU и повторить
+    if (links.length === 0) {
+      await this.autoCreateLinks(product as any);
+      links = await db.select().from(productMarketplaceLinks)
+        .where(and(eq(productMarketplaceLinks.productId, productId), eq(productMarketplaceLinks.isActive, true)));
+    }
+
     if (links.length === 0) return [];
 
     const storeIds = [...new Set(links.map(l => l.storeId))];
