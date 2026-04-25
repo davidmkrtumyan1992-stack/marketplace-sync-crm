@@ -115,6 +115,45 @@ export class OzonAdapter implements MarketplaceAdapter {
 
     const result: StockInfo[] = [];
 
+    if (skus.length === 0) {
+      let lastId = "";
+      let page = 0;
+      do {
+        try {
+          const res = await fetch(`${OZON_API}/v4/product/info/stocks`, {
+            method: "POST",
+            headers: {
+              "Client-Id": this.store.clientId!,
+              "Api-Key": this.store.apiKey!,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ filter: {}, last_id: lastId, limit: 100 }),
+            signal: AbortSignal.timeout(30_000),
+          });
+          if (!res.ok) break;
+          const data = await res.json() as any;
+          const items = data?.items || [];
+          for (const item of items) {
+            const fbs = item.stocks?.find((s: any) => s.type === "fbs");
+            const fbo = item.stocks?.find((s: any) => s.type === "fbo");
+            result.push({
+              externalSku: item.offer_id,
+              available: (fbs?.present || 0) + (fbo?.present || 0),
+              reserved: (fbs?.reserved || 0) + (fbo?.reserved || 0),
+            });
+          }
+          lastId = data?.last_id || "";
+          if (items.length < 100) break;
+          if (++page > 50) break;
+          await sleep(BATCH_DELAY_MS);
+        } catch (e: any) {
+          console.error(`[ozon-adapter] getStocks full-scan: ${e.message}`);
+          break;
+        }
+      } while (lastId);
+      return result;
+    }
+
     for (let i = 0; i < skus.length; i += BATCH_SIZE) {
       const batch = skus.slice(i, i + BATCH_SIZE);
       try {

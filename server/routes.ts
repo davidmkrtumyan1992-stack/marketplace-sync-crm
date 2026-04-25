@@ -8417,16 +8417,29 @@ export async function registerRoutes(
 
   // ==================== STOCK SYNC: PULL STOCKS FROM MARKETPLACES ====================
 
-  // POST /api/inventory/pull-marketplace-stocks — разовая инициализация centralStock из МП
+  // POST /api/inventory/pull-marketplace-stocks — full-scan: тянет ВСЕ остатки с МП, матчит по SKU
   app.post("/api/inventory/pull-marketplace-stocks", isAuthenticated, requireRole("owner"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const { createAdapter } = await import("./adapters/factory");
 
+      // 1. Все товары организации: sku/barcode → productId
+      const allProds = await db.execute(sql`
+        SELECT id, sku, barcode FROM products WHERE organization_id = ${orgId}
+      `);
+      const skuToProductId = new Map<string, number>();
+      for (const p of (allProds as any).rows) {
+        if (p.sku) skuToProductId.set(String(p.sku), p.id as number);
+        if (p.barcode && p.barcode !== p.sku) skuToProductId.set(String(p.barcode), p.id as number);
+      }
+
+      // 2. Активные магазины (кроме WB — там nmId, не SKU)
       const activeStores = await db.execute(sql`
         SELECT s.id, s.name, s.marketplace, s.api_key, s.client_id, s.warehouse_id, s.company_id
         FROM stores s JOIN companies c ON s.company_id = c.id
-        WHERE c.organization_id = ${orgId} AND s.is_active = true AND s.api_key IS NOT NULL
+        WHERE c.organization_id = ${orgId}
+          AND s.is_active = true AND s.api_key IS NOT NULL
+          AND s.marketplace != 'wildberries'
       `);
 
       const stockMap = new Map<number, number>();
@@ -8440,47 +8453,37 @@ export async function registerRoutes(
             isActive: true, companyId: storeRow.company_id, lastSync: null, createdAt: new Date(),
           });
 
-          // Сначала берём все SKU из связей для этого магазина
-          const links = await db.execute(sql`
-            SELECT pml.external_sku, pml.product_id
-            FROM product_marketplace_links pml
-            WHERE pml.store_id = ${storeRow.id} AND pml.is_active = true AND pml.external_sku IS NOT NULL
-          `);
-          if (!(links as any).rows.length) {
-            storeResults.push({ store: storeRow.name, fetched: 0, matched: 0 });
-            continue;
-          }
-
-          const skuToProduct = new Map(
-            (links as any).rows.map((r: any) => [r.external_sku as string, r.product_id as number])
-          );
-          const skus = [...skuToProduct.keys()];
-
-          // Запрашиваем остатки по конкретным SKU (Ozon требует непустой список)
-          const mpStocks = await adapter.getStocks(skus);
-          if (!mpStocks.length) {
-            storeResults.push({ store: storeRow.name, fetched: 0, matched: 0 });
-            continue;
-          }
-
+          const mpStocks = await adapter.getStocks([]);
           let matched = 0;
+
           for (const item of mpStocks) {
-            const productId = skuToProduct.get(item.externalSku);
-            if (!productId) continue;
+            const productId = skuToProductId.get(item.externalSku);
+            if (!productId || item.available <= 0) continue;
+
+            await db.execute(sql`
+              INSERT INTO product_marketplace_links
+                (product_id, store_id, external_sku, is_active, organization_id)
+              VALUES (${productId}, ${storeRow.id}, ${item.externalSku}, true, ${orgId})
+              ON CONFLICT DO NOTHING
+            `);
+
             const current = stockMap.get(productId) ?? 0;
             stockMap.set(productId, Math.max(current, item.available));
             matched++;
           }
+
           storeResults.push({ store: storeRow.name, fetched: mpStocks.length, matched });
+          console.log(`[pull-stocks] ${storeRow.name}: fetched=${mpStocks.length}, matched=${matched}`);
         } catch (e: any) {
           console.error(`[pull-stocks] ${storeRow.name}: ${e.message}`);
           storeResults.push({ store: storeRow.name, error: e.message });
         }
       }
 
+      // 3. Обновить только там где МП > CRM
       let updated = 0;
       for (const [productId, stock] of stockMap.entries()) {
-        await db.execute(sql`
+        const r = await db.execute(sql`
           UPDATE products SET
             central_stock = ${stock},
             stock_quantity = ${stock},
@@ -8490,7 +8493,7 @@ export async function registerRoutes(
           WHERE id = ${productId}
             AND (central_stock IS NULL OR central_stock < ${stock})
         `);
-        updated++;
+        if ((r as any).rowCount > 0) updated++;
       }
 
       console.log(`[pull-stocks] Обновлено ${updated} товаров`);

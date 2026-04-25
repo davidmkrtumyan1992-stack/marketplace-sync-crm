@@ -124,45 +124,47 @@ export class YandexMarketAdapter implements MarketplaceAdapter {
     if (campaignIds.length === 0) return [];
     const primaryCampaignId = campaignIds[0];
 
-    try {
-      const res = await fetch(
-        `${YM_API}/campaigns/${primaryCampaignId}/offers/stocks`,
-        {
-          method: "POST",
-          headers: {
-            "Api-Key": this.store.apiKey!,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ withTurnover: false, archived: false, limit: 200 }),
-          signal: AbortSignal.timeout(15_000),
+    const skuSet = new Set(skus);
+    const result: StockInfo[] = [];
+    let pageToken = "";
+    let pageCount = 0;
+
+    do {
+      try {
+        const body: any = { withTurnover: false, archived: false, limit: 200 };
+        if (pageToken) body.page_token = pageToken;
+        const res = await fetch(
+          `${YM_API}/campaigns/${primaryCampaignId}/offers/stocks`,
+          {
+            method: "POST",
+            headers: { "Api-Key": this.store.apiKey!, "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(15_000),
+          }
+        );
+        if (!res.ok) break;
+        const data = await res.json() as any;
+        for (const wh of (data?.result?.warehouses || [])) {
+          for (const offer of (wh.offers || [])) {
+            if (skus.length && !skuSet.has(offer.offerId)) continue;
+            const stocks = Object.fromEntries(
+              (offer.stocks || []).map((s: any) => [s.type, s.count])
+            );
+            result.push({
+              externalSku: offer.offerId,
+              available: stocks["AVAILABLE"] || 0,
+              reserved: stocks["FREEZE"] || 0,
+            });
+          }
         }
-      );
-
-      if (!res.ok) return [];
-
-      const data = await res.json() as any;
-      const warehouses = data?.result?.warehouses || [];
-      const skuSet = new Set(skus);
-      const result: StockInfo[] = [];
-
-      for (const wh of warehouses) {
-        for (const offer of wh.offers || []) {
-          if (skus.length && !skuSet.has(offer.offerId)) continue;
-          const stocks = Object.fromEntries(
-            (offer.stocks || []).map((s: any) => [s.type, s.count])
-          );
-          result.push({
-            externalSku: offer.offerId,
-            available: stocks["AVAILABLE"] || 0,
-            reserved: stocks["FREEZE"] || 0,
-          });
-        }
+        pageToken = data?.result?.paging?.nextPageToken || "";
+        if (pageToken) await sleep(300);
+      } catch (e: any) {
+        console.error(`[ym-adapter] getStocks error: ${e.message}`);
+        break;
       }
+    } while (pageToken && ++pageCount < 50);
 
-      return result;
-    } catch (e: any) {
-      console.error(`[ym-adapter] getStocks error: ${e.message}`);
-      return [];
-    }
+    return result;
   }
 }
