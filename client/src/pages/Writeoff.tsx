@@ -165,12 +165,19 @@ export default function Writeoff() {
           notes: item.notes || undefined,
         });
         const data = await res.json();
+        if (!res.ok) {
+          const msg = data?.message || data?.error || `HTTP ${res.status}`;
+          syncErrors.push(`${item.product.name}: ${msg}`);
+          errorCount++;
+          continue;
+        }
         successCount++;
         const results: any[] = data.syncResults ?? [];
         totalStoresSynced += results.filter((r: any) => r.status === "success").length;
         results.filter((r: any) => r.status === "fail")
           .forEach((r: any) => syncErrors.push(`${r.storeName}: ${r.error}`));
-      } catch {
+      } catch (e: any) {
+        syncErrors.push(`${item.product.name}: ${e.message || "Неизвестная ошибка"}`);
         errorCount++;
       }
     }
@@ -190,7 +197,7 @@ export default function Writeoff() {
       if (syncErrors.length > 0)
         toast({ title: "Ошибки синхронизации", description: syncErrors.slice(0, 3).join("; "), variant: "destructive" });
     } else {
-      toast({ title: "Ошибка списания", description: "Не удалось списать товары", variant: "destructive" });
+      toast({ title: "Ошибка списания", description: syncErrors[0] || "Не удалось списать товары", variant: "destructive" });
     }
 
     setTimeout(() => barcodeInputRef.current?.focus(), 100);
