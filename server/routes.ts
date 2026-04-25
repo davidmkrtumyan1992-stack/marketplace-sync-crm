@@ -662,6 +662,32 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/debug/yandex-offers — диагностика Яндекс offer-mappings API
+  app.get("/api/debug/yandex-offers", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const storeRows = await db.execute(sql`
+        SELECT s.id, s.name, s.api_key, s.warehouse_id
+        FROM stores s JOIN companies c ON s.company_id = c.id
+        WHERE c.organization_id = ${orgId} AND s.marketplace = 'yandex' AND s.is_active = true
+        LIMIT 1
+      `);
+      const store = (storeRows as any).rows?.[0];
+      if (!store) return res.json({ error: "Яндекс-магазин не найден" });
+      const bizId = store.warehouse_id;
+      const r = await fetch(`https://api.partner.market.yandex.ru/businesses/${bizId}/offer-mappings`, {
+        method: "POST",
+        headers: { "Api-Key": store.api_key, "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 5 }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const data = await r.json();
+      res.json({ status: r.status, bizId, storeName: store.name, data });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // POST /api/admin/migrate-product-links — миграция ozonId в product_marketplace_links
   app.post("/api/admin/migrate-product-links", isAuthenticated, requireRole("owner"), async (req, res) => {
     try {
