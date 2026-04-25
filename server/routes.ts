@@ -8440,20 +8440,28 @@ export async function registerRoutes(
             isActive: true, companyId: storeRow.company_id, lastSync: null, createdAt: new Date(),
           });
 
-          const mpStocks = await adapter.getStocks([]);
-          if (!mpStocks.length) {
-            storeResults.push({ store: storeRow.name, fetched: 0, matched: 0 });
-            continue;
-          }
-
+          // Сначала берём все SKU из связей для этого магазина
           const links = await db.execute(sql`
             SELECT pml.external_sku, pml.product_id
             FROM product_marketplace_links pml
             WHERE pml.store_id = ${storeRow.id} AND pml.is_active = true AND pml.external_sku IS NOT NULL
           `);
+          if (!(links as any).rows.length) {
+            storeResults.push({ store: storeRow.name, fetched: 0, matched: 0 });
+            continue;
+          }
+
           const skuToProduct = new Map(
             (links as any).rows.map((r: any) => [r.external_sku as string, r.product_id as number])
           );
+          const skus = [...skuToProduct.keys()];
+
+          // Запрашиваем остатки по конкретным SKU (Ozon требует непустой список)
+          const mpStocks = await adapter.getStocks(skus);
+          if (!mpStocks.length) {
+            storeResults.push({ store: storeRow.name, fetched: 0, matched: 0 });
+            continue;
+          }
 
           let matched = 0;
           for (const item of mpStocks) {
