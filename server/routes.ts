@@ -8488,6 +8488,7 @@ export async function registerRoutes(
             available_quantity = ${stock},
             updated_at = NOW()
           WHERE id = ${productId}
+            AND (central_stock IS NULL OR central_stock < ${stock})
         `);
         updated++;
       }
