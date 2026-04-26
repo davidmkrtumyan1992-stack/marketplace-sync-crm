@@ -16,7 +16,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store, type StockSyncLogEntry, type InventorySyncSetting, type MarketplaceSetting, type Company } from "@shared/schema";
-import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2, Loader2, PlugZap, Eye, EyeOff, Copy, Download } from "lucide-react";
+import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2, Loader2, PlugZap, Eye, EyeOff, Copy, Download, Link2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -975,6 +975,8 @@ function PullMarketplaceStocksCard() {
   const queryClient = useQueryClient();
   const [isPulling, setIsPulling] = useState(false);
   const [lastResult, setLastResult] = useState<any>(null);
+  const [isCreatingLinks, setIsCreatingLinks] = useState(false);
+  const [linkResult, setLinkResult] = useState<{ total: number; created: number } | null>(null);
 
   const handlePull = async () => {
     setIsPulling(true);
@@ -1002,6 +1004,28 @@ function PullMarketplaceStocksCard() {
     }
   };
 
+  const handleCreateLinks = async () => {
+    setIsCreatingLinks(true);
+    try {
+      const res = await apiRequest("POST", "/api/inventory/create-all-links");
+      const data = await res.json();
+      setLinkResult(data);
+      if (data.ok) {
+        queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+        toast({
+          title: "Связи созданы",
+          description: `Найдено ${data.total} товаров без связей, создано для ${data.created}`,
+        });
+      } else {
+        toast({ title: "Ошибка", description: data.error || "Что-то пошло не так", variant: "destructive" });
+      }
+    } catch (e: any) {
+      toast({ title: "Ошибка", description: e.message, variant: "destructive" });
+    } finally {
+      setIsCreatingLinks(false);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -1015,10 +1039,16 @@ function PullMarketplaceStocksCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Button onClick={handlePull} disabled={isPulling} className="gap-2">
-          {isPulling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-          {isPulling ? "Импорт..." : "Импортировать остатки с маркетплейсов"}
-        </Button>
+        <div className="flex flex-wrap gap-3">
+          <Button onClick={handlePull} disabled={isPulling} className="gap-2">
+            {isPulling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            {isPulling ? "Импорт..." : "Импортировать остатки с маркетплейсов"}
+          </Button>
+          <Button onClick={handleCreateLinks} disabled={isCreatingLinks} variant="outline" className="gap-2">
+            {isCreatingLinks ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
+            {isCreatingLinks ? "Создаём связи..." : "Создать связи для всех товаров"}
+          </Button>
+        </div>
         {lastResult && (
           <div className="text-sm text-muted-foreground space-y-1">
             <p className="font-medium text-foreground">Результат: обновлено {lastResult.updated} товаров</p>
@@ -1028,6 +1058,13 @@ function PullMarketplaceStocksCard() {
                 {s.error && <span className="text-destructive"> — {s.error}</span>}
               </p>
             ))}
+          </div>
+        )}
+        {linkResult && (
+          <div className="text-sm text-muted-foreground">
+            <p className="font-medium text-foreground">
+              Связи: найдено {linkResult.total} товаров без привязки, создано для {linkResult.created}
+            </p>
           </div>
         )}
       </CardContent>

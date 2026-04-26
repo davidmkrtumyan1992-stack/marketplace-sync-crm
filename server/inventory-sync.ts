@@ -336,7 +336,7 @@ export class InventorySyncEngine {
     return logEntry;
   }
 
-  private async autoCreateLinks(product: { id: number; sku: string; barcode: string | null; organizationId: string }): Promise<void> {
+  async autoCreateLinks(product: { id: number; sku: string; barcode: string | null; organizationId: string }): Promise<void> {
     try {
       const orgStores = await db.execute(sql`
         SELECT s.id FROM stores s
@@ -360,6 +360,34 @@ export class InventorySyncEngine {
     } catch (e: any) {
       console.warn(`[auto-link] product ${product.id}: ${e.message}`);
     }
+  }
+
+  async createLinksForAllProducts(organizationId: string): Promise<{ total: number; created: number }> {
+    const unlinked = await db.execute(sql`
+      SELECT p.id, p.sku, p.barcode
+      FROM products p
+      WHERE p.organization_id = ${organizationId}
+        AND p.sku IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM product_marketplace_links pml
+          WHERE pml.product_id = p.id AND pml.is_active = true
+        )
+    `);
+
+    const rows = (unlinked as any).rows;
+    let created = 0;
+
+    for (const row of rows) {
+      const before = await db.select().from(productMarketplaceLinks)
+        .where(and(eq(productMarketplaceLinks.productId, row.id), eq(productMarketplaceLinks.isActive, true)));
+      await this.autoCreateLinks({ id: row.id, sku: row.sku, barcode: row.barcode, organizationId });
+      const after = await db.select().from(productMarketplaceLinks)
+        .where(and(eq(productMarketplaceLinks.productId, row.id), eq(productMarketplaceLinks.isActive, true)));
+      if (after.length > before.length) created++;
+    }
+
+    console.log(`[create-all-links] Org ${organizationId}: ${rows.length} без links → создано для ${created} товаров`);
+    return { total: rows.length, created };
   }
 
   async syncProductToAllStores(productId: number): Promise<StoreSyncResult[]> {

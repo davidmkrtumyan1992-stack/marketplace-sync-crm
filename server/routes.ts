@@ -8504,6 +8504,18 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/inventory/create-all-links — создать links для всех товаров без привязки
+  app.post("/api/inventory/create-all-links", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const result = await inventorySyncEngine.createLinksForAllProducts(orgId);
+      res.json({ ok: true, ...result });
+    } catch (e: any) {
+      console.error("[create-all-links]", e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ==================== STOCK SYNC: IMPORT SINGLE OFFER ====================
 
   // Импорт одного оффера с маркетплейса в CRM + создание связи
