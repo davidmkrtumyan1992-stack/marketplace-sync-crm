@@ -985,27 +985,46 @@ function PullMarketplaceStocksCard() {
 
   const handlePull = async (force = false) => {
     setIsPulling(true);
+    setLastResult(null);
     try {
       const res = await apiRequest("POST", `/api/inventory/pull-marketplace-stocks${force ? "?force=true" : ""}`);
       const data = await res.json();
-      setLastResult(data);
-      if (data.ok) {
-        queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-        refetchStats();
-        const storesSummary = data.stores
-          .filter((s: any) => s.matched > 0)
-          .map((s: any) => `${s.store}: ${s.matched}`)
-          .join(", ");
-        toast({
-          title: "Остатки импортированы",
-          description: `Обновлено товаров: ${data.updated}${storesSummary ? ` (${storesSummary})` : ""}`,
-        });
-      } else {
-        toast({ title: "Ошибка", description: data.error || "Что-то пошло не так", variant: "destructive" });
+      if (!data.jobId) {
+        toast({ title: "Ошибка", description: data.error || "Не удалось запустить", variant: "destructive" });
+        setIsPulling(false);
+        return;
       }
+      // Поллинг статуса каждые 3 секунды
+      const poll = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/inventory/sync-job/${data.jobId}`);
+          const job = await statusRes.json();
+          if (job.status === "done") {
+            clearInterval(poll);
+            setIsPulling(false);
+            setLastResult(job.result);
+            queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+            refetchStats();
+            const storesSummary = job.result.stores
+              ?.filter((s: any) => s.matched > 0)
+              .map((s: any) => `${s.store}: ${s.matched}`)
+              .join(", ");
+            toast({
+              title: "Остатки импортированы",
+              description: `Обновлено товаров: ${job.result.updated}${storesSummary ? ` (${storesSummary})` : ""}`,
+            });
+          } else if (job.status === "error") {
+            clearInterval(poll);
+            setIsPulling(false);
+            toast({ title: "Ошибка синхронизации", description: job.result?.error || "Неизвестная ошибка", variant: "destructive" });
+          }
+        } catch {
+          clearInterval(poll);
+          setIsPulling(false);
+        }
+      }, 3000);
     } catch (e: any) {
       toast({ title: "Ошибка", description: e.message, variant: "destructive" });
-    } finally {
       setIsPulling(false);
     }
   };

@@ -8417,13 +8417,13 @@ export async function registerRoutes(
 
   // ==================== STOCK SYNC: PULL STOCKS FROM MARKETPLACES ====================
 
-  // POST /api/inventory/pull-marketplace-stocks — full-scan: тянет ВСЕ остатки с МП, матчит по SKU
-  app.post("/api/inventory/pull-marketplace-stocks", isAuthenticated, requireRole("owner"), async (req, res) => {
+  // Хранилище фоновых задач синхронизации (in-memory)
+  const syncJobs = new Map<string, { status: "running" | "done" | "error"; result?: any }>();
+
+  async function runPullStocksJob(orgId: string, force: boolean, jobId: string) {
     try {
-      const orgId = getOrgId(req);
       const { createAdapter } = await import("./adapters/factory");
 
-      // 1. Все товары организации: sku/barcode → productId
       const allProds = await db.execute(sql`
         SELECT id, sku, barcode FROM products WHERE organization_id = ${orgId}
       `);
@@ -8433,7 +8433,6 @@ export async function registerRoutes(
         if (p.barcode && p.barcode !== p.sku) skuToProductId.set(String(p.barcode), p.id as number);
       }
 
-      // 2. Активные магазины (кроме WB — там nmId, не SKU)
       const activeStores = await db.execute(sql`
         SELECT s.id, s.name, s.marketplace, s.api_key, s.client_id, s.warehouse_id, s.company_id
         FROM stores s JOIN companies c ON s.company_id = c.id
@@ -8480,8 +8479,6 @@ export async function registerRoutes(
         }
       }
 
-      // 3. Обновить: force=true перезаписывает в обе стороны, иначе только МП > CRM
-      const force = req.query.force === "true" || req.body?.force === true;
       let updated = 0;
       for (const [productId, stock] of stockMap.entries()) {
         const r = await db.execute(sql`
@@ -8497,12 +8494,34 @@ export async function registerRoutes(
         if ((r as any).rowCount > 0) updated++;
       }
 
-      console.log(`[pull-stocks] Обновлено ${updated} товаров`);
-      res.json({ ok: true, updated, stores: storeResults });
+      console.log(`[pull-stocks] job=${jobId} Обновлено ${updated} товаров`);
+      syncJobs.set(jobId, { status: "done", result: { ok: true, updated, stores: storeResults } });
+    } catch (e: any) {
+      console.error(`[pull-stocks] job=${jobId}`, e.message);
+      syncJobs.set(jobId, { status: "error", result: { error: e.message } });
+    }
+  }
+
+  // POST /api/inventory/pull-marketplace-stocks — запускает фоновую задачу и сразу возвращает jobId
+  app.post("/api/inventory/pull-marketplace-stocks", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const force = req.query.force === "true" || req.body?.force === true;
+      const jobId = `${orgId}-${Date.now()}`;
+      syncJobs.set(jobId, { status: "running" });
+      runPullStocksJob(orgId, force, jobId); // fire and forget
+      res.json({ ok: true, jobId, running: true });
     } catch (e: any) {
       console.error("[pull-marketplace-stocks]", e.message);
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // GET /api/inventory/sync-job/:jobId — статус фоновой задачи
+  app.get("/api/inventory/sync-job/:jobId", isAuthenticated, (req, res) => {
+    const job = syncJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    res.json(job);
   });
 
   // POST /api/inventory/create-all-links — создать links для всех товаров без привязки
