@@ -8480,7 +8480,8 @@ export async function registerRoutes(
         }
       }
 
-      // 3. Обновить только там где МП > CRM
+      // 3. Обновить: force=true перезаписывает в обе стороны, иначе только МП > CRM
+      const force = req.query.force === "true" || req.body?.force === true;
       let updated = 0;
       for (const [productId, stock] of stockMap.entries()) {
         const r = await db.execute(sql`
@@ -8491,7 +8492,7 @@ export async function registerRoutes(
             available_quantity = ${stock},
             updated_at = NOW()
           WHERE id = ${productId}
-            AND (central_stock IS NULL OR central_stock < ${stock})
+            ${force ? sql`` : sql`AND (central_stock IS NULL OR central_stock < ${stock})`}
         `);
         if ((r as any).rowCount > 0) updated++;
       }

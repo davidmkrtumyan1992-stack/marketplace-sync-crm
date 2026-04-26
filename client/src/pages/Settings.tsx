@@ -983,10 +983,10 @@ function PullMarketplaceStocksCard() {
     with_links_and_stock: string; with_links_no_stock: string;
   }>({ queryKey: ["/api/inventory/link-stats"] });
 
-  const handlePull = async () => {
+  const handlePull = async (force = false) => {
     setIsPulling(true);
     try {
-      const res = await apiRequest("POST", "/api/inventory/pull-marketplace-stocks");
+      const res = await apiRequest("POST", `/api/inventory/pull-marketplace-stocks${force ? "?force=true" : ""}`);
       const data = await res.json();
       setLastResult(data);
       if (data.ok) {
@@ -1067,9 +1067,13 @@ function PullMarketplaceStocksCard() {
           </div>
         )}
         <div className="flex flex-wrap gap-3">
-          <Button onClick={handlePull} disabled={isPulling} className="gap-2">
+          <Button onClick={() => handlePull(false)} disabled={isPulling} className="gap-2">
             {isPulling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
             {isPulling ? "Импорт..." : "Импортировать остатки с маркетплейсов"}
+          </Button>
+          <Button onClick={() => handlePull(true)} disabled={isPulling} variant="secondary" className="gap-2">
+            {isPulling ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            Синхронизировать точно с маркетплейсами
           </Button>
           <Button onClick={handleCreateLinks} disabled={isCreatingLinks} variant="outline" className="gap-2">
             {isCreatingLinks ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
