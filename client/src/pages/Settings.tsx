@@ -978,6 +978,11 @@ function PullMarketplaceStocksCard() {
   const [isCreatingLinks, setIsCreatingLinks] = useState(false);
   const [linkResult, setLinkResult] = useState<{ total: number; created: number } | null>(null);
 
+  const { data: stats, refetch: refetchStats } = useQuery<{
+    total: string; with_links: string; without_links: string;
+    with_links_and_stock: string; with_links_no_stock: string;
+  }>({ queryKey: ["/api/inventory/link-stats"] });
+
   const handlePull = async () => {
     setIsPulling(true);
     try {
@@ -986,6 +991,7 @@ function PullMarketplaceStocksCard() {
       setLastResult(data);
       if (data.ok) {
         queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+        refetchStats();
         const storesSummary = data.stores
           .filter((s: any) => s.matched > 0)
           .map((s: any) => `${s.store}: ${s.matched}`)
@@ -1012,6 +1018,7 @@ function PullMarketplaceStocksCard() {
       setLinkResult(data);
       if (data.ok) {
         queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+        refetchStats();
         toast({
           title: "Связи созданы",
           description: `Найдено ${data.total} товаров без связей, создано для ${data.created}`,
@@ -1039,6 +1046,26 @@ function PullMarketplaceStocksCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {stats && (
+          <div className="grid grid-cols-2 gap-3 text-sm p-3 rounded-lg bg-muted/50">
+            <div>
+              <p className="text-muted-foreground">Всего товаров</p>
+              <p className="text-xl font-semibold">{stats.total}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Имеют связи</p>
+              <p className="text-xl font-semibold text-green-500">{stats.with_links}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Без связей</p>
+              <p className="text-xl font-semibold text-destructive">{stats.without_links}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Со связями и остатком</p>
+              <p className="text-xl font-semibold">{stats.with_links_and_stock}</p>
+            </div>
+          </div>
+        )}
         <div className="flex flex-wrap gap-3">
           <Button onClick={handlePull} disabled={isPulling} className="gap-2">
             {isPulling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}

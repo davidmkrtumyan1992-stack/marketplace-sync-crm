@@ -8516,6 +8516,28 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/inventory/link-stats — статистика связей и остатков
+  app.get("/api/inventory/link-stats", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const result = await db.execute(sql`
+        SELECT
+          COUNT(DISTINCT p.id) as total,
+          COUNT(DISTINCT p.id) FILTER (WHERE pml.id IS NOT NULL) as with_links,
+          COUNT(DISTINCT p.id) FILTER (WHERE pml.id IS NULL) as without_links,
+          COUNT(DISTINCT p.id) FILTER (WHERE pml.id IS NOT NULL AND p.central_stock > 0) as with_links_and_stock,
+          COUNT(DISTINCT p.id) FILTER (WHERE pml.id IS NOT NULL AND (p.central_stock IS NULL OR p.central_stock = 0)) as with_links_no_stock
+        FROM products p
+        LEFT JOIN product_marketplace_links pml
+          ON pml.product_id = p.id AND pml.is_active = true
+        WHERE p.organization_id = ${orgId}
+      `);
+      res.json((result as any).rows[0]);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ==================== STOCK SYNC: IMPORT SINGLE OFFER ====================
 
   // Импорт одного оффера с маркетплейса в CRM + создание связи
