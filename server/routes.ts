@@ -742,6 +742,28 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/inventory/fix-null-links — исправить ссылки с external_sku IS NULL
+  app.post("/api/inventory/fix-null-links", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const result = await db.execute(sql`
+        UPDATE product_marketplace_links pml
+        SET external_sku = p.sku,
+            is_active = true
+        FROM products p
+        WHERE pml.product_id = p.id
+          AND pml.organization_id = ${orgId}
+          AND pml.external_sku IS NULL
+          AND p.sku IS NOT NULL
+      `);
+      const fixed = (result as any).rowCount || 0;
+      console.log(`[fix-null-links] org=${orgId}: исправлено ${fixed} ссылок`);
+      res.json({ ok: true, fixed });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // GET /api/debug/product-sync/:sku — диагностика связей и синхронизации по SKU
   app.get("/api/debug/product-sync/:sku", isAuthenticated, requireRole("owner"), async (req, res) => {
     try {

@@ -353,7 +353,10 @@ export class InventorySyncEngine {
         await db.execute(sql`
           INSERT INTO product_marketplace_links (product_id, store_id, external_sku, is_active, organization_id)
           VALUES (${product.id}, ${(row as any).id}, ${externalSku}, true, ${product.organizationId})
-          ON CONFLICT DO NOTHING
+          ON CONFLICT (product_id, store_id) DO UPDATE
+            SET external_sku = EXCLUDED.external_sku,
+                is_active = true
+            WHERE product_marketplace_links.external_sku IS NULL
         `);
       }
       console.log(`[auto-link] product ${product.id} sku=${externalSku}: создано ссылок для ${(orgStores as any).rows.length} магазинов`);
