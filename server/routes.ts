@@ -742,6 +742,43 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/debug/product-sync/:sku — диагностика связей и синхронизации по SKU
+  app.get("/api/debug/product-sync/:sku", isAuthenticated, requireRole("owner"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const sku = req.params.sku;
+
+      // Найти товар по SKU или barcode
+      const productResult = await db.execute(sql`
+        SELECT id, name, sku, barcode, central_stock FROM products
+        WHERE organization_id = ${orgId} AND (sku = ${sku} OR barcode = ${sku})
+        LIMIT 1
+      `);
+      const product = (productResult as any).rows[0];
+      if (!product) return res.json({ error: `Товар с SKU/barcode ${sku} не найден в CRM` });
+
+      // Связи для этого товара
+      const linksResult = await db.execute(sql`
+        SELECT pml.id, pml.external_sku, pml.is_active, s.name as store_name, s.marketplace, s.id as store_id
+        FROM product_marketplace_links pml
+        JOIN stores s ON s.id = pml.store_id
+        WHERE pml.product_id = ${product.id}
+        ORDER BY s.marketplace, s.name
+      `);
+
+      // Запустить реальный пуш и собрать результаты
+      const syncResults = await inventorySyncEngine.syncProductToAllStores(product.id);
+
+      res.json({
+        product: { id: product.id, name: product.name, sku: product.sku, barcode: product.barcode, centralStock: product.central_stock },
+        links: (linksResult as any).rows,
+        syncResults,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // POST /api/admin/migrate-product-links — миграция ozonId в product_marketplace_links
   app.post("/api/admin/migrate-product-links", isAuthenticated, requireRole("owner"), async (req, res) => {
     try {
