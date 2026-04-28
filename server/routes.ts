@@ -6,7 +6,7 @@ import { inventorySyncEngine } from "./inventory-sync";
 import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, fixWbPhotos, syncProductToOzon, syncProductToWb } from "./marketplace-import";
 import { api } from "@shared/routes";
 import { marketplaceSettings as marketplaceSettingsTable, products as productsTable, orders as ordersTable, orderItems as orderItemsTable, productMarketplaceLinks, wbSupplies as wbSuppliesTable } from "@shared/schema";
-import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { setupAuth, isAuthenticated } from "./auth";
 import { db } from "./db";
 import { eq, and, sql, inArray, gte, lte, lt } from "drizzle-orm";
 import { z } from "zod";
@@ -124,12 +124,11 @@ export async function registerRoutes(
 ): Promise<Server> {
   
   await setupAuth(app);
-  registerAuthRoutes(app);
 
-  const getOrgId = (req: any) => req.user?.claims?.sub;
+  const getOrgId = (req: any) => (req.user as any)?.id;
   const getUserInfo = (req: any) => ({
-    userId: req.user?.claims?.sub || "",
-    userName: `${req.user?.claims?.first_name || ""} ${req.user?.claims?.last_name || ""}`.trim() || "System"
+    userId: (req.user as any)?.id || "",
+    userName: `${(req.user as any)?.firstName || ""} ${(req.user as any)?.lastName || ""}`.trim() || "System"
   });
 
   const requireRole = (...allowedRoles: string[]) => {

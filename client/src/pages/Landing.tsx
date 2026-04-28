@@ -27,8 +27,8 @@ export default function Landing() {
 
           <div className="flex flex-col sm:flex-row gap-4 mb-12">
             <Button size="lg" className="h-12 px-8 text-base shadow-xl shadow-blue-500/20" asChild>
-              <a href="/api/login">
-                Начать бесплатно
+              <a href="/login">
+                Войти в систему
                 <ArrowRight className="ml-2 w-4 h-4" />
               </a>
             </Button>

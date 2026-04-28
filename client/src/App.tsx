@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/Landing";
+import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import Products from "@/pages/Products";
 import Orders from "@/pages/Orders";
@@ -137,7 +138,7 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
   }
 
   if (!user) {
-    return <Landing />;
+    return <Login />;
   }
 
   return <Component />;
@@ -152,7 +153,7 @@ function RoleGuard({ component: Component, allowed }: { component: React.Compone
   }
 
   if (!user) {
-    return <Landing />;
+    return <Login />;
   }
 
   if (!allowed) {
@@ -179,6 +180,7 @@ function Router() {
 
   return (
     <Switch>
+      <Route path="/login" component={Login} />
       <Route path="/" component={() => <ProtectedRoute component={Dashboard} />} />
       <Route path="/products" component={() => <RoleGuard component={Products} allowed={canAccessProducts} />} />
       <Route path="/orders" component={() => <RoleGuard component={Orders} allowed={canAccessOrders} />} />
