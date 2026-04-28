@@ -5554,6 +5554,10 @@ export async function registerRoutes(
                   if (existing.ozonStatus !== newStatus || needsStatusCorrection || needsDateUpdate) {
                     await storage.updateOrderOzonStatus(existing.id, newStatus, internalStatus, needsDateUpdate ? ozonCreatedAt : undefined);
                     updated++;
+                    if (internalStatus === 'cancelled' && existing.status !== 'cancelled') {
+                      inventorySyncEngine.processOrderCancellation(existing.id, orgId)
+                        .catch((e: any) => console.error(`[ozon-cancel-restore] order ${existing.id}: ${e.message}`));
+                    }
                   }
                 }
               } else {
@@ -5793,6 +5797,10 @@ export async function registerRoutes(
                       const internalStatus = yandexStatusToInternal(yStatus);
                       await storage.updateOrderYandexStatus(existingOrder.id, yStatus, internalStatus, yCreatedAt, undefined, yShipmentId);
                       updated++;
+                      if (internalStatus === 'cancelled' && existingOrder.status !== 'cancelled') {
+                        inventorySyncEngine.processOrderCancellation(existingOrder.id, orgId)
+                          .catch((e: any) => console.error(`[ym-cancel-restore] order ${existingOrder.id}: ${e.message}`));
+                      }
                     }
                   } else {
                     const items: { productId: number; quantity: number; price: number }[] = [];
@@ -6051,11 +6059,16 @@ export async function registerRoutes(
                   const statusChanged = existingOrder.wbStatus !== wbStatus;
                   const storeMissing = resolvedStoreId && !existingOrder.storeId;
                   if (statusChanged || storeMissing) {
-                    await storage.updateOrderWbStatus(existingOrder.id, wbStatus, wbStatusToInternal(wbStatus), createdAtTs);
+                    const wbNewInternal = wbStatusToInternal(wbStatus);
+                    await storage.updateOrderWbStatus(existingOrder.id, wbStatus, wbNewInternal, createdAtTs);
                     if (storeMissing) {
                       await db.execute(sql`UPDATE orders SET store_id = ${resolvedStoreId}, source_store_name = ${resolvedStoreName} WHERE id = ${existingOrder.id}`);
                     }
                     storeUpdated++;
+                    if (wbNewInternal === 'cancelled' && existingOrder.status !== 'cancelled') {
+                      inventorySyncEngine.processOrderCancellation(existingOrder.id, orgId)
+                        .catch((e: any) => console.error(`[wb-cancel-restore] order ${existingOrder.id}: ${e.message}`));
+                    }
                   }
                 } else {
                   const article = wbOrder.article || wbOrder.supplierArticle || "";

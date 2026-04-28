@@ -180,6 +180,85 @@ export class InventorySyncEngine {
     }
   }
 
+  async processOrderCancellation(orderId: number, organizationId: string): Promise<void> {
+    const deductionLogs = await db.select().from(stockSyncLog)
+      .where(and(eq(stockSyncLog.orderId, orderId), eq(stockSyncLog.action, "order_stock_decrement")));
+
+    if (deductionLogs.length === 0) return;
+
+    const restoreLogs = await db.select().from(stockSyncLog)
+      .where(and(eq(stockSyncLog.orderId, orderId), eq(stockSyncLog.action, "order_stock_restore")));
+
+    if (restoreLogs.length > 0) return;
+
+    for (const log of deductionLogs) {
+      if (!log.productId || !log.quantityChanged) continue;
+
+      const release = await this.acquireLock(log.productId);
+      try {
+        let newCentralStock = 0;
+        let sku = log.sku || "";
+        let syncResults: StoreSyncResult[] = [];
+
+        await db.transaction(async (tx) => {
+          const [product] = await tx.select().from(products)
+            .where(eq(products.id, log.productId!))
+            .for("update");
+
+          if (!product) return;
+
+          const previousStock = product.centralStock || 0;
+          newCentralStock = previousStock + (log.quantityChanged || 0);
+          sku = product.sku;
+
+          await tx.update(products).set({
+            centralStock: newCentralStock,
+            stockQuantity: newCentralStock,
+            stockLocal: newCentralStock,
+            updatedAt: new Date(),
+          }).where(eq(products.id, log.productId!));
+
+          const companyList = await tx.select().from(companies)
+            .where(eq(companies.organizationId, organizationId));
+          const companyIds = companyList.map(c => c.id);
+
+          let allStores: Store[] = [];
+          if (companyIds.length > 0) {
+            allStores = await tx.select().from(stores)
+              .where(inArray(stores.companyId, companyIds));
+          }
+
+          const targetStores = allStores.filter(s => s.isActive && s.id !== log.sourceStoreId);
+          syncResults = await this.broadcastStockUpdate(targetStores, sku, newCentralStock, false);
+
+          await tx.insert(stockSyncLog).values({
+            organizationId,
+            orderId,
+            productId: log.productId,
+            productName: log.productName,
+            sku,
+            sourceStoreId: log.sourceStoreId,
+            sourceStoreName: log.sourceStoreName || "Отмена заказа",
+            action: "order_stock_restore",
+            previousStock,
+            newStock: newCentralStock,
+            quantityChanged: log.quantityChanged,
+            safetyStockTriggered: false,
+            syncResults: syncResults as any,
+            status: syncResults.every(r => r.status === "success") ? "success" : "partial",
+            details: `Отмена заказа #${orderId} → остаток восстановлен: ${previousStock} → ${newCentralStock}`,
+          });
+        });
+
+        console.log(`[cancel-restore] orderId=${orderId} productId=${log.productId} sku=${sku}: ${log.quantityChanged} ед. возвращено, новый остаток=${newCentralStock}`);
+      } catch (e: any) {
+        console.error(`[cancel-restore] orderId=${orderId} productId=${log.productId}: ${e.message}`);
+      } finally {
+        release();
+      }
+    }
+  }
+
   async getSyncSettings(organizationId: string): Promise<InventorySyncSetting | null> {
     const [settings] = await db.select().from(inventorySyncSettings)
       .where(eq(inventorySyncSettings.organizationId, organizationId));

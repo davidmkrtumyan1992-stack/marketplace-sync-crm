@@ -459,16 +459,6 @@ export class DatabaseStorage implements IStorage {
           salePrice: item.salePrice?.toString() || null,
           purchasePrice: product?.purchasePrice?.toString() || null,
         });
-
-        if (product && item.productId) {
-          const newCentralStock = Math.max(0, (product.centralStock || 0) - item.quantity);
-          await tx.update(products).set({
-            centralStock: newCentralStock,
-            stockQuantity: newCentralStock,
-            stockLocal: newCentralStock,
-            updatedAt: new Date()
-          }).where(eq(products.id, item.productId));
-        }
       }
       return order;
     });
