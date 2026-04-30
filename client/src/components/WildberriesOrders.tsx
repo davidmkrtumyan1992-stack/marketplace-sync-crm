@@ -485,7 +485,7 @@ function AddToSupplyDialog({
       return res.json();
     },
     enabled: open,
-    staleTime: 0,
+    staleTime: 30 * 1000,
   });
 
   const openSupplies: any[] = suppliesQuery.data || [];
@@ -1385,8 +1385,8 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
     },
     enabled: isSuppliesTab,
     refetchInterval: 120000,
-    staleTime: 0,
-    refetchOnWindowFocus: true,
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const orders: any[] = ordersQuery.data || [];

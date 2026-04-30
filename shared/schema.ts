@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb, decimal, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, decimal, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -125,6 +125,10 @@ export const orders = pgTable("orders", {
   uniqPostingStore: uniqueIndex("orders_posting_store_unique")
     .on(table.postingNumber, table.storeId)
     .where(sql`posting_number IS NOT NULL`),
+  idxOrgSource: index("idx_orders_org_source").on(table.organizationId, table.source),
+  idxOrgCreatedAt: index("idx_orders_org_created_at").on(table.organizationId, table.createdAt),
+  idxWbSupplyId: index("idx_orders_wb_supply_id").on(table.wbSupplyId),
+  idxWbStatus: index("idx_orders_wb_status").on(table.wbStatus),
 }));
 
 export const orderItems = pgTable("order_items", {
@@ -138,7 +142,9 @@ export const orderItems = pgTable("order_items", {
   originalPrice: decimal("original_price", { precision: 10, scale: 2 }),
   salePrice: decimal("sale_price", { precision: 10, scale: 2 }),
   purchasePrice: decimal("purchase_price", { precision: 10, scale: 2 }),
-});
+}, (table) => ({
+  idxOrderId: index("idx_order_items_order_id").on(table.orderId),
+}));
 
 export const productStoreExclusions = pgTable("product_store_exclusions", {
   id: serial("id").primaryKey(),
@@ -550,4 +556,7 @@ export const wbSupplies = pgTable("wb_supplies", {
   createdAt: timestamp("created_at").defaultNow(),
   closedAt: timestamp("closed_at"),
   wbSyncedAsClosed: boolean("wb_synced_as_closed").default(false),
-});
+}, (table) => ({
+  idxOrgStatus: index("idx_wb_supplies_org_status").on(table.organizationId, table.status),
+  idxOrgClosedAt: index("idx_wb_supplies_org_closed_at").on(table.organizationId, table.closedAt),
+}));

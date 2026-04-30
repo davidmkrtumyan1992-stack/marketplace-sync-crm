@@ -346,34 +346,49 @@ export class DatabaseStorage implements IStorage {
 
   // Orders
   async getOrders(organizationId: string, companyId?: number): Promise<OrderWithDetails[]> {
-    let ordersList;
-    if (companyId) {
-      ordersList = await db.select().from(orders)
-        .where(and(eq(orders.organizationId, organizationId), eq(orders.companyId, companyId)))
-        .orderBy(desc(orders.createdAt));
-    } else {
-      ordersList = await db.select().from(orders)
-        .where(eq(orders.organizationId, organizationId))
-        .orderBy(desc(orders.createdAt));
-    }
-    
-    const detailedOrders: OrderWithDetails[] = [];
-    for (const order of ordersList) {
-      const customer = order.customerId ? await this.getCustomer(order.customerId) : null;
-      const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
-      
-      const itemsWithProducts = await Promise.all(items.map(async (item) => {
-        const product = item.productId ? await this.getProduct(item.productId) : null;
-        return { ...item, product: product || null };
-      }));
+    // 1 запрос — все заказы
+    const ordersList = await db.select().from(orders)
+      .where(companyId
+        ? and(eq(orders.organizationId, organizationId), eq(orders.companyId, companyId))
+        : eq(orders.organizationId, organizationId))
+      .orderBy(desc(orders.createdAt));
 
-      detailedOrders.push({
-        ...order,
-        customer: customer || null,
-        items: itemsWithProducts
-      });
+    if (ordersList.length === 0) return [];
+
+    // 2 запрос — все order_items батчем вместо N запросов
+    const orderIds = ordersList.map(o => o.id);
+    const allItems = await db.select().from(orderItems)
+      .where(inArray(orderItems.orderId, orderIds));
+
+    // 3 запрос — все products батчем
+    const productIds = [...new Set(allItems.filter(i => i.productId).map(i => i.productId!))];
+    const allProducts = productIds.length > 0
+      ? await db.select().from(products).where(inArray(products.id, productIds))
+      : [];
+    const productMap = new Map(allProducts.map(p => [p.id, p]));
+
+    // 4 запрос — все customers батчем
+    const customerIds = [...new Set(ordersList.filter(o => o.customerId).map(o => o.customerId!))];
+    const allCustomers = customerIds.length > 0
+      ? await db.select().from(customers).where(inArray(customers.id, customerIds))
+      : [];
+    const customerMap = new Map(allCustomers.map(c => [c.id, c]));
+
+    // Группируем items по orderId в памяти
+    const itemsByOrderId = new Map<number, typeof allItems>();
+    for (const item of allItems) {
+      if (!itemsByOrderId.has(item.orderId)) itemsByOrderId.set(item.orderId, []);
+      itemsByOrderId.get(item.orderId)!.push(item);
     }
-    return detailedOrders;
+
+    return ordersList.map(order => ({
+      ...order,
+      customer: order.customerId ? (customerMap.get(order.customerId) || null) : null,
+      items: (itemsByOrderId.get(order.id) || []).map(item => ({
+        ...item,
+        product: item.productId ? (productMap.get(item.productId) || null) : null,
+      })),
+    })) as OrderWithDetails[];
   }
 
   async getOrder(id: number): Promise<OrderWithDetails | undefined> {
