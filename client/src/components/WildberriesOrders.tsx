@@ -1356,6 +1356,8 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
       return res.json();
     },
     refetchInterval: 120000,
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const ordersQuery = useQuery<any[]>({
@@ -1369,7 +1371,9 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
       return res.json();
     },
     enabled: isOrdersTab,
-    refetchInterval: 60000,
+    refetchInterval: 120000,
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const suppliesQuery = useQuery<any[]>({
