@@ -10,8 +10,8 @@ export function useKPI() {
       if (!res.ok) throw new Error("Failed to fetch KPI");
       return res.json();
     },
-    staleTime: 0,
-    refetchOnMount: "always",
+    staleTime: 2 * 60 * 1000,
+    refetchOnMount: true,
     refetchInterval: 300000,
   });
 }

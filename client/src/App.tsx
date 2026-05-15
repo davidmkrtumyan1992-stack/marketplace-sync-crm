@@ -58,7 +58,8 @@ function GlobalDataPreloader({ children }: { children: React.ReactNode }) {
   const [syncTriggered, setSyncTriggered] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
 
-  const queries = useQueries({
+  // Prefetch data in background — не блокируем UI
+  useQueries({
     queries: [
       {
         queryKey: ["/api/orders"],
@@ -78,9 +79,6 @@ function GlobalDataPreloader({ children }: { children: React.ReactNode }) {
     ],
   });
 
-  const [ordersQuery, storesQuery, productsQuery] = queries;
-  const allQueriesSuccess = user ? ordersQuery.isSuccess && storesQuery.isSuccess && productsQuery.isSuccess : true;
-
   useEffect(() => {
     if (user && !syncTriggered) {
       setSyncTriggered(true);
@@ -88,43 +86,16 @@ function GlobalDataPreloader({ children }: { children: React.ReactNode }) {
     }
   }, [user, syncTriggered]);
 
+  // Показываем splash только пока проверяется auth — данные грузятся в фоне
   useEffect(() => {
-    if (!authLoading && allQueriesSuccess && showSplash) {
-      const timer = setTimeout(() => setShowSplash(false), 600);
+    if (!authLoading && showSplash) {
+      const timer = setTimeout(() => setShowSplash(false), 400);
       return () => clearTimeout(timer);
     }
-  }, [authLoading, allQueriesSuccess, showSplash]);
+  }, [authLoading, showSplash]);
 
-  let progress = 0;
-  let label = "Подключение к серверу...";
-
-  if (authLoading) {
-    progress = 30;
-    label = "Подключение к серверу...";
-  } else if (!user) {
-    progress = 100;
-    label = "Готово";
-  } else {
-    const anyLoading = ordersQuery.isLoading || storesQuery.isLoading || productsQuery.isLoading;
-    const anyFetching = ordersQuery.isFetching || storesQuery.isFetching || productsQuery.isFetching;
-
-    if (anyLoading) {
-      progress = 30;
-      label = "Загрузка данных...";
-    } else if (anyFetching) {
-      progress = 70;
-      label = "Обновление данных...";
-    } else if (allQueriesSuccess) {
-      progress = 100;
-      label = "Подготовка интерфейса...";
-    } else {
-      progress = 30;
-      label = "Подключение к серверу...";
-    }
-  }
-
-  if (showSplash && (authLoading || (user && !allQueriesSuccess))) {
-    return <SplashScreen progress={progress} label={label} />;
+  if (showSplash && authLoading) {
+    return <SplashScreen progress={authLoading ? 50 : 100} label="Подключение к серверу..." />;
   }
 
   return <>{children}</>;

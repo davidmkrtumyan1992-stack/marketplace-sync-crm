@@ -156,7 +156,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </header>
 
         {isMobileMenuOpen && (
-          <div className="lg:hidden fixed inset-0 z-40 bg-sidebar/98 backdrop-blur-sm pt-14 flex flex-col">
+          <div className="lg:hidden fixed inset-0 z-40 bg-sidebar pt-14 flex flex-col">
             <div className="flex-1 overflow-y-auto px-4 py-4">
               <nav className="space-y-1">
                 {navItems.map((item) => (
