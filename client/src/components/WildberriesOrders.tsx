@@ -1520,36 +1520,38 @@ export default function WildberriesOrders({ storeId }: { storeId?: number | null
   return (
     <div className="space-y-4" data-testid="wb-orders-container">
       {/* Вкладки */}
-      <div className="flex gap-1 p-1 bg-muted/50 rounded-xl border" data-testid="wb-fbs-tabs">
-        {WB_TABS.map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.key;
-          const count = getTabCount(tab.key);
-          return (
-            <button
-              key={tab.key}
-              onClick={() => handleTabChange(tab.key)}
-              className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5 ${
-                isActive ? "text-white shadow-sm" : "hover:bg-muted text-muted-foreground"
-              }`}
-              style={isActive ? { backgroundColor: WB_COLOR } : {}}
-              data-testid={`tab-wb-${tab.key}`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              {tab.label}
-              {count !== undefined && count > 0 && (
-                <span
-                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
-                    isActive ? "bg-white/25 text-white" : "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300"
-                  }`}
-                  data-testid={`badge-tab-count-${tab.key}`}
-                >
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
+      <div className="overflow-x-auto -mx-1 px-1 scrollbar-hide" data-testid="wb-fbs-tabs">
+        <div className="flex gap-1 p-1 bg-muted/50 rounded-xl border min-w-max">
+          {WB_TABS.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.key;
+            const count = getTabCount(tab.key);
+            return (
+              <button
+                key={tab.key}
+                onClick={() => handleTabChange(tab.key)}
+                className={`whitespace-nowrap flex-none px-3 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5 ${
+                  isActive ? "text-white shadow-sm" : "hover:bg-muted text-muted-foreground"
+                }`}
+                style={isActive ? { backgroundColor: WB_COLOR } : {}}
+                data-testid={`tab-wb-${tab.key}`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {tab.label}
+                {count !== undefined && count > 0 && (
+                  <span
+                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
+                      isActive ? "bg-white/25 text-white" : "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300"
+                    }`}
+                    data-testid={`badge-tab-count-${tab.key}`}
+                  >
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* ===== ВКЛАДКА НОВЫЕ ===== */}

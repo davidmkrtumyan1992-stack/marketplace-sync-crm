@@ -127,71 +127,121 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <span>Работает в демо-режиме</span>
           </div>
         )}
-        <header className="h-16 bg-card/80 backdrop-blur-xl border-b border-border/50 flex items-center justify-between px-4 md:px-8 sticky top-0 z-50">
+        <header className="h-14 bg-card/90 backdrop-blur-xl border-b border-border/50 flex items-center justify-between px-4 md:px-8 sticky top-0 z-50">
           <div className="lg:hidden">
-            <span className="font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+            <span className="font-bold text-lg bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
               CloudERP
             </span>
           </div>
-          
+
           <div className="hidden lg:flex items-center gap-2 text-sm text-muted-foreground">
             <span>Добро пожаловать,</span>
             <span className="font-semibold text-foreground">{user?.firstName}</span>
           </div>
-          
+
           <div className="flex items-center gap-2">
             <ThemeToggle />
             <div className="lg:hidden">
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} 
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
                 data-testid="button-mobile-menu"
                 className="rounded-xl"
               >
-                {isMobileMenuOpen ? <X /> : <Menu />}
+                {isMobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
               </Button>
             </div>
           </div>
         </header>
 
         {isMobileMenuOpen && (
-          <div className="lg:hidden fixed inset-0 z-40 bg-sidebar pt-16 px-4 pb-4">
-            <nav className="space-y-2 mt-4">
-              {navItems.map((item) => (
-                <Link 
-                  key={item.href} 
-                  href={item.href} 
-                  onClick={() => setIsMobileMenuOpen(false)} 
-                  className={`
-                    flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium
-                    ${location === item.href 
-                      ? "bg-gradient-to-r from-primary to-accent text-primary-foreground" 
-                      : "text-sidebar-foreground/70"}
-                  `}
-                >
-                  <item.icon size={20} />
-                  {item.label}
-                </Link>
-              ))}
-              <button 
-                onClick={() => logout()} 
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium text-destructive"
+          <div className="lg:hidden fixed inset-0 z-40 bg-sidebar/98 backdrop-blur-sm pt-14 flex flex-col">
+            <div className="flex-1 overflow-y-auto px-4 py-4">
+              <nav className="space-y-1">
+                {navItems.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className={`
+                      flex items-center gap-4 px-4 py-3.5 rounded-2xl text-base font-medium transition-all
+                      ${location === item.href
+                        ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-lg"
+                        : "text-sidebar-foreground/70 active:bg-sidebar-foreground/10"}
+                    `}
+                  >
+                    <item.icon size={22} />
+                    {item.label}
+                  </Link>
+                ))}
+              </nav>
+            </div>
+            <div className="px-4 pb-8 border-t border-sidebar-foreground/10 pt-4">
+              <div className="flex items-center gap-3 px-4 py-3 mb-3">
+                <Avatar className="h-10 w-10 ring-2 ring-primary/30">
+                  <AvatarImage src={user?.profileImageUrl || undefined} />
+                  <AvatarFallback className="bg-gradient-to-br from-primary to-accent text-primary-foreground font-semibold">
+                    {user?.firstName?.charAt(0) || "П"}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate text-sidebar-foreground">{user?.firstName} {user?.lastName}</p>
+                  <p className="text-xs text-sidebar-foreground/50">{ROLE_LABELS[role] || role}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => logout()}
+                className="w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-base font-medium text-destructive active:bg-destructive/10"
                 data-testid="button-mobile-logout"
               >
-                <LogOut size={20} />
+                <LogOut size={22} />
                 Выйти
               </button>
-            </nav>
-            
+            </div>
           </div>
         )}
 
-        <main className="flex-1 p-4 md:p-8 overflow-y-auto premium-gradient-subtle">
+        <main className="flex-1 p-4 md:p-8 overflow-y-auto premium-gradient-subtle pb-20 lg:pb-8">
           <div className="max-w-7xl mx-auto">
             {children}
           </div>
         </main>
+
+        {/* Mobile Bottom Navigation */}
+        <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/95 backdrop-blur-xl border-t border-border/50 flex items-stretch" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+          {[
+            { href: "/", label: "Главная", icon: LayoutDashboard, visible: true },
+            { href: "/orders", label: "Заказы", icon: ShoppingCart, visible: canAccessOrders },
+            { href: "/products", label: "Товары", icon: Package, visible: canAccessProducts },
+            { href: "/reports", label: "Отчёты", icon: FileBarChart, visible: canAccessReports },
+          ].filter(i => i.visible).map((item) => {
+            const Icon = item.icon;
+            const isActive = location === item.href;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] transition-colors ${
+                  isActive ? "text-primary" : "text-muted-foreground"
+                }`}
+              >
+                <Icon size={22} strokeWidth={isActive ? 2.5 : 1.8} />
+                <span className={`text-[10px] font-medium ${isActive ? "text-primary" : ""}`}>{item.label}</span>
+                {isActive && <span className="absolute bottom-0 w-8 h-0.5 bg-primary rounded-full" />}
+              </Link>
+            );
+          })}
+          <button
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] transition-colors ${
+              isMobileMenuOpen ? "text-primary" : "text-muted-foreground"
+            }`}
+          >
+            <Menu size={22} strokeWidth={isMobileMenuOpen ? 2.5 : 1.8} />
+            <span className="text-[10px] font-medium">Ещё</span>
+          </button>
+        </nav>
       </div>
     </div>
   );
