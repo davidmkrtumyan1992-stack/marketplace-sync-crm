@@ -16,7 +16,7 @@ import fs from "fs";
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import { createRequire } from "module";
-const require = createRequire(import.meta.url);
+const require = createRequire(typeof __filename !== "undefined" ? __filename : import.meta.url);
 const pdfParse = require("pdf-parse");
 
 function wbFetchJson(url: string, headers: Record<string, string>, timeoutMs = 25000): Promise<{ status: number; json: any }> {
