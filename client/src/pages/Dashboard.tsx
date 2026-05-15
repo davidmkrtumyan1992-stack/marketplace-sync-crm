@@ -781,8 +781,8 @@ export default function Dashboard() {
                 </div>
 
                 {salesResponse && (
-                  <div className="grid grid-cols-3 gap-4 mt-5" data-testid="section-revenue-kpi">
-                    <div className="rounded-xl border p-4 flex flex-col gap-1" data-testid="kpi-gross-revenue">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5" data-testid="section-revenue-kpi">
+                    <div className="rounded-xl border p-3 flex flex-col gap-1" data-testid="kpi-gross-revenue">
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wide">
                         <span style={{ color: "#3b82f6" }}>●</span>
                         <span>Заказано</span>
@@ -790,21 +790,21 @@ export default function Dashboard() {
                           как в Ozon
                         </span>
                       </div>
-                      <div className="text-xl font-bold tabular-nums">{formatCurrency(salesResponse.grossRevenue ?? salesResponse.totalRevenue)}</div>
+                      <div className="text-lg font-bold tabular-nums">{formatCurrency(salesResponse.grossRevenue ?? salesResponse.totalRevenue)}</div>
                     </div>
-                    <div className="rounded-xl border p-4 flex flex-col gap-1" data-testid="kpi-net-revenue">
+                    <div className="rounded-xl border p-3 flex flex-col gap-1" data-testid="kpi-net-revenue">
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wide" title="Реальная выручка: заказы без учёта отменённых и возвратов">
                         <span style={{ color: "#22c55e" }}>●</span>
                         <span>К получению</span>
                       </div>
-                      <div className="text-xl font-bold tabular-nums">{formatCurrency(salesResponse.netRevenue ?? salesResponse.totalRevenue)}</div>
+                      <div className="text-lg font-bold tabular-nums">{formatCurrency(salesResponse.netRevenue ?? salesResponse.totalRevenue)}</div>
                     </div>
-                    <div className="rounded-xl border p-4 flex flex-col gap-1" data-testid="kpi-cancelled-revenue">
+                    <div className="rounded-xl border p-3 flex flex-col gap-1" data-testid="kpi-cancelled-revenue">
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wide" title="Выручка по отменённым заказам и возвратам за выбранный период">
                         <span style={{ color: "#ef4444" }}>●</span>
                         <span>Отменено</span>
                       </div>
-                      <div className="text-xl font-bold tabular-nums text-red-500">{formatCurrency(salesResponse.cancelledRevenue ?? 0)}</div>
+                      <div className="text-lg font-bold tabular-nums text-red-500">{formatCurrency(salesResponse.cancelledRevenue ?? 0)}</div>
                       {(salesResponse.cancellationRate ?? 0) > 0 && (
                         <div className="text-xs text-muted-foreground">{salesResponse.cancellationRate}% отмен</div>
                       )}
