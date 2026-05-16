@@ -7,39 +7,41 @@
 :root {
   --font-sans: 'Inter', sans-serif;
 
-  --background: 180 15% 97%;
-  --foreground: 180 25% 10%;
+  /* Neutral background: light gray page, white cards — clearly distinct */
+  --background: 220 14% 95%;
+  --foreground: 220 20% 12%;
 
-  --card: 180 20% 99%;
-  --card-foreground: 180 25% 10%;
-  --card-border: 180 15% 90%;
+  --card: 0 0% 100%;
+  --card-foreground: 220 20% 12%;
+  --card-border: 220 13% 88%;
 
-  --popover: 180 20% 99%;
-  --popover-foreground: 180 25% 10%;
-  --popover-border: 180 15% 90%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 220 20% 12%;
+  --popover-border: 220 13% 88%;
 
+  /* Keep teal/green accent unchanged */
   --primary: 175 98% 41%;
-  --primary-foreground: 180 30% 98%;
+  --primary-foreground: 0 0% 100%;
   --primary-border: hsl(175 90% 35%);
 
-  --secondary: 175 15% 92%;
-  --secondary-foreground: 180 25% 20%;
-  --secondary-border: hsl(175 10% 85%);
+  --secondary: 220 12% 92%;
+  --secondary-foreground: 220 20% 20%;
+  --secondary-border: hsl(220 10% 84%);
 
-  --muted: 175 12% 90%;
-  --muted-foreground: 180 15% 40%;
-  --muted-border: hsl(175 10% 82%);
+  --muted: 220 12% 92%;
+  --muted-foreground: 220 10% 45%;
+  --muted-border: hsl(220 10% 84%);
 
   --accent: 175 95% 45%;
-  --accent-foreground: 180 30% 98%;
+  --accent-foreground: 0 0% 100%;
   --accent-border: hsl(175 85% 38%);
 
   --destructive: 0 84% 60%;
   --destructive-foreground: 0 0% 100%;
   --destructive-border: hsl(0 70% 50%);
 
-  --border: 175 15% 88%;
-  --input: 175 15% 92%;
+  --border: 220 13% 88%;
+  --input: 220 12% 92%;
   --ring: 175 95% 40%;
 
   --sidebar: 180 50% 10%;
