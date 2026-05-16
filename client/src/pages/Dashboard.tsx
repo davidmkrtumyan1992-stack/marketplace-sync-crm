@@ -221,117 +221,107 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+          {/* Card 1: Общий остаток */}
           <Card className="kpi-card" data-testid="card-total-stock">
-            <CardContent className="pt-6">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                    Общий остаток
-                  </p>
-                  <p className="text-3xl font-extrabold tracking-tight">
-                    {kpiLoading ? "..." : formatNumber(kpi?.totalStock || 0)}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-2">шт. по всем складам</p>
-                  {!kpiLoading && kpi?.stockDistribution && (
-                    <div className="flex flex-wrap gap-2 mt-3">
-                      {kpi.stockDistribution.local > 0 && (
-                        <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full text-muted-foreground">
-                          Склад: {formatNumber(kpi.stockDistribution.local)}
-                        </span>
-                      )}
-                      {kpi.stockDistribution.ozon > 0 && (
-                        <span className="text-[11px] bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-full">
-                          Ozon: {formatNumber(kpi.stockDistribution.ozon)}
-                        </span>
-                      )}
-                      {kpi.stockDistribution.wb > 0 && (
-                        <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ background: "rgba(118,49,255,0.1)", color: "#7631ff" }}>
-                          WB: {formatNumber(kpi.stockDistribution.wb)}
-                        </span>
-                      )}
-                      {kpi.stockDistribution.yandex > 0 && (
-                        <span className="text-[11px] bg-yellow-50 dark:bg-yellow-950 text-yellow-600 dark:text-yellow-400 px-2 py-0.5 rounded-full">
-                          ЯМ: {formatNumber(kpi.stockDistribution.yandex)}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-                <div className="icon-box icon-box-lg shrink-0">
+            <CardContent className="px-4 py-5">
+              <div className="flex flex-col items-center text-center gap-2">
+                <div className="icon-box icon-box-lg">
                   <Package className="w-7 h-7 text-primary" />
                 </div>
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  Общий остаток
+                </p>
+                <p className="text-2xl font-extrabold tracking-tight leading-tight">
+                  {kpiLoading ? "..." : formatNumber(kpi?.totalStock || 0)}
+                </p>
+                <p className="text-[11px] text-muted-foreground">шт. по всем складам</p>
+                {!kpiLoading && kpi?.stockDistribution && (
+                  <div className="flex flex-wrap justify-center gap-1 mt-1">
+                    {kpi.stockDistribution.local > 0 && (
+                      <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded-full text-muted-foreground">
+                        Склад: {formatNumber(kpi.stockDistribution.local)}
+                      </span>
+                    )}
+                    {kpi.stockDistribution.ozon > 0 && (
+                      <span className="text-[10px] bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded-full">
+                        Ozon: {formatNumber(kpi.stockDistribution.ozon)}
+                      </span>
+                    )}
+                    {kpi.stockDistribution.wb > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: "rgba(118,49,255,0.1)", color: "#7631ff" }}>
+                        WB: {formatNumber(kpi.stockDistribution.wb)}
+                      </span>
+                    )}
+                    {kpi.stockDistribution.yandex > 0 && (
+                      <span className="text-[10px] bg-yellow-50 dark:bg-yellow-950 text-yellow-600 dark:text-yellow-400 px-1.5 py-0.5 rounded-full">
+                        ЯМ: {formatNumber(kpi.stockDistribution.yandex)}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
 
+          {/* Card 2: Капитализация */}
           {canSeePnL && (
             <Card className="kpi-card" data-testid="card-capitalization">
-              <CardContent className="pt-6">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                      Капитализация
-                    </p>
-                    <p className="text-3xl font-extrabold tracking-tight">
-                      {kpiLoading ? "..." : formatCurrency(kpi?.capitalization || 0)}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-3">по закупочной цене</p>
-                  </div>
-                  <div className="icon-box icon-box-lg shrink-0">
+              <CardContent className="px-4 py-5">
+                <div className="flex flex-col items-center text-center gap-2">
+                  <div className="icon-box icon-box-lg">
                     <Coins className="w-7 h-7 text-primary" />
                   </div>
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                    Капитализация
+                  </p>
+                  <p className="text-2xl font-extrabold tracking-tight leading-tight">
+                    {kpiLoading ? "..." : formatCurrency(kpi?.capitalization || 0)}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">по закупочной цене</p>
                 </div>
               </CardContent>
             </Card>
           )}
 
+          {/* Card 3: Ожидаемая выручка */}
           <Card className="kpi-card" data-testid="card-revenue">
-            <CardContent className="pt-6">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                    Ожидаемая выручка
-                  </p>
-                  <p className="text-3xl font-extrabold tracking-tight truncate">
-                    {kpiLoading ? "..." : formatCurrency(kpi?.expectedRevenue || 0)}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-3">по продажной цене</p>
-                </div>
-                <div className="icon-box icon-box-lg shrink-0">
+            <CardContent className="px-4 py-5">
+              <div className="flex flex-col items-center text-center gap-2">
+                <div className="icon-box icon-box-lg">
                   <TrendingUp className="w-7 h-7 text-primary" />
                 </div>
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  Ожидаемая выручка
+                </p>
+                <p className="text-2xl font-extrabold tracking-tight leading-tight">
+                  {kpiLoading ? "..." : formatCurrency(kpi?.expectedRevenue || 0)}
+                </p>
+                <p className="text-[11px] text-muted-foreground">по продажной цене</p>
               </div>
             </CardContent>
           </Card>
 
+          {/* Card 4: Чистая прибыль */}
           {canSeePnL && (
             <Card className="stat-card-premium" data-testid="card-profit">
-              <CardContent className="pt-6">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <p
-                      className="text-sm font-medium uppercase tracking-wide"
-                      style={{ color: "hsl(175 30% 70%)" }}
-                    >
-                      Чистая прибыль (30 дней)
-                    </p>
-                    <p className="stat-number mt-2 truncate whitespace-nowrap">
-                      {kpiLoading ? "..." : formatCurrency(kpi?.realProfit || 0)}
-                    </p>
-                    <p className="text-xs mt-3" style={{ color: "hsl(175 20% 55%)" }}>
-                      по фактическим продажам
-                    </p>
-                  </div>
+              <CardContent className="px-4 py-5">
+                <div className="flex flex-col items-center text-center gap-2">
                   <div
-                    className="icon-box icon-box-lg shrink-0"
-                    style={{
-                      background:
-                        "linear-gradient(135deg, hsl(175 98% 41% / 0.3) 0%, hsl(175 85% 35% / 0.2) 100%)",
-                    }}
+                    className="icon-box icon-box-lg"
+                    style={{ background: "linear-gradient(135deg, hsl(175 98% 41% / 0.3) 0%, hsl(175 85% 35% / 0.2) 100%)" }}
                   >
                     <ArrowUpRight className="w-7 h-7 text-primary" />
                   </div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "hsl(175 30% 70%)" }}>
+                    Чистая прибыль (30 дней)
+                  </p>
+                  <p className="text-2xl font-extrabold tracking-tight leading-tight">
+                    {kpiLoading ? "..." : formatCurrency(kpi?.realProfit || 0)}
+                  </p>
+                  <p className="text-[11px]" style={{ color: "hsl(175 20% 55%)" }}>
+                    по фактическим продажам
+                  </p>
                 </div>
               </CardContent>
             </Card>
