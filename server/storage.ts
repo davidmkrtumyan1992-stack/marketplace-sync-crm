@@ -740,6 +740,9 @@ export class DatabaseStorage implements IStorage {
 
     const taxRate = Number(taxSetting?.taxRate || 7) / 100;
     const defaultCommission = Number(taxSetting?.defaultMarketplaceCommission || 15) / 100;
+    const ozonCommission = Number(taxSetting?.ozonCommission || taxSetting?.defaultMarketplaceCommission || 15) / 100;
+    const wbCommission = Number(taxSetting?.wbCommission || taxSetting?.defaultMarketplaceCommission || 15) / 100;
+    const yandexCommission = Number(taxSetting?.yandexCommission || taxSetting?.defaultMarketplaceCommission || 10) / 100;
     const defaultLogistics = Number(taxSetting?.defaultLogisticsCost || 0);
 
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -753,13 +756,19 @@ export class DatabaseStorage implements IStorage {
       new Date(o.createdAt || 0) >= thirtyDaysAgo
     );
     const recentOrderIds = recentOrders.map(o => o.id);
+    const orderSourceMap = new Map(recentOrders.map(o => [o.id, (o.source || '').toLowerCase()]));
     let realProfit = 0;
     if (recentOrderIds.length > 0) {
       const recentItems = await db.select().from(orderItems).where(inArray(orderItems.orderId, recentOrderIds));
       for (const item of recentItems) {
+        const src = orderSourceMap.get(item.orderId) ?? '';
+        const commissionRate = src === 'ozon' ? ozonCommission
+          : (src === 'wildberries' || src === 'wb') ? wbCommission
+          : src === 'yandex' ? yandexCommission
+          : defaultCommission;
         const revenue = Number(item.price) * item.quantity;
         const cost = Number(item.purchasePrice || 0) * item.quantity;
-        const commission = revenue * defaultCommission;
+        const commission = revenue * commissionRate;
         const logistics = item.quantity * defaultLogistics;
         const tax = revenue * taxRate;
         realProfit += revenue - cost - commission - logistics - tax;

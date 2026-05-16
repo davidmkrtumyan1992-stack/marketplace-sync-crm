@@ -1335,6 +1335,9 @@ const taxFormSchema = z.object({
   taxRate: z.coerce.number().min(0).max(100).optional(),
   defaultLogisticsCost: z.coerce.number(),
   defaultMarketplaceCommission: z.coerce.number(),
+  ozonCommission: z.coerce.number().min(0).max(100),
+  wbCommission: z.coerce.number().min(0).max(100),
+  yandexCommission: z.coerce.number().min(0).max(100),
 });
 
 function TaxSettingsCard({ 
@@ -1355,6 +1358,9 @@ function TaxSettingsCard({
       taxRate: 6,
       defaultLogisticsCost: 100,
       defaultMarketplaceCommission: 15,
+      ozonCommission: 15,
+      wbCommission: 15,
+      yandexCommission: 10,
     }
   });
 
@@ -1380,6 +1386,9 @@ function TaxSettingsCard({
         taxRate,
         defaultLogisticsCost: Number(settings.defaultLogisticsCost) || 100,
         defaultMarketplaceCommission: Number(settings.defaultMarketplaceCommission) || 15,
+        ozonCommission: Number(settings.ozonCommission) || 15,
+        wbCommission: Number(settings.wbCommission) || 15,
+        yandexCommission: Number(settings.yandexCommission) || 10,
       });
     }
   }, [settings, form]);
@@ -1391,6 +1400,9 @@ function TaxSettingsCard({
       taxRate: effectiveRate?.toString() || "6",
       defaultLogisticsCost: data.defaultLogisticsCost.toString(),
       defaultMarketplaceCommission: data.defaultMarketplaceCommission.toString(),
+      ozonCommission: data.ozonCommission.toString(),
+      wbCommission: data.wbCommission.toString(),
+      yandexCommission: data.yandexCommission.toString(),
     } as InsertTaxSetting);
   };
 
@@ -1483,16 +1495,38 @@ function TaxSettingsCard({
               <div className="space-y-2">
                 <Label className="flex items-center gap-2">
                   <Percent className="w-4 h-4" />
-                  Комиссия маркетплейса, %
+                  Комиссия по умолчанию, %
                 </Label>
-                <Input 
-                  type="number" 
+                <Input
+                  type="number"
                   step="0.1"
-                  {...form.register("defaultMarketplaceCommission")} 
+                  {...form.register("defaultMarketplaceCommission")}
                   placeholder="15"
                 />
-                <p className="text-xs text-muted-foreground">Средняя комиссия</p>
+                <p className="text-xs text-muted-foreground">Для неизвестного МП</p>
               </div>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-base font-medium flex items-center gap-2">
+                <Percent className="w-4 h-4" />
+                Комиссии маркетплейсов
+              </Label>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-2">
+                  <Label className="text-sm text-muted-foreground">Ozon, %</Label>
+                  <Input type="number" step="0.1" min="0" max="100" {...form.register("ozonCommission")} placeholder="15" />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm text-muted-foreground">Wildberries, %</Label>
+                  <Input type="number" step="0.1" min="0" max="100" {...form.register("wbCommission")} placeholder="15" />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm text-muted-foreground">Яндекс Маркет, %</Label>
+                  <Input type="number" step="0.1" min="0" max="100" {...form.register("yandexCommission")} placeholder="10" />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">Используются в расчёте чистой прибыли</p>
             </div>
 
             <div className="flex justify-end pt-2">

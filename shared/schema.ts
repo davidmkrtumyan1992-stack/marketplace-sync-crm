@@ -176,6 +176,9 @@ export const taxSettings = pgTable("tax_settings", {
   taxRate: decimal("tax_rate", { precision: 5, scale: 2 }).default("7"),
   defaultLogisticsCost: decimal("default_logistics_cost", { precision: 10, scale: 2 }).default("0"),
   defaultMarketplaceCommission: decimal("default_marketplace_commission", { precision: 5, scale: 2 }).default("15"),
+  ozonCommission: decimal("ozon_commission", { precision: 5, scale: 2 }).default("15"),
+  wbCommission: decimal("wb_commission", { precision: 5, scale: 2 }).default("15"),
+  yandexCommission: decimal("yandex_commission", { precision: 5, scale: 2 }).default("10"),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
