@@ -729,13 +729,16 @@ export class DatabaseStorage implements IStorage {
 
     for (const p of productsList) {
       const qty = p.centralStock || 0;
-      totalStock += qty;
+      const qzOzon = p.stockOzon || 0;
+      const qzWb = p.stockWb || 0;
+      const qzYandex = p.stockYandex || 0;
+      totalStock += qty + qzOzon + qzWb + qzYandex;
       capitalization += qty * Number(p.purchasePrice || 0);
-      expectedRevenue += qty * Number(p.sellingPrice || p.price || 0);
-      stockLocal += p.centralStock || 0;
-      stockOzon += p.stockOzon || 0;
-      stockWb += p.stockWb || 0;
-      stockYandex += p.stockYandex || 0;
+      expectedRevenue += (qty + qzOzon + qzWb + qzYandex) * Number(p.sellingPrice || p.price || 0);
+      stockLocal += qty;
+      stockOzon += qzOzon;
+      stockWb += qzWb;
+      stockYandex += qzYandex;
     }
 
     const taxRate = Number(taxSetting?.taxRate || 7) / 100;

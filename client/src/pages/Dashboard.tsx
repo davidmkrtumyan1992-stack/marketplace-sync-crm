@@ -232,7 +232,31 @@ export default function Dashboard() {
                   <p className="text-3xl font-extrabold tracking-tight">
                     {kpiLoading ? "..." : formatNumber(kpi?.totalStock || 0)}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-3">шт. на центральном складе</p>
+                  <p className="text-xs text-muted-foreground mt-2">шт. по всем складам</p>
+                  {!kpiLoading && kpi?.stockDistribution && (
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      {kpi.stockDistribution.local > 0 && (
+                        <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full text-muted-foreground">
+                          Склад: {formatNumber(kpi.stockDistribution.local)}
+                        </span>
+                      )}
+                      {kpi.stockDistribution.ozon > 0 && (
+                        <span className="text-[11px] bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-full">
+                          Ozon: {formatNumber(kpi.stockDistribution.ozon)}
+                        </span>
+                      )}
+                      {kpi.stockDistribution.wb > 0 && (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ background: "rgba(118,49,255,0.1)", color: "#7631ff" }}>
+                          WB: {formatNumber(kpi.stockDistribution.wb)}
+                        </span>
+                      )}
+                      {kpi.stockDistribution.yandex > 0 && (
+                        <span className="text-[11px] bg-yellow-50 dark:bg-yellow-950 text-yellow-600 dark:text-yellow-400 px-2 py-0.5 rounded-full">
+                          ЯМ: {formatNumber(kpi.stockDistribution.yandex)}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="icon-box icon-box-lg shrink-0">
                   <Package className="w-7 h-7 text-primary" />
