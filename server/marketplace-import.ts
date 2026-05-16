@@ -140,6 +140,13 @@ export async function fetchOzonProducts(apiKey: string, clientId: string): Promi
   return products;
 }
 
+function normalizeOzonUrl(url: unknown): string | undefined {
+  if (typeof url !== "string" || url.length === 0) return undefined;
+  if (url.startsWith("http")) return url;
+  if (url.startsWith("//")) return `https:${url}`;
+  return undefined;
+}
+
 function parseOzonInfoItem(info: any): NormalizedProduct {
   let price = 0;
   if (info.price && info.price !== "" && info.price !== "0" && info.price !== "0.00") {
@@ -165,10 +172,14 @@ function parseOzonInfoItem(info: any): NormalizedProduct {
   }
 
   let imageUrl: string | undefined;
-  if (typeof info.primary_image === "string" && info.primary_image.startsWith("http")) {
-    imageUrl = info.primary_image;
-  } else if (Array.isArray(info.images) && info.images.length > 0 && typeof info.images[0] === "string" && info.images[0].startsWith("http")) {
-    imageUrl = info.images[0];
+  for (const candidate of [
+    info.primary_image,
+    ...(Array.isArray(info.images) ? info.images : []),
+    info.color_image,
+    ...(Array.isArray(info.images360) ? info.images360 : []),
+  ]) {
+    imageUrl = normalizeOzonUrl(candidate);
+    if (imageUrl) break;
   }
 
   let barcode: string | undefined;
