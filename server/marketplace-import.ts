@@ -173,9 +173,10 @@ function parseOzonInfoItem(info: any): NormalizedProduct {
 
   let imageUrl: string | undefined;
   for (const candidate of [
-    info.primary_image,
+    // primary_image can be string OR array — handle both
+    ...(Array.isArray(info.primary_image) ? info.primary_image : [info.primary_image]),
     ...(Array.isArray(info.images) ? info.images : []),
-    info.color_image,
+    ...(Array.isArray(info.color_image) ? info.color_image : [info.color_image]),
     ...(Array.isArray(info.images360) ? info.images360 : []),
   ]) {
     imageUrl = normalizeOzonUrl(candidate);

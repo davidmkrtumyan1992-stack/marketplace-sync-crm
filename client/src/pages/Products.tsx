@@ -990,6 +990,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                       alt={product.name}
                       className="w-full h-full object-cover"
                       data-testid="img-product-detail"
+                      referrerPolicy="no-referrer"
                       onError={() => setImgError(true)}
                     />
                   ) : (
@@ -1451,6 +1452,7 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, ta
                 src={product.imageUrl}
                 alt={product.name}
                 className="h-full w-full object-cover rounded"
+                referrerPolicy="no-referrer"
                 onError={() => setImgError(true)}
               />
             ) : <Package size={20} />}
