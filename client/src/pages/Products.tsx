@@ -1388,6 +1388,7 @@ function ProductAnalyticsTab({ product, taxRate, defaultCommission }: { product:
 function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, taxRate, defaultCommission }: { product: Product; onInflow: () => void; canSeePurchasePrice?: boolean; onClick?: () => void; taxRate: number; defaultCommission: number }) {
   const { mutate: deleteProduct } = useDeleteProduct();
   const { mutate: syncProduct, isPending: isSyncing } = useSyncProduct();
+  const { toast } = useToast();
   const [imgError, setImgError] = useState(false);
 
   const result = calculateFromProduct(product, taxRate, defaultCommission);
@@ -1420,7 +1421,20 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, ta
           </div>
         </div>
       </TableCell>
-      <TableCell className="font-mono text-xs">{product.sku}</TableCell>
+      <TableCell className="font-mono text-xs">
+        <div className="flex items-center gap-1 group/sku">
+          <span>{product.sku}</span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-5 w-5 opacity-0 group-hover/sku:opacity-100 transition-opacity shrink-0"
+            title="Скопировать артикул"
+            onClick={(e) => { e.stopPropagation(); copyText(product.sku); toast({ title: "Артикул скопирован" }); }}
+          >
+            <Copy className="w-3 h-3" />
+          </Button>
+        </div>
+      </TableCell>
       {canSeePurchasePrice && <TableCell className="text-right text-sm">{formatCurrency(product.purchasePrice || 0)}</TableCell>}
       <TableCell className="text-right font-medium">{formatCurrency(product.sellingPrice || product.price || 0)}</TableCell>
       <TableCell className={`text-right text-sm ${result.profitFBO >= 0 ? "text-green-600" : "text-red-600"}`} data-testid={`text-profit-fbo-${product.id}`}>
