@@ -147,13 +147,33 @@ export default function Products() {
 
   const enrichPhotosMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/marketplace/enrich/ozon");
-      if (!res.ok) throw new Error(await res.text());
-      return await res.json();
+      const results = { ozonEnriched: 0, ozonTotal: 0, wbUpdated: 0, wbTotal: 0 };
+      // Ozon photos — non-fatal
+      try {
+        const res = await apiRequest("POST", "/api/marketplace/enrich/ozon");
+        if (res.ok) {
+          const d = await res.json();
+          results.ozonEnriched = d.enriched ?? 0;
+          results.ozonTotal = d.total ?? 0;
+        }
+      } catch {}
+      // WB photos — non-fatal
+      try {
+        const res = await apiRequest("POST", "/api/marketplace/fix-photos/wildberries");
+        if (res.ok) {
+          const d = await res.json();
+          results.wbUpdated = d.photosUpdated ?? 0;
+          results.wbTotal = d.total ?? 0;
+        }
+      } catch {}
+      return results;
     },
-    onSuccess: (data: any) => {
+    onSuccess: (data: { ozonEnriched: number; ozonTotal: number; wbUpdated: number; wbTotal: number }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({ title: "Фото синхронизированы", description: `Обновлено ${data.enriched ?? 0} из ${data.total ?? 0} товаров` });
+      const parts: string[] = [];
+      if (data.ozonTotal > 0) parts.push(`Ozon: ${data.ozonEnriched}/${data.ozonTotal}`);
+      if (data.wbTotal > 0) parts.push(`WB: ${data.wbUpdated}/${data.wbTotal}`);
+      toast({ title: "Фото синхронизированы", description: parts.join(" · ") || "Нет товаров для обновления" });
     },
     onError: (err: Error) => {
       toast({ title: "Ошибка синхронизации фото", description: err.message, variant: "destructive" });
@@ -237,7 +257,7 @@ export default function Products() {
                   disabled={enrichPhotosMutation.isPending}
                 >
                   <ImagePlus className="w-4 h-4 mr-2" />
-                  {enrichPhotosMutation.isPending ? "Синхронизация фото..." : "Синхронизировать фото (Ozon)"}
+                  {enrichPhotosMutation.isPending ? "Синхронизация фото..." : "Синхронизировать фото"}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
