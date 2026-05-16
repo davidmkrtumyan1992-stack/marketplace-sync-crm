@@ -725,6 +725,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [editWeight, setEditWeight] = useState(Number(product.weight || 0));
   const [editCommissionFBO, setEditCommissionFBO] = useState(Number(product.marketplaceCommission || 0));
   const [editCommissionFBS, setEditCommissionFBS] = useState(Number(product.marketplaceCommissionFbs || 0));
+  const [editPurchasePrice, setEditPurchasePrice] = useState(Number(product.purchasePrice || 0));
   const [isSaving, setIsSaving] = useState(false);
   const [showSyncPrice, setShowSyncPrice] = useState(false);
   const [syncPriceValue, setSyncPriceValue] = useState(0);
@@ -790,6 +791,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
     editBarcode !== b.barcode ||
     editPrice !== b.price ||
     editCategory !== b.category ||
+    editPurchasePrice !== b.purchasePrice ||
     editLength !== b.length ||
     editWidth !== b.width ||
     editHeight !== b.height ||
@@ -819,6 +821,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
         weight: String(editWeight || 0),
         marketplaceCommission: String(editCommissionFBO || 0),
         marketplaceCommissionFbs: String(editCommissionFBS || 0),
+        purchasePrice: String(editPurchasePrice || 0),
       };
 
       console.log("SAVING PRODUCT:", JSON.stringify(body, null, 2));
@@ -1105,9 +1108,16 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                 </div>
 
                 {canSeePurchasePrice && (
-                  <div className="bg-muted/50 rounded-lg p-3 text-sm">
-                    <span className="text-muted-foreground">Закупочная цена: </span>
-                    <span className="font-medium">{formatCurrency(product.purchasePrice || 0)}</span>
+                  <div className="grid gap-1">
+                    <Label className="text-xs text-muted-foreground">Закупочная цена, ₽</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={editPurchasePrice}
+                      onChange={(e) => setEditPurchasePrice(Number(e.target.value))}
+                      data-testid="input-detail-purchase-price"
+                    />
                   </div>
                 )}
               </div>
