@@ -713,6 +713,21 @@ function StockInflowForm({ product, onSuccess }: { product: Product; onSuccess: 
   );
 }
 
+function copyText(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text);
+  } else {
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+  }
+}
+
 function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, defaultCommission }: { product: Product; canSeePurchasePrice: boolean; onClose: () => void; taxRate: number; defaultCommission: number }) {
   const { toast } = useToast();
   const [editName, setEditName] = useState(product.name);
@@ -726,6 +741,8 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [editCommissionFBO, setEditCommissionFBO] = useState(Number(product.marketplaceCommission || 0));
   const [editCommissionFBS, setEditCommissionFBS] = useState(Number(product.marketplaceCommissionFbs || 0));
   const [editPurchasePrice, setEditPurchasePrice] = useState(Number(product.purchasePrice || 0));
+  const [imgError, setImgError] = useState(false);
+  useEffect(() => setImgError(false), [product.id]);
   const [isSaving, setIsSaving] = useState(false);
   const [showSyncPrice, setShowSyncPrice] = useState(false);
   const [syncPriceValue, setSyncPriceValue] = useState(0);
@@ -920,19 +937,17 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
             <TabsContent value="info" className="space-y-6 mt-4">
               <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
                 <div className="w-full sm:w-48 h-48 rounded-xl border bg-muted flex items-center justify-center overflow-hidden shrink-0">
-                  {product.imageUrl ? (
+                  {product.imageUrl && !imgError ? (
                     <img
                       src={product.imageUrl}
                       alt={product.name}
                       className="w-full h-full object-cover"
                       data-testid="img-product-detail"
-                      onError={(e) => {
-                        e.currentTarget.style.display = "none";
-                        e.currentTarget.parentElement?.classList.add("show-fallback");
-                      }}
+                      onError={() => setImgError(true)}
                     />
-                  ) : null}
-                  <Package className="w-16 h-16 text-muted-foreground" style={{ display: product.imageUrl ? "none" : undefined }} data-fallback="true" />
+                  ) : (
+                    <Package className="w-16 h-16 text-muted-foreground" />
+                  )}
                 </div>
                 <div className="flex-1 space-y-3">
                   <div>
@@ -941,7 +956,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                       <Input
                         value={product.sku}
                         readOnly
-                        className="font-mono bg-muted cursor-not-allowed"
+                        className="font-mono bg-muted cursor-default"
                         data-testid="input-detail-sku"
                       />
                       <Button
@@ -950,7 +965,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                         className="shrink-0 h-9 w-9"
                         title="Скопировать артикул"
                         onClick={() => {
-                          navigator.clipboard.writeText(product.sku);
+                          copyText(product.sku);
                           toast({ title: "Артикул скопирован" });
                         }}
                       >
@@ -1373,6 +1388,7 @@ function ProductAnalyticsTab({ product, taxRate, defaultCommission }: { product:
 function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, taxRate, defaultCommission }: { product: Product; onInflow: () => void; canSeePurchasePrice?: boolean; onClick?: () => void; taxRate: number; defaultCommission: number }) {
   const { mutate: deleteProduct } = useDeleteProduct();
   const { mutate: syncProduct, isPending: isSyncing } = useSyncProduct();
+  const [imgError, setImgError] = useState(false);
 
   const result = calculateFromProduct(product, taxRate, defaultCommission);
 
@@ -1381,12 +1397,12 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, ta
       <TableCell className="font-medium">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded bg-slate-100 flex items-center justify-center text-slate-400">
-            {product.imageUrl ? (
+            {product.imageUrl && !imgError ? (
               <img
                 src={product.imageUrl}
                 alt={product.name}
                 className="h-full w-full object-cover rounded"
-                onError={(e) => { e.currentTarget.style.display = "none"; }}
+                onError={() => setImgError(true)}
               />
             ) : <Package size={20} />}
           </div>
