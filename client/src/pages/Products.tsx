@@ -38,7 +38,7 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown, Download } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown, Download, Copy } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
 import { calculateFromProduct, calculateProductProfit, getMarginColor, getMarginBadgeClasses, formatRub, formatPct, type OzonProfitResult } from "@/lib/ozon-calc";
@@ -926,10 +926,13 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                       alt={product.name}
                       className="w-full h-full object-cover"
                       data-testid="img-product-detail"
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                        e.currentTarget.parentElement?.classList.add("show-fallback");
+                      }}
                     />
-                  ) : (
-                    <Package className="w-16 h-16 text-muted-foreground" />
-                  )}
+                  ) : null}
+                  <Package className="w-16 h-16 text-muted-foreground" style={{ display: product.imageUrl ? "none" : undefined }} data-fallback="true" />
                 </div>
                 <div className="flex-1 space-y-3">
                   <div>
@@ -941,7 +944,18 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                         className="font-mono bg-muted cursor-not-allowed"
                         data-testid="input-detail-sku"
                       />
-                      <Badge variant="secondary" className="shrink-0 text-xs">Только чтение</Badge>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="shrink-0 h-9 w-9"
+                        title="Скопировать артикул"
+                        onClick={() => {
+                          navigator.clipboard.writeText(product.sku);
+                          toast({ title: "Артикул скопирован" });
+                        }}
+                      >
+                        <Copy className="w-4 h-4" />
+                      </Button>
                     </div>
                   </div>
                   {hasOzon && (
@@ -1367,7 +1381,14 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, ta
       <TableCell className="font-medium">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded bg-slate-100 flex items-center justify-center text-slate-400">
-            {product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover rounded" /> : <Package size={20} />}
+            {product.imageUrl ? (
+              <img
+                src={product.imageUrl}
+                alt={product.name}
+                className="h-full w-full object-cover rounded"
+                onError={(e) => { e.currentTarget.style.display = "none"; }}
+              />
+            ) : <Package size={20} />}
           </div>
           <div>
             <div className="flex items-center gap-1.5">
