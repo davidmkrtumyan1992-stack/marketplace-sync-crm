@@ -1704,8 +1704,9 @@ export async function registerRoutes(
     try {
       const orgId = getOrgId(req);
       const allSettings = await storage.getMarketplaceSettings(orgId);
-      const setting = allSettings.find(s => s.marketplace === "ozon" && s.isActive);
-      if (!setting || !setting.apiKey || !setting.clientId) {
+      // Use ALL active Ozon stores — user has 5 stores, each has its own products
+      const ozonSettings = allSettings.filter(s => s.marketplace === "ozon" && s.isActive && s.apiKey && s.clientId);
+      if (ozonSettings.length === 0) {
         return res.status(400).json({ message: "API-ключ Ozon не настроен" });
       }
 
@@ -1718,37 +1719,45 @@ export async function registerRoutes(
         return res.json({ success: true, message: "Нет товаров для обогащения", updated: 0 });
       }
 
-      console.log(`[Ozon Enrich] Starting enrichment for ${toEnrich.length} products`);
+      console.log(`[Ozon Enrich] ${toEnrich.length} products, ${ozonSettings.length} stores`);
 
-      const result = await enrichOzonProducts(setting.apiKey, setting.clientId, toEnrich);
-      const enrichUpdates = result.updates || [];
-
+      // Track updated product IDs to avoid duplicate DB writes
+      const updatedIds = new Set<number>();
       let dbUpdated = 0;
-      for (const u of enrichUpdates) {
-        try {
-          const updateData: any = {};
-          if (u.data.name && u.data.name.length > 0) updateData.name = u.data.name;
-          if (u.data.imageUrl && u.data.imageUrl.startsWith("http")) updateData.imageUrl = u.data.imageUrl;
-          if (u.data.price > 0) {
-            updateData.sellingPrice = String(u.data.price);
-            updateData.price = String(u.data.price);
-          }
-          if (u.data.stock !== undefined && u.data.stock !== null) {
-            updateData.centralStock = u.data.stock;
-          }
-          if (u.data.barcode && u.data.barcode.length > 0) updateData.barcode = u.data.barcode;
-          if (u.data.category && u.data.category.length > 0) updateData.category = u.data.category;
 
-          if (Object.keys(updateData).length > 0) {
-            await storage.updateProduct(u.dbId, updateData);
-            dbUpdated++;
+      for (const setting of ozonSettings) {
+        console.log(`[Ozon Enrich] Store clientId=${setting.clientId}`);
+        try {
+          const result = await enrichOzonProducts(setting.apiKey!, setting.clientId!, toEnrich);
+          for (const u of result.updates || []) {
+            if (updatedIds.has(u.dbId)) continue;
+            try {
+              const updateData: any = {};
+              if (u.data.name && u.data.name.length > 0) updateData.name = u.data.name;
+              if (u.data.imageUrl && u.data.imageUrl.startsWith("http")) updateData.imageUrl = u.data.imageUrl;
+              if (u.data.price > 0) {
+                updateData.sellingPrice = String(u.data.price);
+                updateData.price = String(u.data.price);
+              }
+              if (u.data.stock !== undefined && u.data.stock !== null) updateData.centralStock = u.data.stock;
+              if (u.data.barcode && u.data.barcode.length > 0) updateData.barcode = u.data.barcode;
+              if (u.data.category && u.data.category.length > 0) updateData.category = u.data.category;
+
+              if (Object.keys(updateData).length > 0) {
+                await storage.updateProduct(u.dbId, updateData);
+                updatedIds.add(u.dbId);
+                dbUpdated++;
+              }
+            } catch (err: any) {
+              console.error(`[Ozon Enrich] DB update failed for product ${u.dbId}: ${err.message}`);
+            }
           }
         } catch (err: any) {
-          console.error(`[Ozon Enrich] DB update failed for product ${u.dbId}: ${err.message}`);
+          console.error(`[Ozon Enrich] Store clientId=${setting.clientId} failed: ${err.message}`);
         }
       }
 
-      console.log(`[Ozon Enrich] DB updated: ${dbUpdated}/${enrichUpdates.length} products`);
+      console.log(`[Ozon Enrich] Complete: ${dbUpdated}/${toEnrich.length} products updated`);
 
       const { userId, userName } = getUserInfo(req);
       await storage.createAuditLog({
@@ -1757,17 +1766,13 @@ export async function registerRoutes(
         userName,
         action: "ozon_enrich",
         entityType: "product",
-        details: `Обогащение товаров из Ozon: обновлено ${dbUpdated} из ${toEnrich.length}`,
+        details: `Обогащение товаров из Ozon (${ozonSettings.length} магазинов): обновлено ${dbUpdated} из ${toEnrich.length}`,
       });
-
-      console.log(`[Ozon Enrich] Complete: ${dbUpdated} products updated in DB`);
 
       res.json({
         success: true,
         total: toEnrich.length,
         enriched: dbUpdated,
-        failed: result.failed,
-        errors: result.errors.length > 0 ? result.errors : undefined,
       });
     } catch (error: any) {
       console.error("Ozon enrich error:", error);
