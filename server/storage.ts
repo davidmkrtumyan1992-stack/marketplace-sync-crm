@@ -743,11 +743,13 @@ export class DatabaseStorage implements IStorage {
     const defaultLogistics = Number(taxSetting?.defaultLogisticsCost || 0);
 
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const WB_CANCELLED_STATUSES = ['cancel','canceled','user_cancel','canceled_by_client','declined','declined_by_client','cancel_ignore','defect','cancelled'];
     const recentOrders = allOrders.filter(o =>
       o.status !== "cancelled" &&
       o.ozonStatus !== "cancelled" &&
       o.yandexStatus !== "CANCELLED" &&
       o.yandexStatus !== "RETURNED" &&
+      !WB_CANCELLED_STATUSES.includes(o.wbStatus ?? '') &&
       new Date(o.createdAt || 0) >= thirtyDaysAgo
     );
     const recentOrderIds = recentOrders.map(o => o.id);
