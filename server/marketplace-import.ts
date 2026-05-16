@@ -237,6 +237,17 @@ export async function enrichOzonProducts(
         console.log(`[Ozon Enrich] V3 API: ${infoItems.length} items for ${offerIds.length} offer_ids`);
         if (infoItems.length === 0) {
           console.log(`[Ozon Enrich] Empty response. Keys: ${JSON.stringify(Object.keys(infoData || {}))}`);
+        } else {
+          // Diagnostic: show image fields from first item
+          const s = infoItems[0];
+          const imageFields = ['primary_image','images','color_image','images360','pictures','sources'];
+          const present = imageFields.filter(f => s[f] && (typeof s[f] === 'string' ? s[f].length > 0 : s[f].length > 0));
+          console.log(`[Ozon Enrich] Image fields present in sample: ${present.join(', ') || 'NONE'}`);
+          for (const f of present) {
+            console.log(`[Ozon Enrich] ${f}: ${JSON.stringify(s[f]).substring(0, 300)}`);
+          }
+          const withImg = infoItems.filter(it => it.primary_image || (Array.isArray(it.images) && it.images.length)).length;
+          console.log(`[Ozon Enrich] Items with primary_image or images: ${withImg}/${infoItems.length}`);
         }
       }
 

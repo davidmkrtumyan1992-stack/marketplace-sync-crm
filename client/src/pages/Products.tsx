@@ -1437,6 +1437,7 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, ta
   const { mutate: syncProduct, isPending: isSyncing } = useSyncProduct();
   const { toast } = useToast();
   const [imgError, setImgError] = useState(false);
+  useEffect(() => setImgError(false), [product.imageUrl]);
 
   const result = calculateFromProduct(product, taxRate, defaultCommission);
 
