@@ -145,6 +145,21 @@ export default function Products() {
     },
   });
 
+  const enrichPhotosMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/marketplace/enrich/ozon");
+      if (!res.ok) throw new Error(await res.text());
+      return await res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({ title: "Фото синхронизированы", description: `Обновлено ${data.enriched ?? 0} из ${data.total ?? 0} товаров` });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Ошибка синхронизации фото", description: err.message, variant: "destructive" });
+    },
+  });
+
   const taxRate = Number(taxSettings?.taxRate) || 6;
   const defaultCommission = Number(taxSettings?.defaultMarketplaceCommission) || 15;
 
@@ -216,6 +231,13 @@ export default function Products() {
                 >
                   <Package className="w-4 h-4 mr-2" />
                   Обновить Yandex Market
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => enrichPhotosMutation.mutate()}
+                  disabled={enrichPhotosMutation.isPending}
+                >
+                  <ImagePlus className="w-4 h-4 mr-2" />
+                  {enrichPhotosMutation.isPending ? "Синхронизация фото..." : "Синхронизировать фото (Ozon)"}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -713,19 +735,24 @@ function StockInflowForm({ product, onSuccess }: { product: Product; onSuccess: 
   );
 }
 
-function copyText(text: string) {
+function copyText(text: string): boolean {
   if (navigator.clipboard && window.isSecureContext) {
     navigator.clipboard.writeText(text);
-  } else {
-    const el = document.createElement("textarea");
-    el.value = text;
-    el.style.position = "fixed";
-    el.style.opacity = "0";
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand("copy");
-    document.body.removeChild(el);
+    return true;
   }
+  const el = document.createElement("textarea");
+  el.value = text;
+  el.setAttribute("readonly", "");
+  el.style.cssText = "position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;";
+  // Append inside active dialog so Radix focus trap allows focus
+  const container = (document.querySelector('[role="dialog"]') ?? document.body) as HTMLElement;
+  container.appendChild(el);
+  el.focus();
+  el.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  container.removeChild(el);
+  return ok;
 }
 
 function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, defaultCommission }: { product: Product; canSeePurchasePrice: boolean; onClose: () => void; taxRate: number; defaultCommission: number }) {
@@ -965,8 +992,8 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                         className="shrink-0 h-9 w-9"
                         title="Скопировать артикул"
                         onClick={() => {
-                          copyText(product.sku);
-                          toast({ title: "Артикул скопирован" });
+                          const ok = copyText(product.sku);
+                          toast({ title: ok ? "Артикул скопирован" : "Не удалось скопировать" });
                         }}
                       >
                         <Copy className="w-4 h-4" />
@@ -1429,7 +1456,7 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, ta
             size="icon"
             className="h-5 w-5 opacity-0 group-hover/sku:opacity-100 transition-opacity shrink-0"
             title="Скопировать артикул"
-            onClick={(e) => { e.stopPropagation(); copyText(product.sku); toast({ title: "Артикул скопирован" }); }}
+            onClick={(e) => { e.stopPropagation(); const ok = copyText(product.sku); toast({ title: ok ? "Артикул скопирован" : "Не удалось скопировать" }); }}
           >
             <Copy className="w-3 h-3" />
           </Button>
