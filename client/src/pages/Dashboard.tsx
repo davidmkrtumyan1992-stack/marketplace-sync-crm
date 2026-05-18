@@ -541,7 +541,15 @@ export default function Dashboard() {
                               </div>
                             </div>
 
-                            <Link href={`/orders?store=${store.id}`}>
+                            <Link href={
+                              store.marketplace === "ozon"
+                                ? `/orders?store=${store.id}&mp=ozon&sub=FBS&status=awaiting_packaging`
+                                : store.marketplace === "wildberries"
+                                ? `/orders?store=${store.id}&mp=wildberries`
+                                : store.marketplace === "yandex"
+                                ? `/orders?store=${store.id}&mp=yandex&status=PROCESSING`
+                                : `/orders?store=${store.id}`
+                            }>
                               <Button
                                 variant="outline"
                                 className="w-full"

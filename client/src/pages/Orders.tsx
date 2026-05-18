@@ -174,13 +174,36 @@ export default function Orders() {
   const [isDirectSaleOpen, setIsDirectSaleOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
 
-  const [marketplaceTab, setMarketplaceTab] = useState<MarketplaceTab>("ozon");
-  const [ozonSubFilter, setOzonSubFilter] = useState<OzonSubFilter>("all");
-  const [fbsSubFilter, setFbsSubFilter] = useState<FbsSubFilter>("all");
+  const [marketplaceTab, setMarketplaceTab] = useState<MarketplaceTab>(() => {
+    const p = new URLSearchParams(window.location.search);
+    const mp = p.get("mp");
+    return (mp === "ozon" || mp === "yandex" || mp === "wildberries") ? mp : "ozon";
+  });
+  const [ozonSubFilter, setOzonSubFilter] = useState<OzonSubFilter>(() => {
+    const p = new URLSearchParams(window.location.search);
+    const sub = p.get("sub");
+    return (sub === "FBS" || sub === "FBO" || sub === "direct") ? sub as OzonSubFilter : "all";
+  });
+  const [fbsSubFilter, setFbsSubFilter] = useState<FbsSubFilter>(() => {
+    const p = new URLSearchParams(window.location.search);
+    const status = p.get("status") as FbsSubFilter;
+    const valid: FbsSubFilter[] = ["awaiting_packaging", "awaiting_deliver", "delivering", "dispute", "delivered", "cancelled"];
+    return valid.includes(status) ? status : "all";
+  });
   const [fboSubFilter, setFboSubFilter] = useState<FboSubFilter>("all");
-  const [yandexSubFilter, setYandexSubFilter] = useState<YandexSubFilter>("all");
+  const [yandexSubFilter, setYandexSubFilter] = useState<YandexSubFilter>(() => {
+    const p = new URLSearchParams(window.location.search);
+    const mp = p.get("mp");
+    const status = p.get("status") as YandexSubFilter;
+    const valid: YandexSubFilter[] = ["NEW", "PROCESSING", "READY_TO_SHIP", "NOT_SHIPPED", "PICKUP", "DELIVERY", "DELIVERED", "CANCELLED"];
+    return (mp === "yandex" && valid.includes(status)) ? status : "all";
+  });
   const [wbSubFilter, setWbSubFilter] = useState<WbSubFilter>("all");
-  const [storeFilter, setStoreFilter] = useState<"all" | number>("all");
+  const [storeFilter, setStoreFilter] = useState<"all" | number>(() => {
+    const p = new URLSearchParams(window.location.search);
+    const store = p.get("store");
+    return store ? Number(store) : "all";
+  });
 
   const silentSync = useSilentSyncOzonOrders();
   const syncOzonOrders = useSyncOzonOrders();
