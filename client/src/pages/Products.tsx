@@ -183,10 +183,18 @@ export default function Products() {
   const taxRate = Number(taxSettings?.taxRate) || 6;
   const defaultCommission = Number(taxSettings?.defaultMarketplaceCommission) || 15;
 
-  const filteredProducts = products?.filter((p: any) => 
-    p.name.toLowerCase().includes(search.toLowerCase()) || 
+  const [visibleProductCount, setVisibleProductCount] = useState(48);
+
+  useEffect(() => {
+    setVisibleProductCount(48);
+  }, [search]);
+
+  const filteredProducts = products?.filter((p: any) =>
+    p.name.toLowerCase().includes(search.toLowerCase()) ||
     p.sku.toLowerCase().includes(search.toLowerCase())
   );
+
+  const visibleProducts = filteredProducts?.slice(0, visibleProductCount);
 
   return (
     <Layout>
@@ -337,12 +345,19 @@ export default function Products() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredProducts?.map((product: any) => (
+                visibleProducts?.map((product: any) => (
                   <ProductRow key={product.id} product={product} onInflow={() => setInflowProduct(product)} canSeePurchasePrice={canSeePurchasePrice} onClick={() => setSelectedProduct(product)} taxRate={taxRate} defaultCommission={defaultCommission} />
                 ))
               )}
             </TableBody>
           </Table>
+          {filteredProducts && filteredProducts.length > visibleProductCount && (
+            <div className="flex justify-center pt-4 pb-2">
+              <Button variant="outline" onClick={() => setVisibleProductCount(c => c + 48)}>
+                Загрузить ещё ({filteredProducts.length - visibleProductCount} товаров)
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 

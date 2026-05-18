@@ -31,7 +31,7 @@ import { formatCurrency } from "@/lib/format";
 import { getMarketplaceStyle } from "@/lib/marketplace";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import type { Product } from "@shared/schema";
 import { useLocation } from "wouter";
 import WildberriesOrders from "@/components/WildberriesOrders";
@@ -204,6 +204,7 @@ export default function Orders() {
     const store = p.get("store");
     return store ? Number(store) : "all";
   });
+  const [visibleCount, setVisibleCount] = useState(50);
 
   const silentSync = useSilentSyncOzonOrders();
   const syncOzonOrders = useSyncOzonOrders();
@@ -383,7 +384,16 @@ export default function Orders() {
     return result;
   }, [marketplaceOrders, marketplaceTab, ozonSubFilter, fbsSubFilter, fboSubFilter, yandexSubFilter]);
 
-  const dateGroups = useMemo(() => groupOrdersByDate(filteredOrders), [filteredOrders]);
+  useEffect(() => {
+    setVisibleCount(50);
+  }, [marketplaceTab, storeFilter, ozonSubFilter, fbsSubFilter, fboSubFilter, yandexSubFilter]);
+
+  const visibleOrders = useMemo(
+    () => filteredOrders.slice(0, visibleCount),
+    [filteredOrders, visibleCount]
+  );
+
+  const dateGroups = useMemo(() => groupOrdersByDate(visibleOrders), [visibleOrders]);
 
   const fbsStatusCounts = useMemo(() => {
     const fbsOrders = marketplaceOrders.filter((o: any) => (o.fulfillmentType === "FBS" || (!o.fulfillmentType && o.source === "ozon")) && o.source !== "direct" && o.source !== "manual");
@@ -948,6 +958,13 @@ export default function Orders() {
                 </div>
               </div>
             ))}
+            {filteredOrders.length > visibleCount && (
+              <div className="flex justify-center pt-2 pb-4">
+                <Button variant="outline" onClick={() => setVisibleCount(c => c + 50)}>
+                  Загрузить ещё ({filteredOrders.length - visibleCount} заказов)
+                </Button>
+              </div>
+            )}
           </div>
         ))}
       </div>
