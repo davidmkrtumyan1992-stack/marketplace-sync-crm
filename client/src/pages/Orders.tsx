@@ -451,8 +451,6 @@ export default function Orders() {
     return <Badge variant="outline" className="text-xs">Вручную</Badge>;
   };
 
-  const pendingCount = marketplaceOrders.filter((o: any) => o.status === "pending").length;
-  const totalRevenue = marketplaceOrders.reduce((sum: number, o: any) => sum + Number(o.totalAmount), 0);
 
   const storeColors = [
     "bg-teal-100 text-teal-800 border-teal-300 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:border-teal-700",
@@ -735,23 +733,6 @@ export default function Orders() {
           </>
         )}
 
-        {marketplaceTab !== "wildberries" && (
-          <div className="flex flex-wrap gap-3">
-            <span className="teal-badge">
-              <ShoppingCart className="w-4 h-4 mr-1.5 inline" />
-              Всего: {marketplaceOrders.length}
-            </span>
-            {pendingCount > 0 && (
-              <span className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 px-3 py-1.5 rounded-full text-sm font-medium">
-                Новых: {pendingCount}
-              </span>
-            )}
-            <span className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 px-3 py-1.5 rounded-full text-sm font-medium">
-              <CreditCard className="w-4 h-4 mr-1.5 inline" />
-              {formatCurrency(totalRevenue, true)}
-            </span>
-          </div>
-        )}
 
         {marketplaceTab !== "wildberries" && (marketplaceTab === "yandex" && yandexSubFilter === "READY_TO_SHIP" ? (
           isShipmentsLoading ? (
