@@ -7,13 +7,13 @@
 :root {
   --font-sans: 'Inter', sans-serif;
 
-  /* Light gray page background, gray cards */
-  --background: 220 12% 93%;
+  /* Medium gray page background, white cards */
+  --background: 220 14% 86%;
   --foreground: 220 20% 12%;
 
-  --card: 220 13% 94%;
+  --card: 0 0% 100%;
   --card-foreground: 220 20% 12%;
-  --card-border: 220 12% 86%;
+  --card-border: 220 12% 88%;
 
   --popover: 0 0% 100%;
   --popover-foreground: 220 20% 12%;
@@ -155,7 +155,7 @@
 }
 
 .premium-gradient-subtle {
-  background: linear-gradient(135deg, hsl(220 12% 94%) 0%, hsl(220 10% 90%) 100%);
+  background: linear-gradient(135deg, hsl(220 14% 86%) 0%, hsl(220 12% 82%) 100%);
 }
 
 .dark .premium-gradient-subtle {

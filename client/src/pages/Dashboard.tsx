@@ -316,7 +316,7 @@ export default function Dashboard() {
                   <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "hsl(175 30% 70%)" }}>
                     Чистая прибыль (30 дней)
                   </p>
-                  <p className="text-2xl font-extrabold tracking-tight leading-tight">
+                  <p className="text-2xl font-extrabold tracking-tight leading-tight" style={{ color: "#ffffff" }}>
                     {kpiLoading ? "..." : formatCurrency(kpi?.realProfit || 0)}
                   </p>
                   <p className="text-[11px]" style={{ color: "hsl(175 20% 55%)" }}>
