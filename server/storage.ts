@@ -946,10 +946,14 @@ export class DatabaseStorage implements IStorage {
       fromDateStr = toMskDateStr(fromD);
     }
 
+    const WB_CANCELLED_STATUSES = new Set([
+      "cancel", "canceled", "user_cancel", "canceled_by_client",
+      "declined", "declined_by_client", "cancel_ignore", "defect", "cancelled",
+    ]);
     const isCancelledOrder = (o: typeof ordersList[0]) => {
       const ozonCancelled = o.status === "cancelled" && (!o.ozonStatus || o.ozonStatus === "cancelled");
-      const yandexCancelled = o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED";
-      const wbCancelled = o.wbStatus === "cancel" || o.wbStatus === "user_cancel" || o.wbStatus === "declined";
+      const yandexCancelled = o.yandexStatus === "CANCELLED" || o.yandexStatus === "RETURNED" || o.yandexStatus === "UNPAID";
+      const wbCancelled = o.wbStatus != null && WB_CANCELLED_STATUSES.has(o.wbStatus);
       return ozonCancelled || yandexCancelled || wbCancelled;
     };
 
@@ -1001,9 +1005,14 @@ export class DatabaseStorage implements IStorage {
       const items = itemsByOrder.get(order.id) || [];
       let orderRevenue = 0;
       let orderQty = 0;
-      for (const item of items) {
-        orderRevenue += Number(item.price || 0) * item.quantity;
-        orderQty += item.quantity;
+      if (items.length > 0) {
+        for (const item of items) {
+          orderRevenue += Number(item.price || 0) * item.quantity;
+          orderQty += item.quantity;
+        }
+      } else {
+        // Fallback: Yandex orders without matched SKUs have empty items — use totalAmount
+        orderRevenue = Number(order.totalAmount || 0);
       }
 
       const cancelled = cancelledOrderIds.has(order.id);
