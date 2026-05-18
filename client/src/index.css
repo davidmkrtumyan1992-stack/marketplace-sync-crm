@@ -7,8 +7,8 @@
 :root {
   --font-sans: 'Inter', sans-serif;
 
-  /* White page background, gray cards */
-  --background: 0 0% 100%;
+  /* Light gray page background, gray cards */
+  --background: 220 12% 93%;
   --foreground: 220 20% 12%;
 
   --card: 220 13% 94%;
