@@ -2,23 +2,29 @@ import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 
+function getCookieTheme(): string | null {
+  const match = document.cookie.match(/(?:^|;\s*)theme=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function setCookieTheme(theme: string) {
+  document.cookie = `theme=${encodeURIComponent(theme)};path=/;max-age=31536000;SameSite=Lax`;
+}
+
 export function ThemeToggle() {
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== 'undefined') {
       return document.documentElement.classList.contains('dark');
     }
-    return false;
+    return true;
   });
 
   useEffect(() => {
-    const saved = localStorage.getItem('theme');
-    if (saved === 'dark') {
-      document.documentElement.classList.add('dark');
-      setIsDark(true);
-    } else if (saved === 'light') {
+    const saved = getCookieTheme();
+    if (saved === 'light') {
       document.documentElement.classList.remove('dark');
       setIsDark(false);
-    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    } else {
       document.documentElement.classList.add('dark');
       setIsDark(true);
     }
@@ -27,13 +33,12 @@ export function ThemeToggle() {
   const toggleTheme = () => {
     const newIsDark = !isDark;
     setIsDark(newIsDark);
-    
     if (newIsDark) {
       document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
+      setCookieTheme('dark');
     } else {
       document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
+      setCookieTheme('light');
     }
   };
 
