@@ -470,6 +470,7 @@ export default function Dashboard() {
                         <Card
                           key={store.id}
                           className=""
+                          style={{ backgroundColor: "hsl(220 14% 94%)" }}
                           data-testid={`card-store-${store.id}`}
                         >
                           <CardContent className="pt-5 pb-5">
