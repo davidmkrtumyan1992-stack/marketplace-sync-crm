@@ -834,7 +834,7 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(syncHistory)
       .where(eq(syncHistory.organizationId, organizationId))
       .orderBy(desc(syncHistory.createdAt))
-      .limit(100);
+      .limit(20);
   }
 
   async createSyncHistory(entry: InsertSyncHistory): Promise<SyncHistoryEntry> {

@@ -1126,33 +1126,6 @@ function SyncHistorySection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: syncSettings } = useQuery<InventorySyncSetting>({
-    queryKey: ["/api/inventory-sync/settings"],
-  });
-
-  const demoMode = syncSettings?.demoMode ?? false;
-
-  const toggleDemoMutation = useMutation({
-    mutationFn: async (newDemoMode: boolean) => {
-      await apiRequest("POST", "/api/inventory-sync/settings", {
-        defaultSafetyStock: syncSettings?.defaultSafetyStock ?? 2,
-        syncEnabled: syncSettings?.syncEnabled ?? true,
-        demoMode: newDemoMode,
-      });
-      return newDemoMode;
-    },
-    onSuccess: (newDemoMode: boolean) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/settings"] });
-      toast({
-        title: newDemoMode ? "Демо-режим включён" : "Демо-режим выключен",
-        description: newDemoMode ? "API-запросы будут имитироваться без обращения к маркетплейсам" : "API-запросы будут отправляться на реальные серверы",
-      });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
-    },
-  });
-
   const { data: syncHistory, isLoading } = useQuery<SyncHistoryEntry[]>({
     queryKey: ["/api/sync-history"],
   });
@@ -1161,13 +1134,14 @@ function SyncHistorySection() {
     queryKey: ["/api/stores"],
   });
 
+  const [syncingStoreId, setSyncingStoreId] = useState<number | null>(null);
+
   const { mutate: syncAll, isPending: isSyncingAll } = useMutation({
     mutationFn: async () => {
       await apiRequest("POST", "/api/marketplace/sync");
     },
     onSuccess: () => {
-      const msg = demoMode ? "[ДЕМО] Синхронизация завершена" : "Полная синхронизация всех маркетплейсов";
-      toast({ title: "Синхронизация запущена", description: msg });
+      toast({ title: "Синхронизация запущена", description: "Полная синхронизация всех маркетплейсов" });
       queryClient.invalidateQueries({ queryKey: ["/api/sync-history"] });
       queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/status"] });
       queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/logs"] });
@@ -1177,18 +1151,20 @@ function SyncHistorySection() {
     },
   });
 
-  const { mutate: syncStore, isPending: isSyncingStore } = useMutation({
+  const { mutate: syncStore } = useMutation({
     mutationFn: async (storeId: number) => {
+      setSyncingStoreId(storeId);
       await apiRequest("POST", `/api/marketplace/sync-store/${storeId}`);
     },
     onSuccess: () => {
-      const msg = demoMode ? "[ДЕМО] Синхронизация магазина завершена" : "Синхронизация магазина запущена";
-      toast({ title: "Синхронизация запущена", description: msg });
+      setSyncingStoreId(null);
+      toast({ title: "Синхронизация завершена", description: "Остатки обновлены" });
       queryClient.invalidateQueries({ queryKey: ["/api/sync-history"] });
       queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/status"] });
       queryClient.invalidateQueries({ queryKey: ["/api/inventory-sync/logs"] });
     },
     onError: (error: Error) => {
+      setSyncingStoreId(null);
       toast({ title: "Ошибка", description: error.message, variant: "destructive" });
     },
   });
@@ -1199,43 +1175,12 @@ function SyncHistorySection() {
         <CardHeader className="bg-muted/50 border-b">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-card rounded-lg border shadow-sm text-amber-500">
-                <RefreshCw className="w-6 h-6" />
-              </div>
-              <div>
-                <CardTitle>Демо-режим</CardTitle>
-                <CardDescription>
-                  В демо-режиме API-запросы к маркетплейсам имитируются без обращения к реальным серверам
-                </CardDescription>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              {demoMode && (
-                <Badge variant="outline" className="text-amber-600 border-amber-400" data-testid="badge-demo-active">
-                  Демо
-                </Badge>
-              )}
-              <Switch
-                checked={demoMode}
-                onCheckedChange={(val) => toggleDemoMutation.mutate(val)}
-                disabled={toggleDemoMutation.isPending}
-                data-testid="switch-demo-mode"
-              />
-            </div>
-          </div>
-        </CardHeader>
-      </Card>
-
-      <Card>
-        <CardHeader className="bg-muted/50 border-b">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
               <div className="p-2 bg-card rounded-lg border shadow-sm text-primary">
                 <History className="w-6 h-6" />
               </div>
               <div>
                 <CardTitle>История синхронизации</CardTitle>
-                <CardDescription>Журнал операций синхронизации с маркетплейсами</CardDescription>
+                <CardDescription>Последние 20 операций синхронизации</CardDescription>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1244,11 +1189,11 @@ function SyncHistorySection() {
                   key={store.id}
                   variant="outline"
                   size="sm"
-                  disabled={isSyncingStore}
+                  disabled={syncingStoreId !== null}
                   onClick={() => syncStore(store.id)}
                   data-testid={`button-sync-store-${store.id}`}
                 >
-                  <RefreshCw className={`w-3 h-3 mr-1 ${isSyncingStore ? "animate-spin" : ""}`} />
+                  <RefreshCw className={`w-3 h-3 mr-1 ${syncingStoreId === store.id ? "animate-spin" : ""}`} />
                   {store.name}
                 </Button>
               ))}
