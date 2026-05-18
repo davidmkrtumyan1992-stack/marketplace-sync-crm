@@ -13,7 +13,7 @@
 
   --card: 0 0% 100%;
   --card-foreground: 220 20% 12%;
-  --card-border: 220 12% 88%;
+  --card-border: 220 13% 74%;
 
   --popover: 0 0% 100%;
   --popover-foreground: 220 20% 12%;
@@ -39,8 +39,8 @@
   --destructive-foreground: 0 0% 100%;
   --destructive-border: hsl(0 70% 50%);
 
-  --border: 220 12% 86%;
-  --input: 220 12% 90%;
+  --border: 220 13% 74%;
+  --input: 220 13% 74%;
   --ring: 175 95% 40%;
 
   --sidebar: 180 50% 10%;
