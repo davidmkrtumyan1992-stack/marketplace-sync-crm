@@ -3968,11 +3968,14 @@ export async function registerRoutes(
 
           console.log(`[yandex-sync-orders] Fetching campaigns for «${displayName}» (Business ID: ${cleanBusinessId}) using ${isAcmaKey ? "Api-Key" : "OAuth token"}...`);
           const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { method: "GET", headers: authHeaders });
-          
+
           if (!campRes.ok) {
             const errText = await campRes.text().catch(() => "");
             if (campRes.status === 401 || campRes.status === 403) {
-              throw new Error("Неверный токен (OAuth)");
+              throw new Error("Неверный API-ключ Яндекс Маркет. Проверьте токен в настройках.");
+            }
+            if (campRes.status === 420 || campRes.status === 429) {
+              throw new Error("Превышен лимит запросов Яндекс Маркет (3 000 запросов/час). Подождите ~1 час и повторите синхронизацию.");
             }
             throw new Error(`Ошибка Yandex API (${campRes.status}): ${errText || "Нет деталей"}`);
           }
@@ -5735,7 +5738,14 @@ export async function registerRoutes(
               "Accept": "application/json",
             };
             const campRes = await fetch(`${YANDEX_BASE}/campaigns`, { method: "GET", headers: authHeaders });
-            if (!campRes.ok) continue;
+            if (!campRes.ok) {
+              if (campRes.status === 420 || campRes.status === 429) {
+                console.warn(`[yandex-auto-sync] Rate limit hit for «${resolvedStoreName}» — пропускаем, повторим через 5 мин`);
+              } else {
+                console.error(`[yandex-auto-sync] /campaigns error ${campRes.status} for «${resolvedStoreName}»`);
+              }
+              continue;
+            }
             const campData = await campRes.json();
             const campaigns = campData?.campaigns || [];
 
