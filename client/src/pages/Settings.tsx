@@ -248,19 +248,6 @@ function CompanyCard({ company, onEdit, onDelete }: { company: Company; onEdit: 
     },
   });
 
-  const updateStockSyncMutation = useMutation({
-    mutationFn: async ({ id, stockSyncEnabled }: { id: number; stockSyncEnabled: boolean }) => {
-      const res = await apiRequest("PUT", `/api/stores/${id}`, { stockSyncEnabled });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", company.id, "stores"] });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Ошибка", description: error.message, variant: "destructive" });
-    },
-  });
-
   return (
     <>
       <Card className="dashboard-card overflow-hidden" data-testid={`card-company-settings-${company.id}`}>
@@ -340,18 +327,7 @@ function CompanyCard({ company, onEdit, onDelete }: { company: Company; onEdit: 
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3 shrink-0 ml-4">
-                      <div className="flex items-center gap-1.5" title="Синхронизация FBS-остатков">
-                        <Switch
-                          id={`stock-sync-${store.id}`}
-                          checked={store.stockSyncEnabled ?? true}
-                          onCheckedChange={(val) => updateStockSyncMutation.mutate({ id: store.id, stockSyncEnabled: val })}
-                          className="scale-75"
-                        />
-                        <Label htmlFor={`stock-sync-${store.id}`} className="text-[11px] text-muted-foreground cursor-pointer whitespace-nowrap">
-                          FBS-синк
-                        </Label>
-                      </div>
+                    <div className="flex items-center gap-2 shrink-0 ml-4">
                       <Button variant="ghost" size="icon" onClick={() => setEditingStore(store)} data-testid={`button-edit-store-${store.id}`}>
                         <Pencil className="w-4 h-4" />
                       </Button>

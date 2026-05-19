@@ -9489,14 +9489,14 @@ export async function registerRoutes(
             const crmItem = crmStockMap.get(mpItem.externalSku);
             if (!crmItem) continue;
 
-            const diff = Math.abs(crmItem.available - mpItem.available);
-            if (diff > 0) {
-              // Расхождение — выравниваем в сторону CRM
+            // Only write DOWN: correct when MP overstates to prevent overselling.
+            // Never write UP (mp=0 means intentional zeroing by bot/archive — don't restore).
+            if (mpItem.available > crmItem.available) {
               await adapter.updateStocks([{
                 externalSku: mpItem.externalSku,
                 quantity: crmItem.available,
               }]);
-              console.log(`[reconcile] ${store.name}: sku=${mpItem.externalSku} CRM=${crmItem.available} MP=${mpItem.available} → исправлено`);
+              console.log(`[reconcile] ${store.name}: sku=${mpItem.externalSku} MP=${mpItem.available} > CRM=${crmItem.available} → исправлено вниз`);
               corrections++;
             }
           }

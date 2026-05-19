@@ -135,11 +135,11 @@ export class OzonAdapter implements MarketplaceAdapter {
           const items = data?.items || [];
           for (const item of items) {
             const fbs = item.stocks?.find((s: any) => s.type === "fbs");
-            const fbo = item.stocks?.find((s: any) => s.type === "fbo");
+            // Return FBS stock only — FBO is managed by Ozon warehouse, not by us
             result.push({
               externalSku: item.offer_id,
-              available: (fbs?.present || 0) + (fbo?.present || 0),
-              reserved: (fbs?.reserved || 0) + (fbo?.reserved || 0),
+              available: fbs?.present || 0,
+              reserved: fbs?.reserved || 0,
             });
           }
           lastId = data?.last_id || "";
