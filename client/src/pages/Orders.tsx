@@ -1359,7 +1359,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl w-[95vw] sm:w-full max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-3xl w-[95vw] sm:w-full max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="w-5 h-5" />
@@ -1411,7 +1411,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
                 <p className="text-xs text-muted-foreground">Номер отправления Ozon</p>
                 <p className="font-mono font-medium text-sm" data-testid="text-posting-number">{order.postingNumber}</p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {canShip && (
                   <Button
                     size="sm"
@@ -1493,11 +1493,11 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
                               </div>
                             )}
                           </TableCell>
-                          <TableCell>
-                            <p className="font-medium text-sm">{item.product?.name || "Товар"}</p>
+                          <TableCell className="max-w-[180px]">
+                            <p className="font-medium text-sm truncate" title={item.product?.name}>{item.product?.name || "Товар"}</p>
                           </TableCell>
-                          <TableCell>
-                            <span className="text-sm text-muted-foreground">{item.product?.sku || "-"}</span>
+                          <TableCell className="max-w-[130px]">
+                            <span className="text-sm text-muted-foreground truncate block" title={item.product?.sku}>{item.product?.sku || "-"}</span>
                           </TableCell>
                           <TableCell className="text-center">
                             {item.quantity}
