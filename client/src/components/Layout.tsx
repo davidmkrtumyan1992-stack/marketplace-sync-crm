@@ -15,8 +15,7 @@ import {
   MinusCircle,
   Shield,
   Radio,
-  ChevronLeft,
-  ChevronRight,
+  PanelLeft,
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
@@ -73,64 +72,103 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background flex">
-      <aside className={`hidden lg:flex flex-col transition-all duration-300 bg-sidebar text-sidebar-foreground overflow-hidden ${isSidebarCollapsed ? 'w-0' : 'w-72'}`} data-testid="sidebar">
-        <div className="p-6 pb-4">
-          <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-            CloudERP
-          </h1>
-          <p className="text-xs text-sidebar-foreground/60 mt-1">Учёт товаров и продаж</p>
+      <aside className={`hidden lg:flex flex-col transition-all duration-300 bg-sidebar text-sidebar-foreground overflow-hidden flex-shrink-0 ${isSidebarCollapsed ? 'w-16' : 'w-72'}`} data-testid="sidebar">
+        {/* Logo + toggle */}
+        <div className={`flex items-center border-b border-sidebar-foreground/10 h-14 flex-shrink-0 ${isSidebarCollapsed ? 'justify-center px-2' : 'justify-between px-5'}`}>
+          {!isSidebarCollapsed && (
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent leading-tight">
+                CloudERP
+              </h1>
+              <p className="text-[10px] text-sidebar-foreground/60 leading-none">Учёт товаров и продаж</p>
+            </div>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleSidebar}
+            className="text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-foreground/10 rounded-xl h-9 w-9 flex-shrink-0"
+            title={isSidebarCollapsed ? "Открыть меню" : "Свернуть меню"}
+          >
+            <PanelLeft size={20} />
+          </Button>
         </div>
-        
-        <nav className="flex-1 px-4 space-y-1">
+
+        {/* Nav */}
+        <nav className="flex-1 px-2 py-2 space-y-0.5 overflow-y-auto">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location === item.href;
             return (
-              <Link 
-                key={item.href} 
-                href={item.href} 
+              <Link
+                key={item.href}
+                href={item.href}
                 className={`
-                  flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-300
-                  ${isActive 
-                    ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-lg shadow-primary/25" 
+                  flex items-center py-2.5 rounded-xl text-sm font-medium transition-all duration-200
+                  ${isSidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-3'}
+                  ${isActive
+                    ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-lg shadow-primary/25"
                     : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-foreground/10"}
                 `}
                 data-testid={`nav-${item.href.replace('/', '') || 'dashboard'}`}
+                title={isSidebarCollapsed ? item.label : undefined}
               >
-                <Icon size={20} />
-                {item.label}
+                <Icon size={20} className="flex-shrink-0" />
+                {!isSidebarCollapsed && <span className="truncate">{item.label}</span>}
               </Link>
             );
           })}
         </nav>
 
-        <div className="p-4 border-t border-sidebar-foreground/10">
-          <div className="flex items-center gap-3 px-2 py-2">
-            <Avatar className="h-10 w-10 ring-2 ring-primary/30">
-              <AvatarImage src={user?.profileImageUrl || undefined} />
-              <AvatarFallback className="bg-gradient-to-br from-primary to-accent text-primary-foreground font-semibold">
-                {user?.firstName?.charAt(0) || "П"}
-              </AvatarFallback>
-            </Avatar>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{user?.firstName} {user?.lastName}</p>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <Badge variant="secondary" className="text-[10px] px-1.5 py-0" data-testid="badge-role">
-                  <Shield className="w-2.5 h-2.5 mr-0.5" />
-                  {ROLE_LABELS[role] || role}
-                </Badge>
-              </div>
+        {/* User profile */}
+        <div className="border-t border-sidebar-foreground/10 p-2">
+          {isSidebarCollapsed ? (
+            <div className="flex flex-col items-center gap-1.5 py-1">
+              <Avatar className="h-8 w-8 ring-2 ring-primary/30">
+                <AvatarImage src={user?.profileImageUrl || undefined} />
+                <AvatarFallback className="bg-gradient-to-br from-primary to-accent text-primary-foreground font-semibold text-xs">
+                  {user?.firstName?.charAt(0) || "П"}
+                </AvatarFallback>
+              </Avatar>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => logout()}
+                className="text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-foreground/10 rounded-xl h-8 w-8"
+                title="Выйти"
+                data-testid="button-logout"
+              >
+                <LogOut size={16} />
+              </Button>
             </div>
-            <Button 
-              variant="ghost" 
-              size="icon" 
-              onClick={() => logout()} 
-              className="text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-foreground/10 rounded-xl"
-              data-testid="button-logout"
-            >
-              <LogOut size={18} />
-            </Button>
-          </div>
+          ) : (
+            <div className="flex items-center gap-3 px-2 py-2">
+              <Avatar className="h-10 w-10 ring-2 ring-primary/30">
+                <AvatarImage src={user?.profileImageUrl || undefined} />
+                <AvatarFallback className="bg-gradient-to-br from-primary to-accent text-primary-foreground font-semibold">
+                  {user?.firstName?.charAt(0) || "П"}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{user?.firstName} {user?.lastName}</p>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0" data-testid="badge-role">
+                    <Shield className="w-2.5 h-2.5 mr-0.5" />
+                    {ROLE_LABELS[role] || role}
+                  </Badge>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => logout()}
+                className="text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-foreground/10 rounded-xl"
+                data-testid="button-logout"
+              >
+                <LogOut size={18} />
+              </Button>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -151,20 +189,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </span>
           </div>
 
-          <div className="hidden lg:flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggleSidebar}
-              className="rounded-xl h-9 w-9"
-              title={isSidebarCollapsed ? "Открыть меню" : "Свернуть меню"}
-            >
-              {isSidebarCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
-            </Button>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span>Добро пожаловать,</span>
-              <span className="font-semibold text-foreground">{user?.firstName}</span>
-            </div>
+          <div className="hidden lg:flex items-center gap-2 text-sm text-muted-foreground">
+            <span>Добро пожаловать,</span>
+            <span className="font-semibold text-foreground">{user?.firstName}</span>
           </div>
 
           <div className="flex items-center gap-2">
