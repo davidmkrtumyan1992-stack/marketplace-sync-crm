@@ -22,6 +22,16 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -1453,6 +1463,7 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, ta
   const { mutate: syncProduct, isPending: isSyncing } = useSyncProduct();
   const { toast } = useToast();
   const [imgError, setImgError] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   useEffect(() => setImgError(false), [product.imageUrl]);
 
   const result = calculateFromProduct(product, taxRate, defaultCommission);
@@ -1543,13 +1554,38 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, ta
               <RefreshCw className="w-4 h-4 mr-2" />
               Синхронизировать
             </DropdownMenuItem>
-            <DropdownMenuItem className="text-red-600" onClick={(e) => { e.stopPropagation(); deleteProduct(product.id); }}>
+            <DropdownMenuItem className="text-red-600" onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(true); }}>
               <Trash2 className="w-4 h-4 mr-2" />
               Удалить
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </TableCell>
+
+      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Trash2 className="w-5 h-5 text-red-500" />
+              Удалить товар?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="font-medium text-foreground">{product.name}</span>
+              <br />
+              Товар будет безвозвратно удалён из каталога вместе со всеми данными. Это действие нельзя отменить.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={() => deleteProduct(product.id)}
+            >
+              Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </TableRow>
   );
 }
