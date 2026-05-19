@@ -146,6 +146,15 @@
   @apply bg-muted-foreground/50;
 }
 
+.store-inner-card {
+  background-color: hsl(220 14% 94%);
+  border-color: hsl(var(--border));
+}
+.dark .store-inner-card {
+  background-color: hsl(180 30% 14%);
+  border-color: hsl(180 25% 22%);
+}
+
 .glass-card {
   @apply bg-card/90 backdrop-blur-xl rounded-2xl border border-border/50 shadow-xl;
 }

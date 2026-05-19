@@ -5,7 +5,7 @@ import { useOrders } from "@/hooks/use-orders";
 import { useKPI } from "@/hooks/use-kpi";
 import { useRole } from "@/hooks/use-role";
 import { useQuery } from "@tanstack/react-query";
-import { Package, Warehouse, TrendingUp, Coins, ArrowUpRight, Building2, Store, ShoppingCart, ExternalLink, Database, AlertTriangle, RefreshCw, CheckCircle2, XCircle, Shield, Calendar as CalendarIcon, Download } from "lucide-react";
+import { Package, TrendingUp, Coins, ArrowUpRight, Building2, Store, ShoppingCart, ExternalLink, Database, AlertTriangle, Calendar as CalendarIcon, Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -52,7 +52,7 @@ const MARKETPLACE_LABELS: Record<string, string> = {
 export default function Dashboard() {
   const { data: products } = useProducts();
   const { data: kpi, isLoading: kpiLoading } = useKPI();
-  const { canSeePurchasePrice, canSeePnL } = useRole();
+  const { canSeePnL } = useRole();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -447,18 +447,6 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <div className="counter-badge" data-testid={`badge-company-stock-${company.id}`}>
-                      <Warehouse className="w-3.5 h-3.5" />
-                      {formatNumber(company.totalStock)} шт.
-                    </div>
-                    {canSeePurchasePrice && (
-                      <div className="counter-badge" data-testid={`badge-company-value-${company.id}`}>
-                        <Coins className="w-3.5 h-3.5" />
-                        {formatCurrency(company.totalValue)}
-                      </div>
-                    )}
-                  </div>
                 </CardHeader>
 
                 <CardContent>
@@ -469,8 +457,7 @@ export default function Dashboard() {
                       return (
                         <Card
                           key={store.id}
-                          className=""
-                          style={{ backgroundColor: "hsl(220 14% 94%)" }}
+                          className="store-inner-card"
                           data-testid={`card-store-${store.id}`}
                         >
                           <CardContent className="pt-5 pb-5">
@@ -537,7 +524,7 @@ export default function Dashboard() {
                                 <span className="font-semibold" style={{ color: store.activeOrdersRevenue > 0 ? "hsl(142 71% 45%)" : undefined }}>
                                   {formatCurrency(store.activeOrdersRevenue)}
                                 </span>
-                                <span className="text-muted-foreground">выручка</span>
+                                <span className="text-muted-foreground">на сумму</span>
                               </div>
                             </div>
 
