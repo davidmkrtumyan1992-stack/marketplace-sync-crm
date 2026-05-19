@@ -83,8 +83,8 @@ export class InventorySyncEngine {
             .where(inArray(stores.companyId, companyIds));
         }
 
-        const targetStores = allStores.filter(s => 
-          s.id !== sourceStoreId && s.isActive && !excludedStoreIds.has(s.id)
+        const targetStores = allStores.filter(s =>
+          s.id !== sourceStoreId && s.isActive && !excludedStoreIds.has(s.id) && s.stockSyncEnabled !== false
         );
 
         const stockToSend = safetyTriggered ? 0 : newCentralStock;

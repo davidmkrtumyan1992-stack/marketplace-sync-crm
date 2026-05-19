@@ -25,6 +25,7 @@ export const stores = pgTable("stores", {
   clientId: text("client_id"),
   warehouseId: text("warehouse_id"),
   isActive: boolean("is_active").default(true),
+  stockSyncEnabled: boolean("stock_sync_enabled").notNull().default(true),
   lastSync: timestamp("last_sync"),
   createdAt: timestamp("created_at").defaultNow(),
 });

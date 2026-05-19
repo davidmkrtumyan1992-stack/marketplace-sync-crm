@@ -9436,7 +9436,7 @@ export async function registerRoutes(
     try {
       const activeStores = await db.execute(sql`
         SELECT s.id, s.name, s.marketplace, s.api_key, s.client_id, s.warehouse_id,
-               s.is_active, s.company_id,
+               s.is_active, s.company_id, s.stock_sync_enabled,
                c.organization_id
         FROM stores s
         JOIN companies c ON s.company_id = c.id
@@ -9445,6 +9445,10 @@ export async function registerRoutes(
 
       for (const storeRow of activeStores.rows) {
         const store = storeRow as any;
+        if (store.stock_sync_enabled === false) {
+          console.log(`[reconcile] ${store.name}: синхронизация FBS отключена — пропускаем`);
+          continue;
+        }
         try {
           const adapter = createAdapter({
             id: store.id,
