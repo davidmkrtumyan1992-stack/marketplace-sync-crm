@@ -14,7 +14,9 @@ import {
   ScanLine,
   MinusCircle,
   Shield,
-  Radio
+  Radio,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
@@ -23,6 +25,14 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { useQuery } from "@tanstack/react-query";
 import { InventorySyncSetting } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
+
+function getCookieSidebarCollapsed(): boolean {
+  const match = document.cookie.match(/(?:^|;\s*)sidebarCollapsed=([^;]*)/);
+  return match ? match[1] === 'true' : false;
+}
+function setCookieSidebarCollapsed(val: boolean) {
+  document.cookie = `sidebarCollapsed=${val};path=/;max-age=31536000;SameSite=Lax`;
+}
 
 const ROLE_LABELS: Record<string, string> = {
   owner: "Владелец",
@@ -35,6 +45,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
   const { role, canAccessProducts, canAccessOrders, canAccessIntake, canAccessCustomers, canAccessReports, canAccessSettings } = useRole();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => getCookieSidebarCollapsed());
+
+  const toggleSidebar = () => {
+    const next = !isSidebarCollapsed;
+    setIsSidebarCollapsed(next);
+    setCookieSidebarCollapsed(next);
+  };
   
   const { data: syncSettings } = useQuery<InventorySyncSetting>({
     queryKey: ["/api/inventory-sync/settings"],
@@ -56,7 +73,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background flex">
-      <aside className="hidden lg:flex flex-col w-72 bg-sidebar text-sidebar-foreground" data-testid="sidebar">
+      <aside className={`hidden lg:flex flex-col transition-all duration-300 bg-sidebar text-sidebar-foreground overflow-hidden ${isSidebarCollapsed ? 'w-0' : 'w-72'}`} data-testid="sidebar">
         <div className="p-6 pb-4">
           <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
             CloudERP
@@ -134,9 +151,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </span>
           </div>
 
-          <div className="hidden lg:flex items-center gap-2 text-sm text-muted-foreground">
-            <span>Добро пожаловать,</span>
-            <span className="font-semibold text-foreground">{user?.firstName}</span>
+          <div className="hidden lg:flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleSidebar}
+              className="rounded-xl h-9 w-9"
+              title={isSidebarCollapsed ? "Открыть меню" : "Свернуть меню"}
+            >
+              {isSidebarCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+            </Button>
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>Добро пожаловать,</span>
+              <span className="font-semibold text-foreground">{user?.firstName}</span>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
@@ -202,7 +230,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
         )}
 
-        <main className="flex-1 p-4 md:p-8 overflow-y-auto premium-gradient-subtle pb-20 lg:pb-8">
+        <main className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden premium-gradient-subtle pb-20 lg:pb-8">
           <div className="max-w-7xl mx-auto">
             {children}
           </div>

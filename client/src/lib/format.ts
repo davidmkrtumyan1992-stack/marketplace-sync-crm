@@ -11,7 +11,7 @@ export function formatNumber(value: number | string): string {
 export function formatCurrency(value: number | string, useAngleQuotes = false): string {
   const formatted = formatNumber(value);
   if (useAngleQuotes) {
-    return `«${formatted}${NBSP}руб.»`;
+    return `${formatted}${NBSP}руб.`;
   }
   return `${formatted}${NBSP}₽`;
 }
