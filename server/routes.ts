@@ -1726,19 +1726,54 @@ export async function registerRoutes(
       }
       console.log(`[WB Smart Sync] Step 3 complete: ${photosFixed} photos fixed`);
 
+      // Step 4: Fix products with price = 0 via targeted WB API lookup per nmID
+      let pricesFixed = 0;
+      try {
+        const zeroRows = await db.execute(sql`
+          SELECT pml.product_id, pml.marketplace_product_id AS nm_id
+          FROM product_marketplace_links pml
+          JOIN products p ON pml.product_id = p.id
+          WHERE pml.store_id = ${setting.storeId!}
+            AND pml.is_active = true
+            AND pml.marketplace_product_id IS NOT NULL
+            AND p.organization_id = ${orgId}
+            AND (p.selling_price IS NULL OR p.selling_price = '' OR p.selling_price = '0')
+        `);
+        const zeroItems = (zeroRows as any).rows ?? [];
+        for (const row of zeroItems) {
+          try {
+            const priceRes = await fetchWithRetry(
+              `https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=1&filterNmID=${row.nm_id}`,
+              { method: "GET", headers: { "Authorization": setting.apiKey } }
+            );
+            const pd = await priceRes.json();
+            const g = (pd?.data?.listGoods ?? [])[0];
+            if (!g) continue;
+            const fs = (g.sizes ?? [])[0] ?? {};
+            const p = (fs.discountedPrice > 0 ? fs.discountedPrice : fs.price > 0 ? fs.price : g.price) || 0;
+            if (p > 0) {
+              await storage.updateProduct(row.product_id, { sellingPrice: String(p) } as any);
+              pricesFixed++;
+            }
+            await new Promise(r => setTimeout(r, 100));
+          } catch { /* non-fatal */ }
+        }
+      } catch { /* non-fatal */ }
+      console.log(`[WB Smart Sync] Step 4 complete: ${pricesFixed} zero prices fixed`);
+
       await storage.createAuditLog({
         organizationId: orgId, userId, userName,
         action: "wb_smart_sync", entityType: "product",
-        details: `Синхронизация Wildberries: создано ${created}, обновлено ${updated}, обогащено ${enriched}, фото: ${photosFixed}`,
+        details: `Синхронизация Wildberries: создано ${created}, обновлено ${updated}, обогащено ${enriched}, фото: ${photosFixed}, цен исправлено: ${pricesFixed}`,
       });
       await storage.createSyncHistory({
         organizationId: orgId, action: "product_sync",
         status: failed > 0 && created === 0 && updated === 0 ? "fail" : "success",
-        details: `Синхронизация WB: создано ${created}, обновлено ${updated}, остатки: ${stocksUpdated}, фото: ${photosFixed}`,
+        details: `Синхронизация WB: создано ${created}, обновлено ${updated}, остатки: ${stocksUpdated}, фото: ${photosFixed}, цен: ${pricesFixed}`,
         itemsCount: created + updated,
       });
 
-      res.json({ success: true, marketplace: "wildberries", created, updated, enriched, stocksUpdated, photosFixed, failed, total: fetchedProducts.length });
+      res.json({ success: true, marketplace: "wildberries", created, updated, enriched, stocksUpdated, photosFixed, pricesFixed, failed, total: fetchedProducts.length });
     } catch (error: any) {
       console.error("WB smart sync error:", error);
       res.status(500).json({ message: `Ошибка синхронизации Wildberries: ${error.message}` });
