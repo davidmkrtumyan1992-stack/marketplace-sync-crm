@@ -1135,6 +1135,25 @@ function SyncHistorySection() {
   });
 
   const [syncingStoreId, setSyncingStoreId] = useState<number | null>(null);
+  const [isFixingWbPrices, setIsFixingWbPrices] = useState(false);
+
+  const fixWbPrices = async () => {
+    setIsFixingWbPrices(true);
+    try {
+      const res = await apiRequest("POST", "/api/marketplace/wildberries/fix-prices");
+      const data = await res.json();
+      if (data.fixed > 0) {
+        toast({ title: `Цены исправлены: ${data.fixed} товаров`, description: data.results?.map((r: any) => `${r.store}: ${r.fixed}/${r.zeroPriceCount}`).join(", ") });
+        queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      } else {
+        toast({ title: "Товары с нулевой ценой не найдены", description: "Все WB товары уже имеют цену, или WB API вернул 0" });
+      }
+    } catch (err: any) {
+      toast({ title: "Ошибка", description: err.message, variant: "destructive" });
+    } finally {
+      setIsFixingWbPrices(false);
+    }
+  };
 
   const { mutate: syncAll, isPending: isSyncingAll } = useMutation({
     mutationFn: async () => {
@@ -1197,6 +1216,10 @@ function SyncHistorySection() {
                   {store.name}
                 </Button>
               ))}
+              <Button variant="outline" size="sm" onClick={fixWbPrices} disabled={isFixingWbPrices} title="Исправить нулевые цены WB товаров из WB API">
+                <RefreshCw className={`w-3 h-3 mr-1 ${isFixingWbPrices ? "animate-spin" : ""}`} />
+                Цены WB
+              </Button>
               <Button onClick={() => syncAll()} disabled={isSyncingAll} data-testid="button-sync-all">
                 <RefreshCw className={`w-4 h-4 mr-2 ${isSyncingAll ? "animate-spin" : ""}`} />
                 Синхронизировать всё

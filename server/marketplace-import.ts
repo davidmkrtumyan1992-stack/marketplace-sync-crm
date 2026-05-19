@@ -396,6 +396,9 @@ async function fetchWbPrices(apiToken: string): Promise<Map<string, { price: num
           finalPrice = firstSize.discountedPrice;
         } else if (firstSize.price && firstSize.price > 0) {
           finalPrice = discount > 0 ? Math.round(firstSize.price * (1 - discount / 100)) : firstSize.price;
+        } else if (g.price && g.price > 0) {
+          // fallback: some WB API responses return price at top level
+          finalPrice = g.price;
         }
 
         if (finalPrice > 0) {

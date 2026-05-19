@@ -5334,6 +5334,80 @@ export async function registerRoutes(
     }
   };
 
+  app.post("/api/marketplace/wildberries/fix-prices", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const wbSettings = allSettings.filter(s => s.marketplace === "wildberries" && s.isActive && s.apiKey && s.storeId);
+
+      if (wbSettings.length === 0) {
+        return res.json({ message: "WB магазины не найдены", fixed: 0, results: [] });
+      }
+
+      let totalFixed = 0;
+      const results: { store: string; zeroPriceCount: number; fixed: number }[] = [];
+
+      for (const setting of wbSettings) {
+        const storeId = setting.storeId!;
+
+        // Find WB-linked products with price = 0 or null
+        const zeroRows = await db.execute(sql`
+          SELECT pml.product_id, pml.marketplace_product_id AS nm_id
+          FROM product_marketplace_links pml
+          JOIN products p ON pml.product_id = p.id
+          WHERE pml.store_id = ${storeId}
+            AND pml.is_active = true
+            AND pml.marketplace_product_id IS NOT NULL
+            AND p.organization_id = ${orgId}
+            AND (p.selling_price IS NULL OR p.selling_price = '' OR p.selling_price = '0')
+        `);
+        const rows = (zeroRows as any).rows ?? [];
+
+        if (rows.length === 0) {
+          results.push({ store: setting.storeName || String(storeId), zeroPriceCount: 0, fixed: 0 });
+          continue;
+        }
+
+        let storeFixed = 0;
+        for (const row of rows) {
+          const nmId = row.nm_id;
+          if (!nmId) continue;
+          try {
+            const priceRes = await fetchWithRetry(
+              `https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=1&filterNmID=${nmId}`,
+              { method: "GET", headers: { "Authorization": setting.apiKey! } }
+            );
+            const priceData = await priceRes.json();
+            const goods = priceData?.data?.listGoods ?? [];
+            const g = goods[0];
+            if (!g) continue;
+            const sizes = g.sizes ?? [];
+            const firstSize = sizes[0] ?? {};
+            let price = 0;
+            if (firstSize.discountedPrice > 0) price = firstSize.discountedPrice;
+            else if (firstSize.price > 0) price = firstSize.price;
+
+            if (price > 0) {
+              await storage.updateProduct(row.product_id, { sellingPrice: String(price) } as any);
+              storeFixed++;
+              totalFixed++;
+              console.log(`[fix-wb-prices] nmID ${nmId}: ${price} ₽`);
+            }
+            await new Promise(r => setTimeout(r, 150));
+          } catch (err: any) {
+            console.warn(`[fix-wb-prices] nmID ${nmId}: ${err.message}`);
+          }
+        }
+        results.push({ store: setting.storeName || String(storeId), zeroPriceCount: rows.length, fixed: storeFixed });
+      }
+
+      res.json({ message: `Обновлено: ${totalFixed} товаров`, fixed: totalFixed, results });
+    } catch (err: any) {
+      console.error("[POST /api/marketplace/wildberries/fix-prices]", err);
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.post("/api/marketplace/wildberries/sync-orders", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
