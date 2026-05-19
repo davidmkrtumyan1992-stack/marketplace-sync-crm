@@ -1187,7 +1187,7 @@ function OrderCard({ order, storeName, storeId, marketplaceStores, getStatusColo
             {itemImages.length > 0 ? (
               <div className="flex-shrink-0 flex gap-1" data-testid={`order-thumbnails-${order.id}`}>
                 {itemImages.slice(0, 3).map((img: any) => (
-                  <div key={img.id} className="w-12 h-12 rounded-lg overflow-hidden border border-border bg-muted">
+                  <div key={img.id} className="w-16 h-16 rounded-lg overflow-hidden border border-border bg-muted flex-shrink-0">
                     <img
                       src={img.url}
                       alt={img.name}
@@ -1198,7 +1198,7 @@ function OrderCard({ order, storeName, storeId, marketplaceStores, getStatusColo
                   </div>
                 ))}
                 {itemImages.length > 3 && (
-                  <div className="w-12 h-12 rounded-lg border border-border bg-muted flex items-center justify-center text-xs text-muted-foreground font-medium">
+                  <div className="w-16 h-16 rounded-lg border border-border bg-muted flex items-center justify-center text-xs text-muted-foreground font-medium flex-shrink-0">
                     +{itemImages.length - 3}
                   </div>
                 )}
@@ -1479,7 +1479,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
                         <TableRow key={item.id} data-testid={`row-order-item-${item.id}`}>
                           <TableCell>
                             {item.product?.imageUrl ? (
-                              <div className="w-10 h-10 rounded-md overflow-hidden border border-border bg-muted">
+                              <div className="w-12 h-12 rounded-md overflow-hidden border border-border bg-muted flex-shrink-0">
                                 <img
                                   src={item.product.imageUrl}
                                   alt={item.product?.name || "Товар"}
@@ -1488,7 +1488,7 @@ function OrderDetailDialog({ order, open, onOpenChange, getStatusLabel, getSourc
                                 />
                               </div>
                             ) : (
-                              <div className="w-10 h-10 rounded-md border border-border bg-muted flex items-center justify-center">
+                              <div className="w-12 h-12 rounded-md border border-border bg-muted flex items-center justify-center flex-shrink-0">
                                 <Package className="w-4 h-4 text-muted-foreground" />
                               </div>
                             )}
