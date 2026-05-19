@@ -171,7 +171,9 @@ function groupOrdersByDate(orders: any[]): { label: string; orders: any[] }[] {
 export default function Orders() {
   const { data: orders, isLoading } = useOrders();
   const { toast } = useToast();
-  const [isDirectSaleOpen, setIsDirectSaleOpen] = useState(false);
+  const [isDirectSaleOpen, setIsDirectSaleOpen] = useState(() =>
+    new URLSearchParams(window.location.search).get("directSale") === "true"
+  );
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
 
   const [marketplaceTab, setMarketplaceTab] = useState<MarketplaceTab>(() => {

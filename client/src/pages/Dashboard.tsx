@@ -201,7 +201,7 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
-            <Link href="/orders">
+            <Link href="/orders?directSale=true">
               <Button data-testid="button-dashboard-direct-sale">
                 <Store className="w-4 h-4 mr-2" />
                 Прямая продажа
