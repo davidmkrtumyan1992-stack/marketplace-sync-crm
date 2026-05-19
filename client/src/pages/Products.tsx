@@ -1,5 +1,5 @@
 import { Layout } from "@/components/Layout";
-import { SyncPriceDialog } from "@/components/SyncPriceDialog";
+
 import { useProducts, useCreateProduct, useDeleteProduct, useSyncProduct } from "@/hooks/use-products";
 import { useCreateStockInflow } from "@/hooks/use-stock-inflow";
 import { useState, useEffect, useRef } from "react";
@@ -816,8 +816,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [imgError, setImgError] = useState(false);
   useEffect(() => setImgError(false), [product.id]);
   const [isSaving, setIsSaving] = useState(false);
-  const [showSyncPrice, setShowSyncPrice] = useState(false);
-  const [syncPriceValue, setSyncPriceValue] = useState(0);
+
   const baselineRef = useRef({
     name: product.name,
     barcode: product.barcode || "",
@@ -1274,12 +1273,6 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
         </DialogContent>
       </Dialog>
 
-      <SyncPriceDialog
-        open={showSyncPrice}
-        onClose={() => setShowSyncPrice(false)}
-        productId={product.id}
-        newPrice={syncPriceValue}
-      />
     </>
   );
 }
