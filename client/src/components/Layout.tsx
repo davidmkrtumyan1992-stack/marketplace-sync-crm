@@ -71,7 +71,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const navItems = useMemo(() => allNavItems.filter(item => item.visible), [canAccessProducts, canAccessOrders, canAccessIntake, canAccessCustomers, canAccessReports, canAccessSettings]);
 
   return (
-    <div className="min-h-screen bg-background flex">
+    <div className="h-screen bg-background flex overflow-hidden">
       <aside className={`hidden lg:flex flex-col transition-all duration-300 bg-sidebar text-sidebar-foreground overflow-hidden flex-shrink-0 ${isSidebarCollapsed ? 'w-16' : 'w-72'}`} data-testid="sidebar">
         {/* Logo + toggle */}
         <div className={`flex items-center border-b border-sidebar-foreground/10 h-14 flex-shrink-0 ${isSidebarCollapsed ? 'justify-center px-2' : 'justify-between px-5'}`}>
