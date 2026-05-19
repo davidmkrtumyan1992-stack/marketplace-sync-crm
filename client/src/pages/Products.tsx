@@ -1293,7 +1293,7 @@ function ProductAnalyticsTab({ product, taxRate, defaultCommission }: { product:
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       toast({
         title: "Цена обновлена",
-        description: `Новая цена: ${simPrice.toLocaleString("ru-RU")} руб. Для синхронизации с маркетплейсами сохраните карточку товара.`,
+        description: `Новая цена: ${simPrice.toLocaleString("ru-RU")} ₽. Для синхронизации с маркетплейсами сохраните карточку товара.`,
       });
       setSimPrice(simPrice);
     } catch (err: any) {
