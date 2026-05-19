@@ -974,8 +974,22 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
       toast({ title: "Сохранено", description: "Изменения сохранены в CRM" });
 
       if (priceChangedBeforeSave) {
-        setSyncPriceValue(editPrice);
-        setShowSyncPrice(true);
+        apiRequest("POST", `/api/products/${product.id}/sync-price`, {
+          storeIds: "all",
+          price: editPrice,
+        }).then(async (syncRes) => {
+          if (!syncRes.ok) return;
+          const syncData = await syncRes.json();
+          const syncResults: { storeName: string; success: boolean; error?: string }[] = syncData.results ?? [];
+          const succeeded = syncResults.filter(r => r.success);
+          const failed = syncResults.filter(r => !r.success);
+          if (succeeded.length > 0) {
+            toast({ title: "Цена синхронизирована", description: succeeded.map(r => r.storeName).join(", ") });
+          }
+          failed.forEach(f => {
+            toast({ title: `Ошибка синхронизации (${f.storeName})`, description: f.error || "Ошибка", variant: "destructive" });
+          });
+        }).catch(() => { /* silent — save already succeeded */ });
       }
     } catch (err: any) {
       toast({
@@ -1228,7 +1242,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                 <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 flex items-start gap-2">
                   <Store className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
                   <p className="text-xs text-blue-800 dark:text-blue-200">
-                    Изменения сохранятся только в CRM. Для синхронизации с {marketplaceNames} используйте отдельную функцию синхронизации.
+                    Цена синхронизируется с маркетплейсами автоматически при сохранении. Название, штрих-код и другие поля — только в CRM.
                   </p>
                 </div>
               )}

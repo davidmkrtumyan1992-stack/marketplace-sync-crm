@@ -576,10 +576,7 @@ export async function registerRoutes(
       if (!product) return res.status(404).json({ message: "Товар не найден" });
       if (product.organizationId !== orgId) return res.status(403).json({ message: "Доступ запрещён" });
 
-      const { storeIds, price } = req.body;
-      if (!Array.isArray(storeIds) || storeIds.length === 0) {
-        return res.status(400).json({ message: "storeIds must be a non-empty array" });
-      }
+      const { storeIds: storeIdsInput, price } = req.body;
       if (typeof price !== "number" && typeof price !== "string") {
         return res.status(400).json({ message: "price is required" });
       }
@@ -589,6 +586,16 @@ export async function registerRoutes(
       const productLinks = await storage.getProductMarketplaceLinks(productId);
       const activeLinksMap = new Map(productLinks.filter(l => l.isActive).map(l => [l.storeId, l]));
       const results: { storeId: number; storeName: string; marketplace: string; success: boolean; error?: string }[] = [];
+
+      let storeIds: number[];
+      if (storeIdsInput === "all" || !storeIdsInput) {
+        storeIds = productLinks.filter(l => l.isActive && l.storeId).map(l => l.storeId!);
+        if (storeIds.length === 0) return res.json({ results: [] });
+      } else if (!Array.isArray(storeIdsInput) || storeIdsInput.length === 0) {
+        return res.status(400).json({ message: "storeIds must be a non-empty array or 'all'" });
+      } else {
+        storeIds = storeIdsInput.map(Number);
+      }
 
       for (const storeId of storeIds) {
         const storeNum = Number(storeId);
@@ -640,9 +647,48 @@ export async function registerRoutes(
               console.log("[sync-price] Full Ozon response:", JSON.stringify(data));
             }
           } else if (setting.marketplace === "yandex" && setting.apiKey) {
-            errorMsg = "Синхронизация цен Яндекс Маркет пока не реализована";
+            const link = activeLinksMap.get(storeNum);
+            const offerId = link?.externalSku || product.sku;
+            const businessId = setting.warehouseId;
+            if (!businessId) {
+              errorMsg = "ЯМ Business ID не настроен";
+            } else {
+              const ymHeaders: Record<string, string> = setting.apiKey.startsWith("ACMA:")
+                ? { "Api-Key": setting.apiKey, "Content-Type": "application/json" }
+                : { "Authorization": `OAuth ${setting.apiKey}`, "Content-Type": "application/json" };
+              const ymRes = await fetchWithRetry(
+                `https://api.partner.market.yandex.ru/businesses/${businessId}/offer-prices/updates`,
+                {
+                  method: "POST",
+                  headers: ymHeaders,
+                  body: JSON.stringify({ offers: [{ id: offerId, price: { value: Math.round(Number(price)), currencyId: "RUR" } }] }),
+                }
+              );
+              if (ymRes.ok) {
+                success = true;
+              } else {
+                const ymErrText = await ymRes.text();
+                errorMsg = `ЯМ (${ymRes.status}): ${ymErrText}`;
+              }
+            }
           } else if (setting.marketplace === "wildberries" && setting.apiKey) {
-            errorMsg = "Синхронизация цен Wildberries пока не реализована";
+            const link = activeLinksMap.get(storeNum);
+            const nmId = link?.marketplaceProductId ? Number(link.marketplaceProductId) : null;
+            if (!nmId) {
+              errorMsg = "WB nmID не найден для товара";
+            } else {
+              const wbRes = await fetchWithRetry("https://discounts-prices-api.wildberries.ru/api/v2/upload/task", {
+                method: "POST",
+                headers: { "Authorization": setting.apiKey, "Content-Type": "application/json" },
+                body: JSON.stringify({ data: [{ nmID: nmId, price: Math.round(Number(price)) }] }),
+              });
+              if (wbRes.ok) {
+                success = true;
+              } else {
+                const wbErrText = await wbRes.text();
+                errorMsg = `WB (${wbRes.status}): ${wbErrText}`;
+              }
+            }
           } else {
             errorMsg = "Маркетплейс не поддерживается или не настроен";
           }
