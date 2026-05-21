@@ -46,7 +46,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { role, canAccessProducts, canAccessOrders, canAccessIntake, canAccessCustomers, canAccessReports, canAccessSettings } = useRole();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => getCookieSidebarCollapsed());
-  const { writeoffs, inflows } = useDraftQueue();
+  const { writeoffs, inflows, intakeBatch, writeoffBatch } = useDraftQueue();
 
   const toggleSidebar = () => {
     const next = !isSidebarCollapsed;
@@ -101,7 +101,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location === item.href;
-            const draftCount = item.href === "/writeoff" ? writeoffs.length : item.href === "/intake" ? inflows.length : 0;
+            const draftCount = item.href === "/writeoff"
+              ? writeoffs.length + writeoffBatch.length
+              : item.href === "/intake"
+                ? inflows.length + intakeBatch.length
+                : 0;
             return (
               <Link
                 key={item.href}
