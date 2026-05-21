@@ -1115,38 +1115,38 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                       Остаток: {product.centralStock || 0} шт.
                     </span>
                   </div>
-                  <div className="flex flex-col gap-1.5 pt-1">
-                    <div className="flex items-center gap-2">
+                  <div className="flex flex-col gap-1.5 pt-1 w-full">
+                    <div className="flex items-center gap-2 w-full">
                       <Input
                         type="number" min={1} max={product.centralStock || 1}
                         value={writeoffQty || ""}
                         onChange={e => setWriteoffQty(Math.min(product.centralStock || 1, Math.max(1, parseInt(e.target.value) || 0)))}
                         placeholder="Кол-во"
-                        className="w-20 h-8 text-sm"
+                        className="h-9 text-sm w-28"
                         disabled={(product.centralStock || 0) === 0}
                       />
-                      <Button size="sm" variant="outline"
-                        className="h-8 text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                      <Button variant="outline"
+                        className="h-9 flex-1 text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
                         onClick={handleAddWriteoff}
                         disabled={(product.centralStock || 0) === 0 || writeoffQty < 1}
                       >
-                        <MinusCircle className="w-3.5 h-3.5 mr-1" /> Списать
+                        <MinusCircle className="w-3.5 h-3.5 mr-1.5" /> Списать
                       </Button>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 w-full">
                       <Input
                         type="number" min={1}
                         value={inflowQty || ""}
                         onChange={e => setInflowQty(Math.max(1, parseInt(e.target.value) || 0))}
                         placeholder="Кол-во"
-                        className="w-20 h-8 text-sm"
+                        className="h-9 text-sm w-28"
                       />
-                      <Button size="sm" variant="outline"
-                        className="h-8 text-green-600 border-green-600/40 hover:bg-green-600/10 dark:text-green-400 dark:border-green-400/40"
+                      <Button variant="outline"
+                        className="h-9 flex-1 text-green-600 border-green-600/40 hover:bg-green-600/10 dark:text-green-400 dark:border-green-400/40"
                         onClick={handleAddInflow}
                         disabled={inflowQty < 1}
                       >
-                        <PackagePlus className="w-3.5 h-3.5 mr-1" /> Приход
+                        <PackagePlus className="w-3.5 h-3.5 mr-1.5" /> Приход
                       </Button>
                     </div>
                   </div>
