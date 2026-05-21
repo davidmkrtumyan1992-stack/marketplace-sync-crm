@@ -4,7 +4,7 @@ import type { Product } from "@shared/schema";
 export interface DraftWriteoffItem {
   product: Product;
   quantity: number;
-  reason: string;
+  reason?: string;
 }
 
 export interface DraftInflowItem {

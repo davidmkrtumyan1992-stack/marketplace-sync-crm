@@ -79,8 +79,6 @@ const formSchema = insertProductSchema.extend({
   companyId: z.coerce.number().optional().nullable(),
 });
 
-const WRITEOFF_REASONS = ["Брак", "Истёк срок годности", "Повреждение", "Хищение", "Инвентаризация", "Прочее"];
-
 const CATEGORIES = [
   "Электроника",
   "Аксессуары",
@@ -822,20 +820,18 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   useEffect(() => setImgError(false), [product.id]);
   const [isSaving, setIsSaving] = useState(false);
   const [writeoffQty, setWriteoffQty] = useState(0);
-  const [writeoffReason, setWriteoffReason] = useState("");
   const [inflowQty, setInflowQty] = useState(0);
   const [, navigate] = useLocation();
   const { addWriteoff, addInflow } = useDraftQueue();
 
   const handleAddWriteoff = () => {
-    addWriteoff({ product, quantity: writeoffQty, reason: writeoffReason });
+    addWriteoff({ product, quantity: writeoffQty, reason: "" });
     toast({
       title: `Добавлено в список списания`,
-      description: `«${product.name}» — ${writeoffQty} шт., ${writeoffReason}`,
+      description: `«${product.name}» — ${writeoffQty} шт.`,
       action: <ToastAction altText="Перейти" onClick={() => navigate("/writeoff")}>Перейти →</ToastAction>,
     });
     setWriteoffQty(0);
-    setWriteoffReason("");
   };
 
   const handleAddInflow = () => {
@@ -1119,6 +1115,41 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                       Остаток: {product.centralStock || 0} шт.
                     </span>
                   </div>
+                  <div className="flex flex-col gap-1.5 pt-1">
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number" min={1} max={product.centralStock || 1}
+                        value={writeoffQty || ""}
+                        onChange={e => setWriteoffQty(Math.min(product.centralStock || 1, Math.max(1, parseInt(e.target.value) || 0)))}
+                        placeholder="Кол-во"
+                        className="w-20 h-8 text-sm"
+                        disabled={(product.centralStock || 0) === 0}
+                      />
+                      <Button size="sm" variant="outline"
+                        className="h-8 text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                        onClick={handleAddWriteoff}
+                        disabled={(product.centralStock || 0) === 0 || writeoffQty < 1}
+                      >
+                        <MinusCircle className="w-3.5 h-3.5 mr-1" /> Списать
+                      </Button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number" min={1}
+                        value={inflowQty || ""}
+                        onChange={e => setInflowQty(Math.max(1, parseInt(e.target.value) || 0))}
+                        placeholder="Кол-во"
+                        className="w-20 h-8 text-sm"
+                      />
+                      <Button size="sm" variant="outline"
+                        className="h-8 text-green-600 border-green-600/40 hover:bg-green-600/10 dark:text-green-400 dark:border-green-400/40"
+                        onClick={handleAddInflow}
+                        disabled={inflowQty < 1}
+                      >
+                        <PackagePlus className="w-3.5 h-3.5 mr-1" /> Приход
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1268,71 +1299,6 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                 )}
               </div>
 
-              {/* Быстрые операции */}
-              <div className="border-t pt-4 space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Быстрые операции</p>
-
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Списание со склада</Label>
-                  <div className="flex gap-2 items-center">
-                    <Input
-                      type="number"
-                      min={1}
-                      max={product.centralStock || 0}
-                      value={writeoffQty || ""}
-                      onChange={e => setWriteoffQty(Math.min(Math.max(0, Number(e.target.value)), product.centralStock || 0))}
-                      className="w-20 h-8 text-sm"
-                      placeholder="Кол-во"
-                      disabled={(product.centralStock || 0) === 0}
-                    />
-                    <Select value={writeoffReason} onValueChange={setWriteoffReason} disabled={(product.centralStock || 0) === 0}>
-                      <SelectTrigger className="h-8 text-sm flex-1 min-w-0">
-                        <SelectValue placeholder="Причина" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {WRITEOFF_REASONS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-8 shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      disabled={(product.centralStock || 0) === 0 || !writeoffQty || writeoffQty < 1 || !writeoffReason}
-                      onClick={handleAddWriteoff}
-                    >
-                      <MinusCircle className="w-3.5 h-3.5 mr-1.5" />
-                      В список
-                    </Button>
-                  </div>
-                  {(product.centralStock || 0) === 0 && (
-                    <p className="text-xs text-muted-foreground">Остаток 0 — списание невозможно</p>
-                  )}
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Оприходование на склад</Label>
-                  <div className="flex gap-2 items-center">
-                    <Input
-                      type="number"
-                      min={1}
-                      value={inflowQty || ""}
-                      onChange={e => setInflowQty(Math.max(0, Number(e.target.value)))}
-                      className="w-20 h-8 text-sm"
-                      placeholder="Кол-во"
-                    />
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-8 shrink-0 border-green-500/40 text-green-700 dark:text-green-400 hover:bg-green-500/10"
-                      disabled={!inflowQty || inflowQty < 1}
-                      onClick={handleAddInflow}
-                    >
-                      <PackagePlus className="w-3.5 h-3.5 mr-1.5" />
-                      В список
-                    </Button>
-                  </div>
-                </div>
-              </div>
 
               {hasMarketplace && hasChanges && (
                 <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 flex items-start gap-2">
