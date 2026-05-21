@@ -13,6 +13,7 @@ import { formatCurrency } from "@/lib/format";
 import type { Product } from "@shared/schema";
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Barcode, ScanLine, Package, Plus, Minus, Trash2, Check, FileSpreadsheet, Warehouse } from "lucide-react";
+import { useDraftQueue } from "@/contexts/DraftQueueContext";
 
 interface BatchItem {
   product: Product;
@@ -42,6 +43,30 @@ export default function Intake() {
   const [barcodeValue, setBarcodeValue] = useState("");
   const [batch, setBatch] = useState<BatchItem[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+
+  const { inflows, clearInflows } = useDraftQueue();
+
+  useEffect(() => {
+    if (inflows.length === 0) return;
+    const drafts = inflows;
+    clearInflows();
+    setBatch(prev => {
+      const merged = [...prev];
+      for (const d of drafts) {
+        const idx = merged.findIndex(item => item.product.id === d.product.id);
+        if (idx >= 0) {
+          merged[idx] = { ...merged[idx], quantity: merged[idx].quantity + d.quantity };
+        } else {
+          merged.push({ product: d.product, quantity: d.quantity });
+        }
+      }
+      return merged;
+    });
+    toast({
+      title: `Загружено ${drafts.length} ${drafts.length === 1 ? "товар" : drafts.length < 5 ? "товара" : "товаров"} из карточек`,
+      description: "Проверьте список и нажмите «Подтвердить приёмку»",
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [pendingBarcode, setPendingBarcode] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 

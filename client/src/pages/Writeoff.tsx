@@ -12,6 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { Product } from "@shared/schema";
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Barcode, ScanLine, MinusCircle, Plus, Minus, Trash2, Check } from "lucide-react";
+import { useDraftQueue } from "@/contexts/DraftQueueContext";
 
 const WRITEOFF_REASONS = [
   "Брак",
@@ -42,9 +43,33 @@ export default function Writeoff() {
   const [globalReason, setGlobalReason] = useState("");
   const [globalNotes, setGlobalNotes] = useState("");
 
+  const { writeoffs, clearWriteoffs } = useDraftQueue();
+
   useEffect(() => {
     barcodeInputRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    if (writeoffs.length === 0) return;
+    const drafts = writeoffs;
+    clearWriteoffs();
+    setBatch(prev => {
+      const merged = [...prev];
+      for (const d of drafts) {
+        const idx = merged.findIndex(item => item.product.id === d.product.id);
+        if (idx >= 0) {
+          merged[idx] = { ...merged[idx], quantity: merged[idx].quantity + d.quantity };
+        } else {
+          merged.push({ product: d.product, quantity: d.quantity, reason: d.reason, notes: "" });
+        }
+      }
+      return merged;
+    });
+    toast({
+      title: `Загружено ${drafts.length} ${drafts.length === 1 ? "товар" : drafts.length < 5 ? "товара" : "товаров"} из карточек`,
+      description: "Проверьте список и нажмите «Подтвердить списание»",
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addToBatch = useCallback((product: Product) => {
     setBatch((prev) => {

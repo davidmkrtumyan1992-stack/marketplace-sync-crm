@@ -1,4 +1,7 @@
 import { Layout } from "@/components/Layout";
+import { useLocation } from "wouter";
+import { useDraftQueue } from "@/contexts/DraftQueueContext";
+import { ToastAction } from "@/components/ui/toast";
 
 import { useProducts, useCreateProduct, useDeleteProduct, useSyncProduct } from "@/hooks/use-products";
 import { useCreateStockInflow } from "@/hooks/use-stock-inflow";
@@ -48,7 +51,7 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown, Download, Copy } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown, Download, Copy, MinusCircle } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
 import { calculateFromProduct, calculateProductProfit, getMarginColor, getMarginBadgeClasses, formatRub, formatPct, type OzonProfitResult } from "@/lib/ozon-calc";
@@ -75,6 +78,8 @@ const formSchema = insertProductSchema.extend({
   marketplaceCommission: z.coerce.number().optional(),
   companyId: z.coerce.number().optional().nullable(),
 });
+
+const WRITEOFF_REASONS = ["Брак", "Истёк срок годности", "Повреждение", "Хищение", "Инвентаризация", "Прочее"];
 
 const CATEGORIES = [
   "Электроника",
@@ -816,6 +821,32 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [imgError, setImgError] = useState(false);
   useEffect(() => setImgError(false), [product.id]);
   const [isSaving, setIsSaving] = useState(false);
+  const [writeoffQty, setWriteoffQty] = useState(0);
+  const [writeoffReason, setWriteoffReason] = useState("");
+  const [inflowQty, setInflowQty] = useState(0);
+  const [, navigate] = useLocation();
+  const { addWriteoff, addInflow } = useDraftQueue();
+
+  const handleAddWriteoff = () => {
+    addWriteoff({ product, quantity: writeoffQty, reason: writeoffReason });
+    toast({
+      title: `Добавлено в список списания`,
+      description: `«${product.name}» — ${writeoffQty} шт., ${writeoffReason}`,
+      action: <ToastAction altText="Перейти" onClick={() => navigate("/writeoff")}>Перейти →</ToastAction>,
+    });
+    setWriteoffQty(0);
+    setWriteoffReason("");
+  };
+
+  const handleAddInflow = () => {
+    addInflow({ product, quantity: inflowQty });
+    toast({
+      title: `Добавлено в список приёмки`,
+      description: `«${product.name}» — ${inflowQty} шт.`,
+      action: <ToastAction altText="Перейти" onClick={() => navigate("/intake")}>Перейти →</ToastAction>,
+    });
+    setInflowQty(0);
+  };
 
   const baselineRef = useRef({
     name: product.name,
@@ -1235,6 +1266,72 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                     />
                   </div>
                 )}
+              </div>
+
+              {/* Быстрые операции */}
+              <div className="border-t pt-4 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Быстрые операции</p>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Списание со склада</Label>
+                  <div className="flex gap-2 items-center">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={product.centralStock || 0}
+                      value={writeoffQty || ""}
+                      onChange={e => setWriteoffQty(Math.min(Math.max(0, Number(e.target.value)), product.centralStock || 0))}
+                      className="w-20 h-8 text-sm"
+                      placeholder="Кол-во"
+                      disabled={(product.centralStock || 0) === 0}
+                    />
+                    <Select value={writeoffReason} onValueChange={setWriteoffReason} disabled={(product.centralStock || 0) === 0}>
+                      <SelectTrigger className="h-8 text-sm flex-1 min-w-0">
+                        <SelectValue placeholder="Причина" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {WRITEOFF_REASONS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      disabled={(product.centralStock || 0) === 0 || !writeoffQty || writeoffQty < 1 || !writeoffReason}
+                      onClick={handleAddWriteoff}
+                    >
+                      <MinusCircle className="w-3.5 h-3.5 mr-1.5" />
+                      В список
+                    </Button>
+                  </div>
+                  {(product.centralStock || 0) === 0 && (
+                    <p className="text-xs text-muted-foreground">Остаток 0 — списание невозможно</p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Оприходование на склад</Label>
+                  <div className="flex gap-2 items-center">
+                    <Input
+                      type="number"
+                      min={1}
+                      value={inflowQty || ""}
+                      onChange={e => setInflowQty(Math.max(0, Number(e.target.value)))}
+                      className="w-20 h-8 text-sm"
+                      placeholder="Кол-во"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 shrink-0 border-green-500/40 text-green-700 dark:text-green-400 hover:bg-green-500/10"
+                      disabled={!inflowQty || inflowQty < 1}
+                      onClick={handleAddInflow}
+                    >
+                      <PackagePlus className="w-3.5 h-3.5 mr-1.5" />
+                      В список
+                    </Button>
+                  </div>
+                </div>
               </div>
 
               {hasMarketplace && hasChanges && (

@@ -19,6 +19,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useRole } from "@/hooks/use-role";
 import { ShieldAlert, Database, Shield, BarChart3, Package } from "lucide-react";
 import { Layout } from "@/components/Layout";
+import { DraftQueueProvider } from "@/contexts/DraftQueueContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { getQueryFn } from "./lib/queryClient";
 
@@ -169,10 +170,12 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <Toaster />
-        <GlobalDataPreloader>
-          <Router />
-        </GlobalDataPreloader>
+        <DraftQueueProvider>
+          <Toaster />
+          <GlobalDataPreloader>
+            <Router />
+          </GlobalDataPreloader>
+        </DraftQueueProvider>
       </TooltipProvider>
     </QueryClientProvider>
   );

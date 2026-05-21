@@ -18,6 +18,7 @@ import {
   PanelLeft,
 } from "lucide-react";
 import { useState, useMemo } from "react";
+import { useDraftQueue } from "@/contexts/DraftQueueContext";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -45,6 +46,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { role, canAccessProducts, canAccessOrders, canAccessIntake, canAccessCustomers, canAccessReports, canAccessSettings } = useRole();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => getCookieSidebarCollapsed());
+  const { writeoffs, inflows } = useDraftQueue();
 
   const toggleSidebar = () => {
     const next = !isSidebarCollapsed;
@@ -99,12 +101,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location === item.href;
+            const draftCount = item.href === "/writeoff" ? writeoffs.length : item.href === "/intake" ? inflows.length : 0;
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 className={`
-                  flex items-center py-2.5 rounded-xl text-sm font-medium transition-all duration-200
+                  relative flex items-center py-2.5 rounded-xl text-sm font-medium transition-all duration-200
                   ${isSidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-3'}
                   ${isActive
                     ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-lg shadow-primary/25"
@@ -113,8 +116,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 data-testid={`nav-${item.href.replace('/', '') || 'dashboard'}`}
                 title={isSidebarCollapsed ? item.label : undefined}
               >
-                <Icon size={20} className="flex-shrink-0" />
-                {!isSidebarCollapsed && <span className="truncate">{item.label}</span>}
+                <span className="relative flex-shrink-0">
+                  <Icon size={20} />
+                  {draftCount > 0 && isSidebarCollapsed && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-primary border-2 border-sidebar" />
+                  )}
+                </span>
+                {!isSidebarCollapsed && <span className="truncate flex-1">{item.label}</span>}
+                {!isSidebarCollapsed && draftCount > 0 && (
+                  <span className="ml-auto flex-shrink-0 min-w-[1.25rem] h-5 text-[11px] font-bold rounded-full bg-primary/20 text-primary flex items-center justify-center px-1.5">
+                    {draftCount}
+                  </span>
+                )}
               </Link>
             );
           })}
