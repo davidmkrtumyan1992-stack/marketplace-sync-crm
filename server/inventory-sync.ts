@@ -228,7 +228,7 @@ export class InventorySyncEngine {
               .where(inArray(stores.companyId, companyIds));
           }
 
-          const targetStores = allStores.filter(s => s.isActive && s.id !== log.sourceStoreId);
+          const targetStores = allStores.filter(s => s.isActive && s.id !== log.sourceStoreId && s.stockSyncEnabled !== false);
           syncResults = await this.broadcastStockUpdate(targetStores, sku, newCentralStock, false);
 
           await tx.insert(stockSyncLog).values({
@@ -490,7 +490,7 @@ export class InventorySyncEngine {
 
     const storeIds = [...new Set(links.map(l => l.storeId))];
     const storeList = await db.select().from(stores).where(inArray(stores.id, storeIds));
-    const activeStores = storeList.filter(s => s.isActive);
+    const activeStores = storeList.filter(s => s.isActive && s.stockSyncEnabled !== false);
 
     return await this.broadcastStockUpdate(activeStores, product.sku, product.centralStock || 0, false);
   }

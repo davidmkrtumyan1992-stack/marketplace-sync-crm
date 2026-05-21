@@ -13,29 +13,6 @@ export class OzonAdapter implements MarketplaceAdapter {
     return `Ozon(${this.store.name})`;
   }
 
-  private async fetchWarehouseId(): Promise<number | null> {
-    try {
-      const res = await fetch(`${OZON_API}/v2/warehouse/list`, {
-        method: "POST",
-        headers: {
-          "Client-Id": this.store.clientId!,
-          "Api-Key": this.store.apiKey!,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-        signal: AbortSignal.timeout(10_000),
-      });
-      const data = await res.json() as any;
-      const warehouses: any[] = data?.warehouses || [];
-      const fbs = warehouses.find(w =>
-        w.warehouse_type === "fbs" && w.status !== "disabled"
-      ) || warehouses.find(w => w.warehouse_type === "fbs");
-      return fbs?.warehouse_id ? Number(fbs.warehouse_id) : null;
-    } catch {
-      return null;
-    }
-  }
-
   async updateStocks(updates: StockUpdate[]): Promise<AdapterResult> {
     if (!this.store.apiKey || !this.store.clientId) {
       return { success: false, errors: [`API-ключ или Client ID не настроен для «${this.store.name}»`] };
@@ -171,11 +148,11 @@ export class OzonAdapter implements MarketplaceAdapter {
 
         for (const item of items) {
           const fbs = item.stocks?.find((s: any) => s.type === "fbs");
-          const fbo = item.stocks?.find((s: any) => s.type === "fbo");
+          // Return FBS stock only — FBO is managed by Ozon warehouse, not by us
           result.push({
             externalSku: item.offer_id,
-            available: (fbs?.present || 0) + (fbo?.present || 0),
-            reserved: (fbs?.reserved || 0) + (fbo?.reserved || 0),
+            available: fbs?.present || 0,
+            reserved: fbs?.reserved || 0,
           });
         }
       } catch (e: any) {
