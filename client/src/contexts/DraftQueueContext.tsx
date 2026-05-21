@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import type { Product } from "@shared/schema";
 
 export interface DraftWriteoffItem {
@@ -12,6 +12,18 @@ export interface DraftInflowItem {
   quantity: number;
 }
 
+export interface IntakeBatchItem {
+  product: Product;
+  quantity: number;
+}
+
+export interface WriteoffBatchItem {
+  product: Product;
+  quantity: number;
+  reason: string;
+  notes: string;
+}
+
 interface DraftQueueContextType {
   writeoffs: DraftWriteoffItem[];
   inflows: DraftInflowItem[];
@@ -21,6 +33,10 @@ interface DraftQueueContextType {
   addInflow: (item: DraftInflowItem) => void;
   removeInflow: (productId: number) => void;
   clearInflows: () => void;
+  intakeBatch: IntakeBatchItem[];
+  setIntakeBatch: Dispatch<SetStateAction<IntakeBatchItem[]>>;
+  writeoffBatch: WriteoffBatchItem[];
+  setWriteoffBatch: Dispatch<SetStateAction<WriteoffBatchItem[]>>;
 }
 
 const DraftQueueContext = createContext<DraftQueueContextType | null>(null);
@@ -28,6 +44,8 @@ const DraftQueueContext = createContext<DraftQueueContextType | null>(null);
 export function DraftQueueProvider({ children }: { children: ReactNode }) {
   const [writeoffs, setWriteoffs] = useState<DraftWriteoffItem[]>([]);
   const [inflows, setInflows] = useState<DraftInflowItem[]>([]);
+  const [intakeBatch, setIntakeBatch] = useState<IntakeBatchItem[]>([]);
+  const [writeoffBatch, setWriteoffBatch] = useState<WriteoffBatchItem[]>([]);
 
   const addWriteoff = (item: DraftWriteoffItem) => {
     setWriteoffs(prev => {
@@ -68,6 +86,8 @@ export function DraftQueueProvider({ children }: { children: ReactNode }) {
       writeoffs, inflows,
       addWriteoff, removeWriteoff, clearWriteoffs,
       addInflow, removeInflow, clearInflows,
+      intakeBatch, setIntakeBatch,
+      writeoffBatch, setWriteoffBatch,
     }}>
       {children}
     </DraftQueueContext.Provider>

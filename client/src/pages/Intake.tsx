@@ -8,17 +8,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { formatCurrency } from "@/lib/format";
 import type { Product } from "@shared/schema";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Barcode, ScanLine, Package, Plus, Minus, Trash2, Check, FileSpreadsheet, Warehouse } from "lucide-react";
+import { Barcode, ScanLine, Package, Plus, Minus, Trash2, Check, FileSpreadsheet, Warehouse, Search } from "lucide-react";
 import { useDraftQueue } from "@/contexts/DraftQueueContext";
-
-interface BatchItem {
-  product: Product;
-  quantity: number;
-}
 
 const CATEGORIES = [
   "Электроника",
@@ -41,10 +36,19 @@ export default function Intake() {
   const scanBuffer = useRef<string>("");
 
   const [barcodeValue, setBarcodeValue] = useState("");
-  const [batch, setBatch] = useState<BatchItem[]>([]);
+  const [nameSearch, setNameSearch] = useState("");
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
-  const { inflows, clearInflows } = useDraftQueue();
+  const { inflows, clearInflows, intakeBatch: batch, setIntakeBatch: setBatch } = useDraftQueue();
+
+  const { data: allProducts } = useQuery<Product[]>({ queryKey: ["/api/products"] });
+
+  const nameSearchResults = nameSearch.length >= 1
+    ? (allProducts ?? []).filter(p =>
+        p.name.toLowerCase().includes(nameSearch.toLowerCase()) ||
+        p.sku.toLowerCase().includes(nameSearch.toLowerCase())
+      ).slice(0, 8)
+    : [];
 
   useEffect(() => {
     if (inflows.length === 0) return;
@@ -67,6 +71,7 @@ export default function Intake() {
       description: "Проверьте список и нажмите «Подтвердить приёмку»",
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [pendingBarcode, setPendingBarcode] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -90,15 +95,9 @@ export default function Intake() {
             : item
         );
       }
-      return [
-        {
-          product,
-          quantity: 1,
-        },
-        ...prev,
-      ];
+      return [{ product, quantity: 1 }, ...prev];
     });
-  }, []);
+  }, [setBatch]);
 
   const handleBarcodeScan = useCallback(
     async (barcode: string) => {
@@ -318,6 +317,16 @@ export default function Intake() {
           </Button>
         </div>
 
+        {batch.length > 0 && (
+          <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-primary/10 border border-primary/30 text-sm">
+            <Package className="w-4 h-4 text-primary flex-shrink-0" />
+            <span className="flex-1">
+              Незавершённая приёмка: <strong>{batch.length} поз. ({totalItems} шт.)</strong> — продолжите или{" "}
+              <button className="underline hover:no-underline" onClick={() => setBatch([])}>очистите список</button>
+            </span>
+          </div>
+        )}
+
         <Card className="border-2 border-primary/30">
           <CardContent className="pt-6">
             <div className="flex flex-col items-center gap-4">
@@ -341,6 +350,40 @@ export default function Intake() {
               <p className="text-sm text-muted-foreground">
                 Сканер автоматически введёт код и нажмёт Enter
               </p>
+
+              <div className="w-full max-w-lg border-t pt-4">
+                <p className="text-sm text-muted-foreground text-center mb-2">или найдите товар по названию</p>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    value={nameSearch}
+                    onChange={(e) => setNameSearch(e.target.value)}
+                    onBlur={() => setTimeout(() => setNameSearch(""), 150)}
+                    placeholder="Начните вводить название или артикул..."
+                    className="pl-9"
+                  />
+                  {nameSearchResults.length > 0 && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-xl shadow-lg z-50 overflow-hidden">
+                      {nameSearchResults.map((p) => (
+                        <button
+                          key={p.id}
+                          className="w-full text-left px-4 py-2.5 hover:bg-accent text-sm flex items-center justify-between gap-3 transition-colors"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            addToBatch(p);
+                            setNameSearch("");
+                            toast({ title: "Товар добавлен", description: p.name });
+                            setTimeout(() => barcodeInputRef.current?.focus(), 50);
+                          }}
+                        >
+                          <span className="flex-1 truncate">{p.name}</span>
+                          <span className="text-xs text-muted-foreground font-mono flex-shrink-0">{p.sku}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>

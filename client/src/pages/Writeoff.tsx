@@ -4,14 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import type { Product } from "@shared/schema";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Barcode, ScanLine, MinusCircle, Plus, Minus, Trash2, Check } from "lucide-react";
+import { Barcode, ScanLine, MinusCircle, Plus, Minus, Trash2, Check, Search } from "lucide-react";
 import { useDraftQueue } from "@/contexts/DraftQueueContext";
 
 const WRITEOFF_REASONS = [
@@ -23,13 +22,6 @@ const WRITEOFF_REASONS = [
   "Прочее",
 ];
 
-interface BatchItem {
-  product: Product;
-  quantity: number;
-  reason: string;
-  notes: string;
-}
-
 export default function Writeoff() {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -38,12 +30,21 @@ export default function Writeoff() {
   const scanBuffer = useRef<string>("");
 
   const [barcodeValue, setBarcodeValue] = useState("");
-  const [batch, setBatch] = useState<BatchItem[]>([]);
+  const [nameSearch, setNameSearch] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [globalReason, setGlobalReason] = useState("");
   const [globalNotes, setGlobalNotes] = useState("");
 
-  const { writeoffs, clearWriteoffs } = useDraftQueue();
+  const { writeoffs, clearWriteoffs, writeoffBatch: batch, setWriteoffBatch: setBatch } = useDraftQueue();
+
+  const { data: allProducts } = useQuery<Product[]>({ queryKey: ["/api/products"] });
+
+  const nameSearchResults = nameSearch.length >= 1
+    ? (allProducts ?? []).filter((p: Product) =>
+        p.name.toLowerCase().includes(nameSearch.toLowerCase()) ||
+        p.sku.toLowerCase().includes(nameSearch.toLowerCase())
+      ).slice(0, 8)
+    : [];
 
   useEffect(() => {
     barcodeInputRef.current?.focus();
@@ -60,7 +61,7 @@ export default function Writeoff() {
         if (idx >= 0) {
           merged[idx] = { ...merged[idx], quantity: merged[idx].quantity + d.quantity };
         } else {
-          merged.push({ product: d.product, quantity: d.quantity, reason: d.reason, notes: "" });
+          merged.push({ product: d.product, quantity: d.quantity, reason: d.reason ?? "", notes: "" });
         }
       }
       return merged;
@@ -83,7 +84,7 @@ export default function Writeoff() {
       }
       return [{ product, quantity: 1, reason: globalReason, notes: globalNotes }, ...prev];
     });
-  }, [globalReason, globalNotes]);
+  }, [globalReason, globalNotes, setBatch]);
 
   const handleBarcodeScan = useCallback(
     async (barcode: string) => {
@@ -238,6 +239,16 @@ export default function Writeoff() {
           </p>
         </div>
 
+        {batch.length > 0 && (
+          <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-destructive/10 border border-destructive/30 text-sm">
+            <MinusCircle className="w-4 h-4 text-destructive flex-shrink-0" />
+            <span className="flex-1">
+              Незавершённое списание: <strong>{batch.length} поз. ({totalItems} шт.)</strong> — продолжите или{" "}
+              <button className="underline hover:no-underline" onClick={() => setBatch([])}>очистите список</button>
+            </span>
+          </div>
+        )}
+
         <Card className="border-2 border-destructive/30">
           <CardContent className="pt-6">
             <div className="flex flex-col items-center gap-4">
@@ -258,6 +269,50 @@ export default function Writeoff() {
                 />
               </div>
               <p className="text-sm text-muted-foreground">Сканер автоматически введёт код и нажмёт Enter</p>
+
+              <div className="w-full max-w-lg border-t pt-4">
+                <p className="text-sm text-muted-foreground text-center mb-2">или найдите товар по названию</p>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    value={nameSearch}
+                    onChange={(e) => setNameSearch(e.target.value)}
+                    onBlur={() => setTimeout(() => setNameSearch(""), 150)}
+                    placeholder="Начните вводить название или артикул..."
+                    className="pl-9"
+                  />
+                  {nameSearchResults.length > 0 && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-xl shadow-lg z-50 overflow-hidden">
+                      {nameSearchResults.map((p: Product) => (
+                        <button
+                          key={p.id}
+                          className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between gap-3 transition-colors ${
+                            (p.centralStock || 0) === 0
+                              ? "opacity-50 cursor-not-allowed"
+                              : "hover:bg-accent"
+                          }`}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            if ((p.centralStock || 0) === 0) {
+                              toast({ title: "Остаток 0", description: `«${p.name}» — списание невозможно`, variant: "destructive" });
+                              return;
+                            }
+                            addToBatch(p);
+                            setNameSearch("");
+                            toast({ title: "Товар добавлен", description: p.name });
+                            setTimeout(() => barcodeInputRef.current?.focus(), 50);
+                          }}
+                        >
+                          <span className="flex-1 truncate">{p.name}</span>
+                          <span className="text-xs text-muted-foreground font-mono flex-shrink-0">
+                            {p.sku} · {p.centralStock || 0} шт.
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
