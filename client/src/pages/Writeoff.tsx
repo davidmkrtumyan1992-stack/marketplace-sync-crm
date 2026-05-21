@@ -81,7 +81,7 @@ export default function Writeoff() {
             : item
         );
       }
-      return [...prev, { product, quantity: 1, reason: globalReason, notes: globalNotes }];
+      return [{ product, quantity: 1, reason: globalReason, notes: globalNotes }, ...prev];
     });
   }, [globalReason, globalNotes]);
 

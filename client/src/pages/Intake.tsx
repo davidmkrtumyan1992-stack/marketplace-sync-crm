@@ -91,11 +91,11 @@ export default function Intake() {
         );
       }
       return [
-        ...prev,
         {
           product,
           quantity: 1,
         },
+        ...prev,
       ];
     });
   }, []);
