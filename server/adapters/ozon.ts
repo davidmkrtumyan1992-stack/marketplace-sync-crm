@@ -44,13 +44,11 @@ export class OzonAdapter implements MarketplaceAdapter {
     const errors: string[] = [];
     let updatedCount = 0;
 
-    let warehouseId: number | null = this.store.warehouseId ? Number(this.store.warehouseId) : null;
+    const warehouseId: number | null = this.store.warehouseId ? Number(this.store.warehouseId) : null;
     if (!warehouseId) {
-      warehouseId = await this.fetchWarehouseId();
-      if (!warehouseId) {
-        return { success: false, errors: [`FBS склад не найден для «${this.store.name}». Укажите Warehouse ID в настройках магазина.`] };
-      }
-      console.log(`[ozon-adapter] ${this.store.name}: auto-detected warehouseId=${warehouseId}`);
+      // FBO store — no explicit FBS warehouse configured, skip silently
+      console.log(`[ozon-adapter] ${this.store.name}: warehouseId не задан — FBS-запись пропущена (FBO-магазин)`);
+      return { success: true, errors: [], updatedCount: 0 };
     }
 
     for (let i = 0; i < updates.length; i += BATCH_SIZE) {
