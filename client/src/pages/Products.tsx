@@ -5,7 +5,7 @@ import { ToastAction } from "@/components/ui/toast";
 
 import { useProducts, useCreateProduct, useDeleteProduct, useSyncProduct } from "@/hooks/use-products";
 import { useCreateStockInflow } from "@/hooks/use-stock-inflow";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
