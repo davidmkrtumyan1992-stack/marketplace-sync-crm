@@ -51,7 +51,7 @@ import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertProductSchema, type InsertProduct, type Product, type ProductStoreStatus } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown, Download, Copy, MinusCircle, Link2, CheckCircle2, XCircle } from "lucide-react";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown, Download, Copy, MinusCircle, Link2, CheckCircle2, XCircle, PlusCircle, Check } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
 import { calculateFromProduct, calculateProductProfit, getMarginColor, getMarginBadgeClasses, formatRub, formatPct, type OzonProfitResult } from "@/lib/ozon-calc";
@@ -803,36 +803,107 @@ function copyText(text: string): boolean {
   return ok;
 }
 
-function AliasSearchField({ currentProductId, onSelect }: { currentProductId: number; onSelect: (id: number) => void }) {
+function AliasPicker({ currentProductId, onSelect }: { currentProductId: number; onSelect: (ids: number[]) => void }) {
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<number[]>([]);
+  const ref = useRef<HTMLDivElement>(null);
   const { data: allProducts } = useQuery<Product[]>({ queryKey: ["/api/products"] });
-  const suggestions = useMemo(() =>
-    !query ? [] : (allProducts ?? []).filter(p =>
-      p.id !== currentProductId && !p.masterProductId &&
-      (p.name.toLowerCase().includes(query.toLowerCase()) || p.sku.toLowerCase().includes(query.toLowerCase()))
-    ).slice(0, 6),
-  [allProducts, query, currentProductId]);
+
+  const suggestions = useMemo(() => {
+    const q = query.toLowerCase();
+    return (allProducts ?? []).filter(p =>
+      p.id !== currentProductId &&
+      !p.masterProductId &&
+      (!q ||
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        (p.barcode ?? "").toLowerCase().includes(q))
+    ).slice(0, 40);
+  }, [allProducts, query, currentProductId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+        setSelected([]);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = (id: number) =>
+    setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+  const handleConfirm = () => {
+    if (selected.length > 0) onSelect(selected);
+    setOpen(false);
+    setQuery("");
+    setSelected([]);
+  };
 
   return (
-    <div className="relative">
-      <div className="flex items-center gap-1.5 rounded-lg border border-dashed border-border px-2 py-1.5">
-        <Link2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-        <input
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="Добавить алиас…"
-          className="flex-1 text-xs bg-transparent outline-none text-foreground placeholder:text-muted-foreground"
-        />
-      </div>
-      {suggestions.length > 0 && (
-        <div className="absolute top-full left-0 right-0 z-50 mt-1 rounded-lg border bg-popover shadow-lg overflow-hidden">
-          {suggestions.map(p => (
-            <button key={p.id} className="w-full text-left px-3 py-2 text-xs hover:bg-muted flex items-center gap-2"
-              onMouseDown={() => { onSelect(p.id); setQuery(""); }}>
-              <span className="truncate font-medium flex-1">{p.name}</span>
-              <span className="text-muted-foreground shrink-0">{p.sku}</span>
-            </button>
-          ))}
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors py-1"
+      >
+        <PlusCircle className="w-3.5 h-3.5" />
+        Добавить товары
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 z-50 mt-1 rounded-xl border bg-popover shadow-xl overflow-hidden" style={{ minWidth: 280 }}>
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-border/60">
+            <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <input
+              autoFocus
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Название или штрих-код..."
+              className="flex-1 text-xs bg-transparent outline-none text-foreground placeholder:text-muted-foreground"
+            />
+            {query && (
+              <button type="button" onClick={() => setQuery("")} className="text-muted-foreground hover:text-foreground">
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          <div className="max-h-48 overflow-y-auto">
+            {suggestions.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-4">Ничего не найдено</p>
+            ) : suggestions.map(p => {
+              const checked = selected.includes(p.id);
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs text-left transition-colors ${checked ? "bg-primary/10" : "hover:bg-muted"}`}
+                  onClick={() => toggle(p.id)}
+                >
+                  <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${checked ? "bg-primary border-primary" : "border-border"}`}>
+                    {checked && <Check className="w-2.5 h-2.5 text-primary-foreground" />}
+                  </div>
+                  <span className="truncate flex-1 font-medium">{p.name}</span>
+                  <span className="text-muted-foreground shrink-0 text-[10px]">{p.sku}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-2 px-3 py-2 border-t border-border/60 bg-muted/30">
+            <Button size="sm" className="h-7 text-xs flex-1" disabled={selected.length === 0} onClick={handleConfirm}>
+              Привязать{selected.length > 0 ? ` (${selected.length})` : ""}
+            </Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setOpen(false); setQuery(""); setSelected([]); }}>
+              Отмена
+            </Button>
+          </div>
         </div>
       )}
     </div>
@@ -1259,29 +1330,41 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                           <Link2 className="w-3.5 h-3.5 text-primary shrink-0" />
                           <span className="text-xs truncate">Мастер: <strong>{masterProduct?.name ?? `#${product.masterProductId}`}</strong></span>
                         </div>
-                        <Button size="sm" variant="ghost" className="h-6 text-destructive text-[11px] shrink-0 px-2"
-                          onClick={() => setMasterMutation.mutate({ targetProductId: product.id, masterProductId: null })}>
-                          Отвязать
-                        </Button>
+                        <button
+                          type="button"
+                          className="ml-1 w-5 h-5 rounded-full hover:bg-destructive/20 flex items-center justify-center text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                          onClick={() => setMasterMutation.mutate({ targetProductId: product.id, masterProductId: null })}
+                          title="Отвязать"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
                       </div>
                     ) : (
-                      <div className="space-y-1">
-                        {productAliases && productAliases.length > 0 && productAliases.map(alias => (
-                          <div key={alias.id} className="flex items-center justify-between gap-2 rounded-lg bg-muted px-2.5 py-1.5">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <Link2 className="w-3 h-3 text-muted-foreground shrink-0" />
-                              <span className="text-xs truncate">{alias.name}</span>
-                              <span className="text-xs text-muted-foreground shrink-0">({alias.sku})</span>
-                            </div>
-                            <Button size="sm" variant="ghost" className="h-6 text-destructive text-[11px] shrink-0 px-2"
-                              onClick={() => setMasterMutation.mutate({ targetProductId: alias.id, masterProductId: null })}>
-                              ✕
-                            </Button>
+                      <div className="space-y-1.5">
+                        {productAliases && productAliases.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5">
+                            {productAliases.map(alias => (
+                              <div key={alias.id} className="flex items-center gap-1 rounded-full bg-primary/10 border border-primary/20 pl-2 pr-1 py-0.5 text-xs max-w-full">
+                                <Link2 className="w-2.5 h-2.5 text-primary shrink-0" />
+                                <span className="max-w-[130px] truncate font-medium">{alias.name}</span>
+                                <span className="text-muted-foreground text-[10px] shrink-0">({alias.sku})</span>
+                                <button
+                                  type="button"
+                                  className="ml-0.5 w-4 h-4 rounded-full hover:bg-destructive/20 flex items-center justify-center text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                                  onClick={() => setMasterMutation.mutate({ targetProductId: alias.id, masterProductId: null })}
+                                  title="Отвязать"
+                                >
+                                  <X className="w-2.5 h-2.5" />
+                                </button>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                        <AliasSearchField
+                        )}
+                        <AliasPicker
                           currentProductId={product.id}
-                          onSelect={(aliasId) => setMasterMutation.mutate({ targetProductId: aliasId, masterProductId: product.id })}
+                          onSelect={(ids) => ids.forEach(aliasId =>
+                            setMasterMutation.mutate({ targetProductId: aliasId, masterProductId: product.id })
+                          )}
                         />
                       </div>
                     )}
