@@ -273,7 +273,18 @@ export class DatabaseStorage implements IStorage {
         eq(products.organizationId, organizationId),
         or(eq(products.barcode, barcode), eq(products.sku, barcode))
       ));
+    if (!product) return undefined;
+    if (product.masterProductId) {
+      const [master] = await db.select().from(products).where(eq(products.id, product.masterProductId));
+      return master ?? product;
+    }
     return product;
+  }
+
+  async getProductAliases(masterProductId: number, organizationId: string): Promise<Product[]> {
+    return db.select().from(products).where(
+      and(eq(products.masterProductId, masterProductId), eq(products.organizationId, organizationId))
+    );
   }
 
   async getProductBySku(sku: string, companyId: number): Promise<Product | undefined> {

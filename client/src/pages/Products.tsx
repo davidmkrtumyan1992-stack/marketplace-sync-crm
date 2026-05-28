@@ -803,6 +803,42 @@ function copyText(text: string): boolean {
   return ok;
 }
 
+function AliasSearchField({ currentProductId, onSelect }: { currentProductId: number; onSelect: (id: number) => void }) {
+  const [query, setQuery] = useState("");
+  const { data: allProducts } = useQuery<Product[]>({ queryKey: ["/api/products"] });
+  const suggestions = useMemo(() =>
+    !query ? [] : (allProducts ?? []).filter(p =>
+      p.id !== currentProductId && !p.masterProductId &&
+      (p.name.toLowerCase().includes(query.toLowerCase()) || p.sku.toLowerCase().includes(query.toLowerCase()))
+    ).slice(0, 6),
+  [allProducts, query, currentProductId]);
+
+  return (
+    <div className="relative">
+      <div className="flex items-center gap-1.5 rounded-lg border border-dashed border-border px-2 py-1.5">
+        <Link2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Добавить алиас…"
+          className="flex-1 text-xs bg-transparent outline-none text-foreground placeholder:text-muted-foreground"
+        />
+      </div>
+      {suggestions.length > 0 && (
+        <div className="absolute top-full left-0 right-0 z-50 mt-1 rounded-lg border bg-popover shadow-lg overflow-hidden">
+          {suggestions.map(p => (
+            <button key={p.id} className="w-full text-left px-3 py-2 text-xs hover:bg-muted flex items-center gap-2"
+              onMouseDown={() => { onSelect(p.id); setQuery(""); }}>
+              <span className="truncate font-medium flex-1">{p.name}</span>
+              <span className="text-muted-foreground shrink-0">{p.sku}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, defaultCommission }: { product: Product; canSeePurchasePrice: boolean; onClose: () => void; taxRate: number; defaultCommission: number }) {
   const { toast } = useToast();
   const [editName, setEditName] = useState(product.name);
@@ -860,6 +896,30 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
       fail.forEach(f => toast({ title: `Ошибка (${f.storeName})`, description: f.error || "Ошибка", variant: "destructive" }));
     },
     onError: (e: Error) => toast({ title: "Ошибка синхронизации", description: e.message, variant: "destructive" }),
+  });
+
+  const { data: productAliases, refetch: refetchAliases } = useQuery<Product[]>({
+    queryKey: [`/api/products/${product.id}/aliases`],
+    enabled: !!product.id,
+  });
+
+  const { data: masterProduct } = useQuery<Product>({
+    queryKey: [`/api/products/${product.masterProductId}`],
+    enabled: !!product.masterProductId,
+  });
+
+  const setMasterMutation = useMutation({
+    mutationFn: async ({ targetProductId, masterProductId }: { targetProductId: number; masterProductId: number | null }) => {
+      const res = await apiRequest("PUT", `/api/products/${targetProductId}/master`, { masterProductId });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Ошибка");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      refetchAliases();
+      toast({ title: "Привязка обновлена" });
+    },
+    onError: (e: Error) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
   });
 
   const handleAddWriteoff = () => {
@@ -1188,6 +1248,43 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                         <PackagePlus className="w-3.5 h-3.5 mr-1.5" /> Приход
                       </Button>
                     </div>
+                  </div>
+
+                  {/* Связанные товары (мастер-алиас) */}
+                  <div className="pt-1 border-t border-border/40">
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">Связанные товары</p>
+                    {product.masterProductId ? (
+                      <div className="flex items-center justify-between gap-2 rounded-lg bg-primary/5 border border-primary/20 px-2.5 py-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Link2 className="w-3.5 h-3.5 text-primary shrink-0" />
+                          <span className="text-xs truncate">Мастер: <strong>{masterProduct?.name ?? `#${product.masterProductId}`}</strong></span>
+                        </div>
+                        <Button size="sm" variant="ghost" className="h-6 text-destructive text-[11px] shrink-0 px-2"
+                          onClick={() => setMasterMutation.mutate({ targetProductId: product.id, masterProductId: null })}>
+                          Отвязать
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        {productAliases && productAliases.length > 0 && productAliases.map(alias => (
+                          <div key={alias.id} className="flex items-center justify-between gap-2 rounded-lg bg-muted px-2.5 py-1.5">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <Link2 className="w-3 h-3 text-muted-foreground shrink-0" />
+                              <span className="text-xs truncate">{alias.name}</span>
+                              <span className="text-xs text-muted-foreground shrink-0">({alias.sku})</span>
+                            </div>
+                            <Button size="sm" variant="ghost" className="h-6 text-destructive text-[11px] shrink-0 px-2"
+                              onClick={() => setMasterMutation.mutate({ targetProductId: alias.id, masterProductId: null })}>
+                              ✕
+                            </Button>
+                          </div>
+                        ))}
+                        <AliasSearchField
+                          currentProductId={product.id}
+                          onSelect={(aliasId) => setMasterMutation.mutate({ targetProductId: aliasId, masterProductId: product.id })}
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1731,6 +1828,9 @@ function ProductRow({ product, onInflow, canSeePurchasePrice = true, onClick, ta
       <TableCell className="font-mono text-xs">
         <div className="flex items-center gap-1 group/sku">
           <span>{product.sku}</span>
+          {product.masterProductId && (
+            <Link2 className="w-3 h-3 text-primary shrink-0" title="Алиас другого товара" />
+          )}
           <Button
             variant="ghost"
             size="icon"

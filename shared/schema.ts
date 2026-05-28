@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb, decimal, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, decimal, uniqueIndex, index, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -83,6 +83,7 @@ export const products = pgTable("products", {
   imageUrl: text("image_url"),
   brand: text("brand"),
   safetyStock: integer("safety_stock").notNull().default(0),
+  masterProductId: integer("master_product_id").references((): AnyPgColumn => products.id, { onDelete: "set null" }),
   companyId: integer("company_id").references(() => companies.id),
   organizationId: text("organization_id").notNull(),
   updatedAt: timestamp("updated_at").defaultNow(),

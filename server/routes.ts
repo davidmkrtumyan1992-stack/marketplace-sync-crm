@@ -602,6 +602,47 @@ export async function registerRoutes(
     }
   });
 
+  // PUT /api/products/:id/master — установить/снять мастер-товар (для алиасов)
+  app.put("/api/products/:id/master", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const productId = Number(req.params.id);
+      const { masterProductId } = req.body; // number | null
+
+      const product = await storage.getProduct(productId);
+      if (!product || product.organizationId !== orgId) return res.status(404).json({ message: "Товар не найден" });
+
+      if (masterProductId !== null && masterProductId !== undefined) {
+        const existingAliases = await storage.getProductAliases(productId, orgId);
+        if (existingAliases.length > 0)
+          return res.status(400).json({ message: "Нельзя привязать товар, у которого уже есть алиасы" });
+        const master = await storage.getProduct(Number(masterProductId));
+        if (!master || master.organizationId !== orgId) return res.status(404).json({ message: "Мастер-товар не найден" });
+        if (master.masterProductId) return res.status(400).json({ message: "Мастер-товар сам является алиасом" });
+        if (master.id === productId) return res.status(400).json({ message: "Товар не может быть алиасом самого себя" });
+      }
+
+      await db.update(productsTable).set({ masterProductId: masterProductId ?? null }).where(eq(productsTable.id, productId));
+      const updated = await storage.getProduct(productId);
+      res.json(updated);
+    } catch (err: any) {
+      console.error("[PUT /api/products/:id/master]", err);
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/products/:id/aliases — список алиасов мастер-товара
+  app.get("/api/products/:id/aliases", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const aliases = await storage.getProductAliases(Number(req.params.id), orgId);
+      res.json(aliases);
+    } catch (err: any) {
+      console.error("[GET /api/products/:id/aliases]", err);
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // POST /api/products/:id/sync-stock — принудительный пуш остатков на все магазины
   app.post("/api/products/:id/sync-stock", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
