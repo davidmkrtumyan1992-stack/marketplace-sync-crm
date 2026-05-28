@@ -1166,6 +1166,7 @@ export class DatabaseStorage implements IStorage {
           isConnected,
           hasProduct,
           marketplaceProductId: link?.marketplaceProductId ?? null,
+          externalSku: link?.externalSku ?? null,
           lastSyncAt: link?.lastSyncAt ? link.lastSyncAt.toISOString() : null,
           lastSyncStatus: link?.lastSyncStatus ?? null,
           lastSyncError: link?.lastSyncError ?? null,

@@ -446,6 +446,7 @@ export type ProductStoreStatus = {
   isConnected: boolean;
   hasProduct: boolean;
   marketplaceProductId: string | null;
+  externalSku: string | null;
   lastSyncAt: string | null;
   lastSyncStatus: string | null;
   lastSyncError: string | null;

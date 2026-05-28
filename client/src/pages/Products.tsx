@@ -50,8 +50,8 @@ import {
 import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertProductSchema, type InsertProduct, type Product } from "@shared/schema";
-import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown, Download, Copy, MinusCircle } from "lucide-react";
+import { insertProductSchema, type InsertProduct, type Product, type ProductStoreStatus } from "@shared/schema";
+import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown, Download, Copy, MinusCircle, Link2, CheckCircle2, XCircle } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
 import { calculateFromProduct, calculateProductProfit, getMarginColor, getMarginBadgeClasses, formatRub, formatPct, type OzonProfitResult } from "@/lib/ozon-calc";
@@ -823,6 +823,44 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [inflowQty, setInflowQty] = useState(0);
   const [, navigate] = useLocation();
   const { addWriteoff, addInflow } = useDraftQueue();
+  const [editingStoreId, setEditingStoreId] = useState<number | null>(null);
+  const [editSkuValue, setEditSkuValue] = useState("");
+
+  const { data: storeStatuses, refetch: refetchStores } = useQuery<ProductStoreStatus[]>({
+    queryKey: [`/api/products/${product.id}/stores`],
+    enabled: !!product.id,
+  });
+
+  const saveLinkMutation = useMutation({
+    mutationFn: async ({ storeId, externalSku }: { storeId: number; externalSku: string }) => {
+      const res = await apiRequest("PUT", `/api/products/${product.id}/stores/${storeId}/link`, { externalSku });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Ошибка");
+      return res.json();
+    },
+    onSuccess: () => {
+      setEditingStoreId(null);
+      refetchStores();
+      toast({ title: "Привязка сохранена" });
+    },
+    onError: (e: Error) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
+  });
+
+  const syncStockMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/products/${product.id}/sync-stock`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Ошибка");
+      return res.json();
+    },
+    onSuccess: (data: { results?: { storeName: string; success: boolean; error?: string }[] }) => {
+      refetchStores();
+      const results = data.results ?? [];
+      const ok = results.filter(r => r.success);
+      const fail = results.filter(r => !r.success);
+      if (ok.length) toast({ title: "Остатки обновлены", description: ok.map(r => r.storeName).join(", ") });
+      fail.forEach(f => toast({ title: `Ошибка (${f.storeName})`, description: f.error || "Ошибка", variant: "destructive" }));
+    },
+    onError: (e: Error) => toast({ title: "Ошибка синхронизации", description: e.message, variant: "destructive" }),
+  });
 
   const handleAddWriteoff = () => {
     addWriteoff({ product, quantity: writeoffQty, reason: "" });
@@ -1041,9 +1079,10 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
           </DialogHeader>
 
           <Tabs defaultValue="info" className="py-2">
-            <TabsList className="grid w-full grid-cols-2">
+            <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="info">Информация</TabsTrigger>
               <TabsTrigger value="analytics">Аналитика</TabsTrigger>
+              <TabsTrigger value="marketplace">Маркетплейсы</TabsTrigger>
             </TabsList>
 
             <TabsContent value="info" className="space-y-6 mt-4">
@@ -1331,6 +1370,128 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
 
             <TabsContent value="analytics" className="mt-4">
               <ProductAnalyticsTab product={product} taxRate={taxRate} defaultCommission={defaultCommission} />
+            </TabsContent>
+
+            <TabsContent value="marketplace" className="mt-4 space-y-3">
+              {!storeStatuses || storeStatuses.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
+                  <Store className="w-8 h-8 opacity-40" />
+                  <p className="text-sm">Нет подключённых магазинов</p>
+                </div>
+              ) : (
+                <>
+                  {storeStatuses.map((ss: ProductStoreStatus) => {
+                    const isEditing = editingStoreId === ss.storeId;
+                    const mpColor =
+                      ss.marketplace === "ozon" ? "#005BFF"
+                      : ss.marketplace === "wildberries" ? "#CB11AB"
+                      : "#FFCC00";
+                    const mpTextColor = ss.marketplace === "yandex" ? "#000" : "#fff";
+                    const mpLabel =
+                      ss.marketplace === "ozon" ? "Ozon"
+                      : ss.marketplace === "wildberries" ? "WB"
+                      : "ЯМ";
+                    return (
+                      <div key={ss.storeId} className="rounded-xl border border-border bg-card p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Badge className="text-[10px] px-1.5 shrink-0" style={{ backgroundColor: mpColor, color: mpTextColor }}>
+                              {mpLabel}
+                            </Badge>
+                            <span className="text-sm font-medium truncate">{ss.storeName}</span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {ss.lastSyncStatus === "success" && !ss.lastSyncError && (
+                              <CheckCircle2 className="w-4 h-4 text-green-500" title="Последняя синхронизация прошла успешно" />
+                            )}
+                            {ss.lastSyncStatus === "error" && (
+                              <XCircle className="w-4 h-4 text-destructive" title={ss.lastSyncError || "Ошибка"} />
+                            )}
+                          </div>
+                        </div>
+
+                        {ss.lastSyncError && (
+                          <div className="flex items-start gap-1.5 rounded-lg bg-destructive/10 border border-destructive/20 px-2.5 py-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-destructive mt-0.5 shrink-0" />
+                            <p className="text-xs text-destructive break-all">{ss.lastSyncError}</p>
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs text-muted-foreground w-24 shrink-0">SKU на МП</Label>
+                          {isEditing ? (
+                            <div className="flex items-center gap-1.5 flex-1">
+                              <Input
+                                value={editSkuValue}
+                                onChange={(e) => setEditSkuValue(e.target.value)}
+                                placeholder={product.sku}
+                                className="h-7 text-xs font-mono flex-1"
+                                autoFocus
+                                onKeyDown={(e: { key: string }) => {
+                                  if (e.key === "Enter") saveLinkMutation.mutate({ storeId: ss.storeId, externalSku: editSkuValue });
+                                  if (e.key === "Escape") setEditingStoreId(null);
+                                }}
+                              />
+                              <Button
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                disabled={saveLinkMutation.isPending}
+                                onClick={() => saveLinkMutation.mutate({ storeId: ss.storeId, externalSku: editSkuValue })}
+                              >
+                                {saveLinkMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => setEditingStoreId(null)}
+                              >
+                                <X className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <span className="text-xs font-mono text-muted-foreground truncate">
+                                {ss.externalSku || <span className="italic opacity-60">как в CRM: {product.sku}</span>}
+                              </span>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-1.5 text-xs ml-auto shrink-0"
+                                onClick={() => {
+                                  setEditingStoreId(ss.storeId);
+                                  setEditSkuValue(ss.externalSku || "");
+                                }}
+                              >
+                                <Link2 className="w-3 h-3 mr-1" />
+                                Изменить
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+
+                        {ss.lastSyncAt && (
+                          <p className="text-[10px] text-muted-foreground">
+                            Синхронизировано: {new Date(ss.lastSyncAt).toLocaleString("ru-RU")}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  <Button
+                    variant="outline"
+                    className="w-full mt-2"
+                    disabled={syncStockMutation.isPending}
+                    onClick={() => syncStockMutation.mutate()}
+                  >
+                    {syncStockMutation.isPending
+                      ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Синхронизация...</>
+                      : <><RefreshCw className="w-4 h-4 mr-2" />Обновить остатки на всех площадках</>
+                    }
+                  </Button>
+                </>
+              )}
             </TabsContent>
           </Tabs>
         </DialogContent>

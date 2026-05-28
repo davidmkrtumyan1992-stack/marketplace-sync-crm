@@ -90,7 +90,7 @@ export class InventorySyncEngine {
         const stockToSend = safetyTriggered ? 0 : newCentralStock;
 
         const syncResults: StoreSyncResult[] = await this.broadcastStockUpdate(
-          targetStores, product.sku, stockToSend, safetyTriggered
+          targetStores, product.sku, stockToSend, safetyTriggered, productId
         );
 
         const allSuccess = syncResults.every(r => r.status === "success");
@@ -134,13 +134,31 @@ export class InventorySyncEngine {
     targetStores: Store[],
     sku: string,
     stockLevel: number,
-    safetyTriggered: boolean
+    safetyTriggered: boolean,
+    productId?: number
   ): Promise<StoreSyncResult[]> {
     const results: StoreSyncResult[] = [];
 
+    // Load per-store externalSku overrides from product_marketplace_links
+    const linkMap = new Map<number, string>(); // storeId → externalSku
+    if (productId) {
+      const links = await db.select({
+        storeId: productMarketplaceLinks.storeId,
+        externalSku: productMarketplaceLinks.externalSku,
+      }).from(productMarketplaceLinks)
+        .where(and(
+          eq(productMarketplaceLinks.productId, productId),
+          eq(productMarketplaceLinks.isActive, true)
+        ));
+      for (const link of links) {
+        if (link.externalSku) linkMap.set(link.storeId, link.externalSku);
+      }
+    }
+
     for (const store of targetStores) {
+      const effectiveSku = linkMap.get(store.id) ?? sku;
       try {
-        await this.sendStockToMarketplace(store, sku, stockLevel);
+        await this.sendStockToMarketplace(store, effectiveSku, stockLevel);
         results.push({
           storeId: store.id,
           storeName: store.name,
@@ -148,15 +166,32 @@ export class InventorySyncEngine {
           status: "success",
           sentStock: stockLevel,
         });
+        if (productId) {
+          await db.update(productMarketplaceLinks)
+            .set({ lastSyncAt: new Date(), lastSyncStatus: "success", lastSyncError: null })
+            .where(and(
+              eq(productMarketplaceLinks.productId, productId),
+              eq(productMarketplaceLinks.storeId, store.id)
+            ));
+        }
       } catch (error: any) {
+        const errMsg = error.message || "Ошибка синхронизации";
         results.push({
           storeId: store.id,
           storeName: store.name,
           marketplace: store.marketplace,
           status: "fail",
           sentStock: stockLevel,
-          error: error.message || "Unknown error",
+          error: errMsg,
         });
+        if (productId) {
+          await db.update(productMarketplaceLinks)
+            .set({ lastSyncAt: new Date(), lastSyncStatus: "error", lastSyncError: errMsg })
+            .where(and(
+              eq(productMarketplaceLinks.productId, productId),
+              eq(productMarketplaceLinks.storeId, store.id)
+            ));
+        }
       }
     }
 
@@ -229,7 +264,7 @@ export class InventorySyncEngine {
           }
 
           const targetStores = allStores.filter(s => s.isActive && s.id !== log.sourceStoreId && s.stockSyncEnabled !== false);
-          syncResults = await this.broadcastStockUpdate(targetStores, sku, newCentralStock, false);
+          syncResults = await this.broadcastStockUpdate(targetStores, sku, newCentralStock, false, log.productId ?? undefined);
 
           await tx.insert(stockSyncLog).values({
             organizationId,
@@ -492,7 +527,7 @@ export class InventorySyncEngine {
     const storeList = await db.select().from(stores).where(inArray(stores.id, storeIds));
     const activeStores = storeList.filter(s => s.isActive && s.stockSyncEnabled !== false);
 
-    return await this.broadcastStockUpdate(activeStores, product.sku, product.centralStock || 0, false);
+    return await this.broadcastStockUpdate(activeStores, product.sku, product.centralStock || 0, false, productId);
   }
 
   private async getStoresByOrg(organizationId: string): Promise<Store[]> {

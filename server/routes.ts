@@ -568,6 +568,58 @@ export async function registerRoutes(
     }
   });
 
+  // PUT /api/products/:id/stores/:storeId/link — ручная привязка: задать externalSku для магазина
+  app.put("/api/products/:id/stores/:storeId/link", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const productId = Number(req.params.id);
+      const storeId = Number(req.params.storeId);
+      const orgId = getOrgId(req);
+      const { externalSku, marketplaceProductId } = req.body;
+
+      const product = await storage.getProduct(productId);
+      if (!product) return res.status(404).json({ message: "Товар не найден" });
+      if (product.organizationId !== orgId) return res.status(403).json({ message: "Доступ запрещён" });
+
+      await db.execute(sql`
+        INSERT INTO product_marketplace_links
+          (product_id, store_id, external_sku, marketplace_product_id, match_type, is_active, organization_id)
+        VALUES
+          (${productId}, ${storeId}, ${externalSku ?? null}, ${marketplaceProductId ?? null}, 'manual', true, ${orgId})
+        ON CONFLICT (product_id, store_id) DO UPDATE
+          SET external_sku = EXCLUDED.external_sku,
+              marketplace_product_id = COALESCE(EXCLUDED.marketplace_product_id, product_marketplace_links.marketplace_product_id),
+              match_type = 'manual',
+              is_active = true,
+              last_sync_error = NULL,
+              last_sync_status = NULL
+      `);
+
+      const statuses = await storage.getProductStoresWithStatus(productId, orgId);
+      res.json(statuses);
+    } catch (err: any) {
+      console.error("[PUT /api/products/:id/stores/:storeId/link]", err);
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/products/:id/sync-stock — принудительный пуш остатков на все магазины
+  app.post("/api/products/:id/sync-stock", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const productId = Number(req.params.id);
+      const orgId = getOrgId(req);
+
+      const product = await storage.getProduct(productId);
+      if (!product) return res.status(404).json({ message: "Товар не найден" });
+      if (product.organizationId !== orgId) return res.status(403).json({ message: "Доступ запрещён" });
+
+      const results = await inventorySyncEngine.syncProductToAllStores(productId);
+      res.json({ success: true, results });
+    } catch (err: any) {
+      console.error("[POST /api/products/:id/sync-stock]", err);
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // POST /api/products/:id/sync-price — синхронизировать цену на выбранные магазины
   app.post("/api/products/:id/sync-price", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
