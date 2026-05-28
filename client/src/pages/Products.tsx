@@ -1328,7 +1328,7 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                       <div className="flex items-center justify-between gap-2 rounded-lg bg-primary/5 border border-primary/20 px-2.5 py-2">
                         <div className="flex items-center gap-1.5 min-w-0">
                           <Link2 className="w-3.5 h-3.5 text-primary shrink-0" />
-                          <span className="text-xs truncate">Мастер: <strong>{masterProduct?.name ?? `#${product.masterProductId}`}</strong></span>
+                          <div className="text-xs truncate min-w-0">Мастер: <strong>{masterProduct?.name ?? `#${product.masterProductId}`}</strong></div>
                         </div>
                         <button
                           type="button"
