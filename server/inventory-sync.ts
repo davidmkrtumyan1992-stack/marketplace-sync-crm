@@ -89,9 +89,9 @@ export class InventorySyncEngine {
 
         const stockToSend = safetyTriggered ? 0 : newCentralStock;
 
-        const syncResults: StoreSyncResult[] = await this.broadcastStockUpdate(
-          targetStores, product.sku, stockToSend, safetyTriggered, productId
-        );
+        const syncResults: StoreSyncResult[] = syncSettings?.syncEnabled !== false
+          ? await this.broadcastStockUpdate(targetStores, product.sku, stockToSend, safetyTriggered, productId)
+          : [];
 
         const allSuccess = syncResults.every(r => r.status === "success");
         const overallStatus = syncResults.length === 0 ? "success" : (allSuccess ? "success" : "partial");
@@ -226,6 +226,8 @@ export class InventorySyncEngine {
 
     if (restoreLogs.length > 0) return;
 
+    const cancSyncSettings = await this.getSyncSettings(organizationId);
+
     for (const log of deductionLogs) {
       if (!log.productId || !log.quantityChanged) continue;
 
@@ -264,7 +266,9 @@ export class InventorySyncEngine {
           }
 
           const targetStores = allStores.filter(s => s.isActive && s.id !== log.sourceStoreId && s.stockSyncEnabled !== false);
-          syncResults = await this.broadcastStockUpdate(targetStores, sku, newCentralStock, false, log.productId ?? undefined);
+          if (cancSyncSettings?.syncEnabled !== false) {
+            syncResults = await this.broadcastStockUpdate(targetStores, sku, newCentralStock, false, log.productId ?? undefined);
+          }
 
           await tx.insert(stockSyncLog).values({
             organizationId,
@@ -510,6 +514,8 @@ export class InventorySyncEngine {
   async syncProductToAllStores(productId: number): Promise<StoreSyncResult[]> {
     const [product] = await db.select().from(products).where(eq(products.id, productId));
     if (!product) return [];
+    const syncSettings = await this.getSyncSettings(product.organizationId);
+    if (syncSettings?.syncEnabled === false) return [];
 
     let links = await db.select().from(productMarketplaceLinks)
       .where(and(eq(productMarketplaceLinks.productId, productId), eq(productMarketplaceLinks.isActive, true)));

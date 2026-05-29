@@ -16,7 +16,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type InsertMarketplaceSetting, type InsertTaxSetting, type SyncHistoryEntry, type Store, type StockSyncLogEntry, type InventorySyncSetting, type MarketplaceSetting, type Company } from "@shared/schema";
-import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2, Loader2, PlugZap, Eye, EyeOff, Copy, Download, Link2 } from "lucide-react";
+import { RefreshCw, CheckCircle2, Calculator, Percent, Truck, History, Shield, XCircle, FileText, Plus, Pencil, Trash2, Store as StoreIcon, Wifi, WifiOff, Building2, Loader2, PlugZap, Eye, EyeOff, Copy, Download, Link2, AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1541,6 +1541,12 @@ function SafetyStockSection() {
             <div className="text-center py-4 text-muted-foreground">Загрузка...</div>
           ) : (
             <div className="space-y-6">
+              {!syncEnabled && (
+                <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2.5 text-sm text-amber-700 dark:text-amber-400">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span><strong>Синхронизация ПРИОСТАНОВЛЕНА</strong> — остатки не отправляются в маркетплейсы</span>
+                </div>
+              )}
               <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div>
                   <Label className="text-base font-medium">Автоматическая синхронизация</Label>
