@@ -6017,9 +6017,14 @@ export async function registerRoutes(
                     }
                   }
                   console.log(`[ym-substatus] order=${yOrderId} list_substatus="${yOrder.substatus}" → ${yStatus}`);
-                  const yCreatedAt = yOrder.creationDate
-                    ? new Date(Number(yOrder.creationDate) * 1000)
-                    : (yOrder.createdAt ? new Date(yOrder.createdAt) : undefined);
+                  let yCreatedAt: Date | undefined;
+                  if (yOrder.creationDate) {
+                    const d = new Date(Number(yOrder.creationDate) * 1000);
+                    if (!isNaN(d.getTime())) yCreatedAt = d;
+                  } else if (yOrder.createdAt) {
+                    const d = new Date(yOrder.createdAt);
+                    if (!isNaN(d.getTime())) yCreatedAt = d;
+                  }
                   const existingOrder = await storage.getOrderByExternalId(yOrderId, orgId, resolvedStoreId);
 
                   if (existingOrder) {
@@ -7282,10 +7287,11 @@ export async function registerRoutes(
     if (anyClosedFetchSucceeded) {
       if (allWbClosedIds.size > 0) {
         const closedIdList = Array.from(allWbClosedIds);
+        const inList = sql.join(closedIdList.map(id => sql`${id}`), sql`,`);
         // Step 1: set true for ALL DB supplies returned by WB CLOSED (regardless of current value)
         await db.execute(sql`
           UPDATE wb_supplies SET wb_synced_as_closed = true
-          WHERE supply_id = ANY(${closedIdList}::text[])
+          WHERE supply_id IN (${inList})
             AND organization_id = ${orgId}
         `);
         console.log(`[wb-supply-sync] Backfill: wb_synced_as_closed=true у ${allWbClosedIds.size} WB CLOSED поставок`);
@@ -7296,7 +7302,7 @@ export async function registerRoutes(
             UPDATE wb_supplies SET wb_synced_as_closed = false
             WHERE status = 'closed'
               AND organization_id = ${orgId}
-              AND NOT (supply_id = ANY(${closedIdList}::text[]))
+              AND supply_id NOT IN (${inList})
           `);
         }
       } else if (allClosedFetchesSucceeded) {
