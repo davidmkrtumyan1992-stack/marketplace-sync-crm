@@ -9530,9 +9530,11 @@ export async function registerRoutes(
       const activeStores = await db.execute(sql`
         SELECT s.id, s.name, s.marketplace, s.api_key, s.client_id, s.warehouse_id,
                s.is_active, s.company_id, s.stock_sync_enabled,
-               c.organization_id
+               c.organization_id,
+               COALESCE(iss.sync_enabled, true) as org_sync_enabled
         FROM stores s
         JOIN companies c ON s.company_id = c.id
+        LEFT JOIN inventory_sync_settings iss ON iss.organization_id = c.organization_id
         WHERE s.is_active = true AND s.api_key IS NOT NULL
       `);
 
@@ -9540,6 +9542,10 @@ export async function registerRoutes(
         const store = storeRow as any;
         if (store.stock_sync_enabled === false) {
           console.log(`[reconcile] ${store.name}: синхронизация FBS отключена — пропускаем`);
+          continue;
+        }
+        if (store.org_sync_enabled === false) {
+          console.log(`[reconcile] ${store.name}: синхронизация остатков приостановлена (Settings) — пропускаем`);
           continue;
         }
         try {
