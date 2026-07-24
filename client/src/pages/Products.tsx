@@ -50,7 +50,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertProductSchema, type InsertProduct, type Product, type ProductStoreStatus } from "@shared/schema";
+import { insertProductSchema, type InsertProduct, type Product, type ProductStoreStatus, type MarketplaceCatalogCacheEntry } from "@shared/schema";
 import { Plus, Search, MoreHorizontal, RefreshCw, Trash2, Package, PackagePlus, Upload, ImagePlus, FileSpreadsheet, Percent, Loader2, ShoppingBag, Store, Save, X, AlertTriangle, Calculator, TrendingUp, TrendingDown, Download, Copy, MinusCircle, Link2, CheckCircle2, XCircle, PlusCircle, Check } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Slider } from "@/components/ui/slider";
@@ -931,25 +931,86 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
   const [, navigate] = useLocation();
   const { addWriteoff, addInflow } = useDraftQueue();
   const [editingStoreId, setEditingStoreId] = useState<number | null>(null);
-  const [editSkuValue, setEditSkuValue] = useState("");
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [debouncedCatalogQuery, setDebouncedCatalogQuery] = useState("");
+  const [unlinkedOnlyMode, setUnlinkedOnlyMode] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedCatalogQuery(catalogQuery), 300);
+    return () => clearTimeout(t);
+  }, [catalogQuery]);
 
   const { data: storeStatuses, refetch: refetchStores } = useQuery<ProductStoreStatus[]>({
     queryKey: [`/api/products/${product.id}/stores`],
     enabled: !!product.id,
   });
 
+  const catalogSearchUrl = editingStoreId && (unlinkedOnlyMode || debouncedCatalogQuery.trim().length >= 2)
+    ? `/api/stores/${editingStoreId}/catalog-search?q=${encodeURIComponent(debouncedCatalogQuery.trim())}${unlinkedOnlyMode ? "&unlinkedOnly=1" : ""}`
+    : null;
+
+  const { data: catalogResults, isFetching: isCatalogSearching } = useQuery<MarketplaceCatalogCacheEntry[]>({
+    queryKey: [catalogSearchUrl],
+    enabled: !!catalogSearchUrl,
+  });
+
   const saveLinkMutation = useMutation({
-    mutationFn: async ({ storeId, externalSku }: { storeId: number; externalSku: string }) => {
-      const res = await apiRequest("PUT", `/api/products/${product.id}/stores/${storeId}/link`, { externalSku });
+    mutationFn: async ({ storeId, externalSku, marketplaceProductId }: { storeId: number; externalSku: string; marketplaceProductId?: string }) => {
+      const res = await apiRequest("PUT", `/api/products/${product.id}/stores/${storeId}/link`, { externalSku, marketplaceProductId });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Ошибка");
       return res.json();
     },
     onSuccess: () => {
       setEditingStoreId(null);
+      setCatalogQuery("");
+      setUnlinkedOnlyMode(false);
       refetchStores();
       toast({ title: "Привязка сохранена" });
     },
     onError: (e: Error) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
+  });
+
+  const createAndLinkMutation = useMutation({
+    mutationFn: async ({ storeId, item }: { storeId: number; item: MarketplaceCatalogCacheEntry }) => {
+      const createRes = await apiRequest("POST", "/api/products", {
+        name: item.name || item.externalSku || "Новый товар",
+        sku: item.externalSku || item.marketplaceProductId,
+        sellingPrice: String(item.price ?? 0),
+        price: String(item.price ?? 0),
+        imageUrl: item.imageUrl || undefined,
+      });
+      if (!createRes.ok) throw new Error((await createRes.json().catch(() => ({}))).message || "Не удалось создать товар");
+      const newProduct = await createRes.json();
+      const linkRes = await apiRequest("PUT", `/api/products/${newProduct.id}/stores/${storeId}/link`, {
+        externalSku: item.externalSku || "",
+        marketplaceProductId: item.marketplaceProductId,
+      });
+      if (!linkRes.ok) throw new Error((await linkRes.json().catch(() => ({}))).message || "Товар создан, но привязка не сохранилась");
+      return newProduct;
+    },
+    onSuccess: (newProduct: Product, { storeId }) => {
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith(`/api/stores/${storeId}/catalog-search`),
+      });
+      refetchStores();
+      toast({ title: "Товар создан и привязан", description: newProduct.name });
+    },
+    onError: (e: Error) => toast({ title: "Ошибка", description: e.message, variant: "destructive" }),
+  });
+
+  const refreshCatalogMutation = useMutation({
+    mutationFn: async (storeId: number) => {
+      const res = await apiRequest("POST", `/api/stores/${storeId}/catalog-refresh`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Ошибка");
+      return res.json();
+    },
+    onSuccess: (data: { count?: number }, storeId) => {
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith(`/api/stores/${storeId}/catalog-search`),
+      });
+      toast({ title: "Каталог обновлён", description: `Загружено карточек: ${data.count ?? 0}` });
+    },
+    onError: (e: Error) => toast({ title: "Ошибка обновления каталога", description: e.message, variant: "destructive" }),
   });
 
   const syncStockMutation = useMutation({
@@ -1581,6 +1642,21 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                             <span className="text-sm font-medium truncate">{ss.storeName}</span>
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
+                            {ss.unlinkedCount > 0 && (
+                              <button
+                                type="button"
+                                className="flex items-center gap-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-0.5 text-[10px] font-medium hover:bg-amber-500/20 transition-colors"
+                                title="Карточки на площадке, которые ещё ни к чему не привязаны"
+                                onClick={() => {
+                                  setEditingStoreId(ss.storeId);
+                                  setCatalogQuery("");
+                                  setUnlinkedOnlyMode(true);
+                                }}
+                              >
+                                <AlertTriangle className="w-3 h-3" />
+                                {ss.unlinkedCount} непривязанных
+                              </button>
+                            )}
                             {ss.lastSyncStatus === "success" && !ss.lastSyncError && (
                               <CheckCircle2 className="w-4 h-4 text-green-500" title="Последняя синхронизация прошла успешно" />
                             )}
@@ -1597,37 +1673,111 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                           </div>
                         )}
 
-                        <div className="flex items-center gap-2">
-                          <Label className="text-xs text-muted-foreground w-24 shrink-0">SKU на МП</Label>
+                        <div className="flex items-start gap-2">
+                          <Label className="text-xs text-muted-foreground w-24 shrink-0 pt-1">Карточка на МП</Label>
                           {isEditing ? (
-                            <div className="flex items-center gap-1.5 flex-1">
-                              <Input
-                                value={editSkuValue}
-                                onChange={(e) => setEditSkuValue(e.target.value)}
-                                placeholder={product.sku}
-                                className="h-7 text-xs font-mono flex-1"
-                                autoFocus
-                                onKeyDown={(e: { key: string }) => {
-                                  if (e.key === "Enter") saveLinkMutation.mutate({ storeId: ss.storeId, externalSku: editSkuValue });
-                                  if (e.key === "Escape") setEditingStoreId(null);
-                                }}
-                              />
-                              <Button
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                disabled={saveLinkMutation.isPending}
-                                onClick={() => saveLinkMutation.mutate({ storeId: ss.storeId, externalSku: editSkuValue })}
-                              >
-                                {saveLinkMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-7 px-2 text-xs"
-                                onClick={() => setEditingStoreId(null)}
-                              >
-                                <X className="w-3 h-3" />
-                              </Button>
+                            <div className="flex-1 min-w-0 space-y-1.5">
+                              {unlinkedOnlyMode && (
+                                <div className="flex items-center justify-between gap-2 rounded-md bg-amber-500/10 px-2 py-1">
+                                  <p className="text-[10px] text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3 shrink-0" /> Только непривязанные карточки
+                                  </p>
+                                  <button
+                                    type="button"
+                                    className="text-[10px] underline text-muted-foreground shrink-0"
+                                    onClick={() => setUnlinkedOnlyMode(false)}
+                                  >
+                                    показать все
+                                  </button>
+                                </div>
+                              )}
+                              <div className="flex items-center gap-1.5">
+                                <Input
+                                  value={catalogQuery}
+                                  onChange={(e) => setCatalogQuery(e.target.value)}
+                                  placeholder={unlinkedOnlyMode ? "Фильтр по названию или артикулу…" : "Название или артикул на площадке…"}
+                                  className="h-7 text-xs flex-1"
+                                  autoFocus
+                                  onKeyDown={(e: { key: string }) => {
+                                    if (e.key === "Escape") { setEditingStoreId(null); setCatalogQuery(""); setUnlinkedOnlyMode(false); }
+                                  }}
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 w-7 p-0 shrink-0"
+                                  title="Обновить каталог магазина"
+                                  disabled={refreshCatalogMutation.isPending}
+                                  onClick={() => refreshCatalogMutation.mutate(ss.storeId)}
+                                >
+                                  {refreshCatalogMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-xs shrink-0"
+                                  onClick={() => { setEditingStoreId(null); setCatalogQuery(""); setUnlinkedOnlyMode(false); }}
+                                >
+                                  <X className="w-3 h-3" />
+                                </Button>
+                              </div>
+
+                              {isCatalogSearching && (
+                                <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                                  <Loader2 className="w-3 h-3 animate-spin" /> Поиск…
+                                </p>
+                              )}
+
+                              {!isCatalogSearching && (unlinkedOnlyMode || debouncedCatalogQuery.trim().length >= 2) && catalogResults && catalogResults.length === 0 && (
+                                <p className="text-[10px] text-muted-foreground">
+                                  {unlinkedOnlyMode
+                                    ? "Непривязанных карточек не найдено."
+                                    : "Ничего не найдено. Нажмите 🔄, чтобы обновить каталог магазина, или уточните запрос."}
+                                </p>
+                              )}
+
+                              {catalogResults && catalogResults.length > 0 && (
+                                <div className="max-h-48 overflow-y-auto rounded-lg border border-border divide-y divide-border">
+                                  {catalogResults.map((item) => (
+                                    <div key={item.id} className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-accent transition-colors">
+                                      <button
+                                        type="button"
+                                        className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                                        disabled={saveLinkMutation.isPending}
+                                        onClick={() => saveLinkMutation.mutate({
+                                          storeId: ss.storeId,
+                                          externalSku: item.externalSku || "",
+                                          marketplaceProductId: item.marketplaceProductId,
+                                        })}
+                                      >
+                                        {item.imageUrl ? (
+                                          <img src={item.imageUrl} alt="" className="w-7 h-7 rounded object-cover shrink-0" />
+                                        ) : (
+                                          <div className="w-7 h-7 rounded bg-muted shrink-0" />
+                                        )}
+                                        <div className="min-w-0 flex-1">
+                                          <p className="text-xs truncate">{item.name || item.externalSku}</p>
+                                          <p className="text-[10px] text-muted-foreground truncate">
+                                            арт. {item.externalSku || "—"}{item.price ? ` · ${Number(item.price).toLocaleString("ru-RU")} ₽` : ""}
+                                          </p>
+                                        </div>
+                                      </button>
+                                      {unlinkedOnlyMode && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-6 px-1.5 text-[10px] shrink-0"
+                                          title="Создать новый товар из этой карточки и сразу привязать"
+                                          disabled={createAndLinkMutation.isPending}
+                                          onClick={() => createAndLinkMutation.mutate({ storeId: ss.storeId, item })}
+                                        >
+                                          + новый товар
+                                        </Button>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -1640,11 +1790,12 @@ function ProductDetailModal({ product, canSeePurchasePrice, onClose, taxRate, de
                                 className="h-6 px-1.5 text-xs ml-auto shrink-0"
                                 onClick={() => {
                                   setEditingStoreId(ss.storeId);
-                                  setEditSkuValue(ss.externalSku || "");
+                                  setCatalogQuery("");
+                                  setUnlinkedOnlyMode(false);
                                 }}
                               >
-                                <Link2 className="w-3 h-3 mr-1" />
-                                Изменить
+                                <Search className="w-3 h-3 mr-1" />
+                                Привязать
                               </Button>
                             </div>
                           )}

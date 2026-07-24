@@ -3,7 +3,8 @@ import { createServer, type Server } from "http";
 import * as https from "node:https";
 import { storage } from "./storage";
 import { inventorySyncEngine } from "./inventory-sync";
-import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, fixWbPhotos, syncProductToOzon, syncProductToWb } from "./marketplace-import";
+import { fetchOzonProducts, fetchWildberriesProducts, fetchYandexProducts, enrichOzonProducts, enrichWbProducts, fixWbPhotos, syncProductToOzon, syncProductToWb, type NormalizedProduct } from "./marketplace-import";
+import { reconcileMarketplaceProducts } from "./product-matching";
 import { api } from "@shared/routes";
 import { marketplaceSettings as marketplaceSettingsTable, products as productsTable, orders as ordersTable, orderItems as orderItemsTable, productMarketplaceLinks, wbSupplies as wbSuppliesTable } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./auth";
@@ -599,6 +600,76 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("[PUT /api/products/:id/stores/:storeId/link]", err);
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // GET /api/stores/:storeId/catalog-search — поиск по локальному кешу карточек магазина
+  // (для простой ручной привязки: ищем среди реальных карточек площадки вместо
+  // слепого ввода SKU текстом). ?unlinkedOnly=1 — только карточки без активной связи
+  // с товаром на этом магазине (обзор "непривязанные карточки", без ввода в поиск).
+  app.get("/api/stores/:storeId/catalog-search", isAuthenticated, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const storeId = Number(req.params.storeId);
+      const q = String(req.query.q || "").trim();
+      const unlinkedOnly = req.query.unlinkedOnly === "1";
+      if (unlinkedOnly) {
+        const results = await storage.searchUnlinkedMarketplaceCatalog(storeId, q, orgId);
+        return res.json(results);
+      }
+      if (!q) return res.json([]);
+      const results = await storage.searchMarketplaceCatalog(storeId, q, orgId);
+      res.json(results);
+    } catch (err: any) {
+      console.error("[GET /api/stores/:storeId/catalog-search]", err);
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // POST /api/stores/:storeId/catalog-refresh — обновить локальный кеш карточек магазина
+  // (тянет полный список товаров с маркетплейса и сохраняет для последующего поиска)
+  app.post("/api/stores/:storeId/catalog-refresh", isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const storeId = Number(req.params.storeId);
+      const allSettings = await storage.getMarketplaceSettings(orgId);
+      const setting = allSettings.find(s => s.storeId === storeId && s.isActive);
+      if (!setting || !setting.apiKey) {
+        return res.status(400).json({ message: "Магазин не найден или не подключён" });
+      }
+
+      let fetched: NormalizedProduct[] = [];
+      if (setting.marketplace === "ozon") {
+        if (!setting.clientId) return res.status(400).json({ message: "Client ID не настроен для этого магазина" });
+        fetched = await fetchOzonProducts(setting.apiKey, setting.clientId);
+      } else if (setting.marketplace === "wildberries") {
+        fetched = await fetchWildberriesProducts(setting.apiKey, setting.warehouseId || undefined);
+      } else if (setting.marketplace === "yandex") {
+        if (!setting.warehouseId) return res.status(400).json({ message: "Business ID для Яндекс.Маркета не указан" });
+        const yToken = setting.apiKey.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+        const yBusinessId = setting.warehouseId.replace(/[^\x00-\x7F]/g, "").replace(/\s/g, "").trim();
+        fetched = await fetchYandexProducts(yToken, yBusinessId);
+      } else {
+        return res.status(400).json({ message: `Неизвестный маркетплейс: ${setting.marketplace}` });
+      }
+
+      const entries = fetched
+        .filter(p => p.marketplaceId)
+        .map(p => ({
+          organizationId: orgId,
+          storeId,
+          marketplaceProductId: p.marketplaceId!,
+          externalSku: p.sku,
+          name: p.name,
+          price: String(p.price ?? 0),
+          imageUrl: p.imageUrl || null,
+        }));
+
+      await storage.upsertMarketplaceCatalogCache(entries);
+      res.json({ success: true, count: entries.length });
+    } catch (err: any) {
+      console.error("[POST /api/stores/:storeId/catalog-refresh]", err);
+      res.status(502).json({ message: err.message });
     }
   });
 
@@ -1308,39 +1379,20 @@ export async function registerRoutes(
           console.log(`[Auto Import] Starting product import for new store «${displayName}»...`);
           const products = await fetchOzonProducts(body.apiKey, body.clientId);
           console.log(`[Auto Import] «${displayName}»: ${products.length} products fetched`);
-          let created = 0, updated = 0;
-          for (const mp of products) {
-            try {
-              if (!mp.sku) continue;
-              const existing = await storage.getProductBySkuAndOrg(mp.sku, orgId);
-              if (existing) {
-                const updates: any = {};
-                if (mp.price !== undefined && mp.price !== null) { updates.sellingPrice = String(mp.price); updates.price = String(mp.price); }
-                if (mp.stock !== undefined && mp.stock !== null) updates.centralStock = mp.stock;
-                if (mp.name && mp.name !== existing.name) updates.name = mp.name;
-                if (mp.barcode) updates.barcode = mp.barcode;
-                if (mp.imageUrl) updates.imageUrl = mp.imageUrl;
-                if (mp.category) updates.category = mp.category;
-                if (mp.marketplaceId) updates.ozonId = mp.marketplaceId;
-                if (Object.keys(updates).length > 0) await storage.updateProduct(existing.id, updates);
-                updated++;
-              } else {
-                await storage.createProduct({
-                  name: mp.name, sku: mp.sku, barcode: mp.barcode || null, category: mp.category || null,
-                  purchasePrice: "0", sellingPrice: String(mp.price ?? 0), price: String(mp.price ?? 0),
-                  centralStock: mp.stock ?? 0, stockQuantity: mp.stock ?? 0, imageUrl: mp.imageUrl || null,
-                  ozonId: mp.marketplaceId || null, wbId: null, yandexId: null, organizationId: orgId,
-                });
-                created++;
-              }
-            } catch (err: any) { /* skip individual product errors */ }
+          let updated = 0, unlinked = 0;
+          if (createdStoreId) {
+            const result = await reconcileMarketplaceProducts({ items: products, storeId: createdStoreId, orgId, marketplace: "ozon" });
+            updated = result.updated;
+            unlinked = result.unlinked;
+          } else {
+            console.warn(`[Auto Import] «${displayName}»: у настройки нет storeId, сверка карточек пропущена`);
           }
           await storage.createSyncHistory({
             organizationId: orgId, action: "product_import", status: "success",
-            details: `Автоимпорт для «${displayName}»: создано ${created}, обновлено ${updated}`,
-            itemsCount: created + updated,
+            details: `Автоимпорт для «${displayName}»: обновлено ${updated}, непривязанных карточек ${unlinked}`,
+            itemsCount: updated,
           });
-          console.log(`[Auto Import] «${displayName}» complete: created ${created}, updated ${updated}`);
+          console.log(`[Auto Import] «${displayName}» complete: updated ${updated}, unlinked ${unlinked}`);
         } catch (err: any) {
           console.error(`[Auto Import] Error for «${displayName}»:`, err.message);
           await storage.createSyncHistory({
@@ -1360,39 +1412,20 @@ export async function registerRoutes(
           const yBusinessId = body.warehouseId.replace(/[^\x00-\x7F]/g, "").replace(/\s/g, "").trim();
           const products = await fetchYandexProducts(yToken, yBusinessId);
           console.log(`[Auto Import] «${displayName}»: ${products.length} Yandex products fetched`);
-          let created = 0, updated = 0;
-          for (const mp of products) {
-            try {
-              if (!mp.sku) continue;
-              const existing = await storage.getProductBySkuAndOrg(mp.sku, orgId);
-              if (existing) {
-                const updates: any = {};
-                if (mp.price !== undefined && mp.price !== null) { updates.sellingPrice = String(mp.price); updates.price = String(mp.price); }
-                if (mp.stock !== undefined && mp.stock !== null) updates.centralStock = mp.stock;
-                if (mp.name && mp.name !== existing.name) updates.name = mp.name;
-                if (mp.barcode) updates.barcode = mp.barcode;
-                if (mp.imageUrl) updates.imageUrl = mp.imageUrl;
-                if (mp.category) updates.category = mp.category;
-                if (mp.marketplaceId) updates.yandexId = mp.marketplaceId;
-                if (Object.keys(updates).length > 0) await storage.updateProduct(existing.id, updates);
-                updated++;
-              } else {
-                await storage.createProduct({
-                  name: mp.name, sku: mp.sku, barcode: mp.barcode || null, category: mp.category || null,
-                  purchasePrice: "0", sellingPrice: String(mp.price ?? 0), price: String(mp.price ?? 0),
-                  centralStock: mp.stock ?? 0, stockQuantity: mp.stock ?? 0, imageUrl: mp.imageUrl || null,
-                  ozonId: null, wbId: null, yandexId: mp.marketplaceId || null, organizationId: orgId,
-                });
-                created++;
-              }
-            } catch (err: any) { /* skip individual product errors */ }
+          let updated = 0, unlinked = 0;
+          if (createdStoreId) {
+            const result = await reconcileMarketplaceProducts({ items: products, storeId: createdStoreId, orgId, marketplace: "yandex" });
+            updated = result.updated;
+            unlinked = result.unlinked;
+          } else {
+            console.warn(`[Auto Import] «${displayName}»: у настройки нет storeId, сверка карточек пропущена`);
           }
           await storage.createSyncHistory({
             organizationId: orgId, action: "product_import", status: "success",
-            details: `Автоимпорт Yandex для «${displayName}»: создано ${created}, обновлено ${updated}`,
-            itemsCount: created + updated,
+            details: `Автоимпорт Yandex для «${displayName}»: обновлено ${updated}, непривязанных карточек ${unlinked}`,
+            itemsCount: updated,
           });
-          console.log(`[Auto Import] «${displayName}» complete: created ${created}, updated ${updated}`);
+          console.log(`[Auto Import] «${displayName}» complete: updated ${updated}, unlinked ${unlinked}`);
         } catch (err: any) {
           console.error(`[Auto Import] Yandex error for «${displayName}»:`, err.message);
           await storage.createSyncHistory({
@@ -1475,6 +1508,8 @@ export async function registerRoutes(
 
       let fetchedProducts: any[] = [];
       const importErrors: string[] = [];
+      let updated = 0;
+      let unlinked = 0;
 
       if (marketplace === "ozon") {
         const ozonSettings = allSettings.filter(s => s.marketplace === "ozon" && s.isActive && s.apiKey && s.clientId);
@@ -1488,6 +1523,13 @@ export async function registerRoutes(
             const products = await fetchOzonProducts(setting.apiKey!, setting.clientId!);
             console.log(`[Marketplace Import] «${displayName}»: ${products.length} products fetched`);
             fetchedProducts = fetchedProducts.concat(products);
+            if (setting.storeId) {
+              const result = await reconcileMarketplaceProducts({ items: products, storeId: setting.storeId, orgId, marketplace: "ozon" });
+              updated += result.updated;
+              unlinked += result.unlinked;
+            } else {
+              console.warn(`[Marketplace Import] «${displayName}»: у настройки нет storeId, сверка карточек пропущена`);
+            }
           } catch (err: any) {
             console.error(`[Marketplace Import] Error for «${displayName}»:`, err.message);
             importErrors.push(`Ошибка для магазина «${displayName}»: ${err.message}`);
@@ -1525,84 +1567,30 @@ export async function registerRoutes(
           });
           return res.status(502).json({ message: `Ошибка подключения к API «${marketplace}»: ${err.message}` });
         }
-      }
-
-      let created = 0;
-      let updated = 0;
-      let failed = 0;
-      const errors: string[] = [];
-
-      for (const mp of fetchedProducts) {
-        try {
-          if (!mp.sku) {
-            failed++;
-            continue;
-          }
-
-          const existing = await storage.getProductBySkuAndOrg(mp.sku, orgId);
-
-          if (existing) {
-            const updates: any = {};
-            if (mp.price !== undefined && mp.price !== null) {
-              updates.sellingPrice = String(mp.price);
-              updates.price = String(mp.price);
-            }
-            if (mp.stock !== undefined && mp.stock !== null) {
-              updates.centralStock = mp.stock;
-            }
-            if (mp.name && mp.name !== existing.name) {
-              updates.name = mp.name;
-            }
-            if (mp.barcode) {
-              updates.barcode = mp.barcode;
-            }
-            if (mp.imageUrl) {
-              updates.imageUrl = mp.imageUrl;
-            }
-            if (mp.category) {
-              updates.category = mp.category;
-            }
-            if (marketplace === "ozon" && mp.marketplaceId) updates.ozonId = mp.marketplaceId;
-            if (marketplace === "wildberries" && mp.marketplaceId) updates.wbId = mp.marketplaceId;
-            if (marketplace === "yandex" && mp.marketplaceId) updates.yandexId = mp.marketplaceId;
-
-            if (Object.keys(updates).length > 0) {
-              await storage.updateProduct(existing.id, updates);
-            }
-            updated++;
-          } else {
-            await storage.createProduct({
-              name: mp.name,
-              sku: mp.sku,
-              barcode: mp.barcode || null,
-              category: mp.category || null,
-              purchasePrice: "0",
-              sellingPrice: String(mp.price ?? 0),
-              price: String(mp.price ?? 0),
-              centralStock: mp.stock ?? 0,
-              stockQuantity: mp.stock ?? 0,
-              imageUrl: mp.imageUrl || null,
-              ozonId: marketplace === "ozon" ? mp.marketplaceId || null : null,
-              wbId: marketplace === "wildberries" ? mp.marketplaceId || null : null,
-              yandexId: marketplace === "yandex" ? mp.marketplaceId || null : null,
-              organizationId: orgId,
-            });
-            created++;
-          }
-        } catch (err: any) {
-          failed++;
-          if (errors.length < 10) {
-            errors.push(`${mp.sku}: ${err.message}`);
-          }
+        if (setting.storeId) {
+          const result = await reconcileMarketplaceProducts({
+            items: fetchedProducts,
+            storeId: setting.storeId,
+            orgId,
+            marketplace: marketplace as "wildberries" | "yandex",
+          });
+          updated += result.updated;
+          unlinked += result.unlinked;
+        } else {
+          console.warn(`[Marketplace Import] «${marketplace}»: у настройки нет storeId, сверка карточек пропущена`);
         }
       }
+
+      const created = 0;
+      const failed = 0;
+      const errors: string[] = [];
 
       await storage.createSyncHistory({
         organizationId: orgId,
         action: "product_import",
-        status: failed > 0 && created === 0 && updated === 0 ? "fail" : "success",
-        details: `Импорт из «${marketplace}»: создано ${created}, обновлено ${updated}, ошибок ${failed}`,
-        itemsCount: created + updated,
+        status: updated === 0 && importErrors.length > 0 ? "fail" : "success",
+        details: `Импорт из «${marketplace}»: обновлено ${updated}, непривязанных карточек ${unlinked}`,
+        itemsCount: updated,
       });
 
       await storage.createAuditLog({
@@ -1611,7 +1599,7 @@ export async function registerRoutes(
         userName,
         action: "marketplace_import",
         entityType: "product",
-        details: `Импорт из «${marketplace}»: создано ${created}, обновлено ${updated}`,
+        details: `Импорт из «${marketplace}»: обновлено ${updated}, непривязанных карточек ${unlinked}`,
       });
 
       const responseData: any = {
@@ -1619,6 +1607,7 @@ export async function registerRoutes(
         marketplace,
         created,
         updated,
+        unlinked,
         failed,
         total: fetchedProducts.length,
         errors: errors.length > 0 ? errors : undefined,
@@ -1645,13 +1634,13 @@ export async function registerRoutes(
         return res.status(400).json({ message: "API-ключ или Client-Id для Ozon не настроен" });
       }
 
-      let created = 0, updated = 0, failed = 0, enriched = 0;
+      let created = 0, updated = 0, failed = 0, enriched = 0, unlinked = 0;
       let totalFetched = 0;
       const storeResults: { storeName: string; created: number; updated: number; enriched: number; error?: string }[] = [];
 
       for (const setting of ozonSettings) {
         const displayName = setting.storeName || `Client ${setting.clientId}`;
-        let storeCreated = 0, storeUpdated = 0, storeFailed = 0, storeEnriched = 0;
+        let storeCreated = 0, storeUpdated = 0, storeFailed = 0, storeEnriched = 0, storeUnlinked = 0;
         let storeError: string | undefined;
 
         try {
@@ -1659,33 +1648,15 @@ export async function registerRoutes(
           const fetchedProducts = await fetchOzonProducts(setting.apiKey!, setting.clientId!);
           totalFetched += fetchedProducts.length;
 
-          for (const mp of fetchedProducts) {
-            try {
-              if (!mp.sku) { storeFailed++; continue; }
-              const existing = await storage.getProductBySkuAndOrg(mp.sku, orgId);
-              if (existing) {
-                const updates: any = {};
-                if (mp.price !== undefined && mp.price !== null) { updates.sellingPrice = String(mp.price); updates.price = String(mp.price); }
-                if (mp.stock !== undefined && mp.stock !== null) updates.centralStock = mp.stock;
-                if (mp.name && mp.name !== existing.name) updates.name = mp.name;
-                if (mp.barcode) updates.barcode = mp.barcode;
-                if (mp.imageUrl) updates.imageUrl = mp.imageUrl;
-                if (mp.category) updates.category = mp.category;
-                if (mp.marketplaceId) updates.ozonId = mp.marketplaceId;
-                if (Object.keys(updates).length > 0) await storage.updateProduct(existing.id, updates);
-                storeUpdated++;
-              } else {
-                await storage.createProduct({
-                  name: mp.name, sku: mp.sku, barcode: mp.barcode || null, category: mp.category || null,
-                  purchasePrice: "0", sellingPrice: String(mp.price ?? 0), price: String(mp.price ?? 0),
-                  centralStock: mp.stock ?? 0, stockQuantity: mp.stock ?? 0, imageUrl: mp.imageUrl || null,
-                  ozonId: mp.marketplaceId || null, wbId: null, yandexId: null, organizationId: orgId,
-                });
-                storeCreated++;
-              }
-            } catch (err: any) { storeFailed++; }
+          if (setting.storeId) {
+            const result = await reconcileMarketplaceProducts({ items: fetchedProducts, storeId: setting.storeId, orgId, marketplace: "ozon" });
+            storeUpdated = result.updated;
+            storeUnlinked = result.unlinked;
+          } else {
+            console.warn(`[Ozon Smart Sync] «${displayName}»: у настройки нет storeId, сверка карточек пропущена`);
           }
-          console.log(`[Ozon Smart Sync] «${displayName}»: created ${storeCreated}, updated ${storeUpdated}, failed ${storeFailed}`);
+          unlinked += storeUnlinked;
+          console.log(`[Ozon Smart Sync] «${displayName}»: updated ${storeUpdated}, unlinked ${storeUnlinked}`);
 
           const storeSkus = new Set(fetchedProducts.filter(mp => mp.sku).map(mp => mp.sku));
           const allProducts = await storage.getProducts(orgId);
@@ -1735,7 +1706,7 @@ export async function registerRoutes(
         itemsCount: created + updated,
       });
 
-      res.json({ success: true, marketplace: "ozon", created, updated, enriched, failed, total: totalFetched, storeResults });
+      res.json({ success: true, marketplace: "ozon", created, updated, unlinked, enriched, failed, total: totalFetched, storeResults });
     } catch (error: any) {
       console.error("Ozon smart sync error:", error);
       res.status(500).json({ message: `Ошибка синхронизации Ozon: ${error.message}` });
@@ -1756,34 +1727,16 @@ export async function registerRoutes(
       console.log(`[WB Smart Sync] Step 1/3: Importing products...`);
       const fetchedProducts = await fetchWildberriesProducts(setting.apiKey, setting.warehouseId || undefined);
 
-      let created = 0, updated = 0, failed = 0;
-      for (const mp of fetchedProducts) {
-        try {
-          if (!mp.sku) { failed++; continue; }
-          const existing = await storage.getProductBySkuAndOrg(mp.sku, orgId);
-          if (existing) {
-            const updates: any = {};
-            if (mp.price !== undefined && mp.price !== null) { updates.sellingPrice = String(mp.price); updates.price = String(mp.price); }
-            if (mp.stock !== undefined && mp.stock !== null) updates.centralStock = mp.stock;
-            if (mp.name && mp.name !== existing.name) updates.name = mp.name;
-            if (mp.barcode) updates.barcode = mp.barcode;
-            if (mp.imageUrl) updates.imageUrl = mp.imageUrl;
-            if (mp.category) updates.category = mp.category;
-            if (mp.marketplaceId) updates.wbId = mp.marketplaceId;
-            if (Object.keys(updates).length > 0) await storage.updateProduct(existing.id, updates);
-            updated++;
-          } else {
-            await storage.createProduct({
-              name: mp.name, sku: mp.sku, barcode: mp.barcode || null, category: mp.category || null,
-              purchasePrice: "0", sellingPrice: String(mp.price ?? 0), price: String(mp.price ?? 0),
-              centralStock: mp.stock ?? 0, stockQuantity: mp.stock ?? 0, imageUrl: mp.imageUrl || null,
-              ozonId: null, wbId: mp.marketplaceId || null, yandexId: null, organizationId: orgId,
-            });
-            created++;
-          }
-        } catch (err: any) { failed++; }
+      const created = 0;
+      let updated = 0, failed = 0, unlinked = 0;
+      if (setting.storeId) {
+        const result = await reconcileMarketplaceProducts({ items: fetchedProducts, storeId: setting.storeId, orgId, marketplace: "wildberries" });
+        updated = result.updated;
+        unlinked = result.unlinked;
+      } else {
+        console.warn(`[WB Smart Sync]: у настройки нет storeId, сверка карточек пропущена`);
       }
-      console.log(`[WB Smart Sync] Step 1 complete: created ${created}, updated ${updated}, failed ${failed}`);
+      console.log(`[WB Smart Sync] Step 1 complete: updated ${updated}, unlinked ${unlinked}`);
 
       console.log(`[WB Smart Sync] Step 2/3: Enriching stocks & prices...`);
       const allProducts = await storage.getProducts(orgId);
@@ -1834,7 +1787,7 @@ export async function registerRoutes(
         itemsCount: created + updated,
       });
 
-      res.json({ success: true, marketplace: "wildberries", created, updated, enriched, stocksUpdated, photosFixed, failed, total: fetchedProducts.length });
+      res.json({ success: true, marketplace: "wildberries", created, updated, unlinked, enriched, stocksUpdated, photosFixed, failed, total: fetchedProducts.length });
     } catch (error: any) {
       console.error("WB smart sync error:", error);
       res.status(500).json({ message: `Ошибка синхронизации Wildberries: ${error.message}` });
@@ -2331,10 +2284,15 @@ export async function registerRoutes(
   app.post(api.stockInflow.create.path, isAuthenticated, requireRole("owner", "administrator"), async (req, res) => {
     try {
       const { userId, userName } = getUserInfo(req);
-      const input = api.stockInflow.create.input.parse({ ...req.body, organizationId: getOrgId(req) });
-      const inflow = await storage.createStockInflow(input, userId, userName);
+      const orgId = getOrgId(req);
+      const input = api.stockInflow.create.input.parse({ ...req.body, organizationId: orgId });
+      // Резолвим alias -> master перед записью прихода: иначе остаток и синхронизация
+      // могут уйти на устаревший/дублирующий товар вместо реального (см. инцидент с
+      // заблокированной Ozon-карточкой).
+      const resolvedProductId = await storage.resolveProductId(input.productId, orgId);
+      const inflow = await storage.createStockInflow({ ...input, productId: resolvedProductId }, userId, userName);
 
-      const syncResults = await inventorySyncEngine.syncProductToAllStores(input.productId)
+      const syncResults = await inventorySyncEngine.syncProductToAllStores(resolvedProductId)
         .catch(e => { console.error(`[stock-inflow] sync failed: ${e.message}`); return []; });
 
       res.status(201).json({ ...inflow, syncResults });

@@ -468,11 +468,16 @@ export class InventorySyncEngine {
       if (!externalSku) return;
 
       for (const row of (orgStores as any).rows) {
+        // Явно помечаем матч как авто-угадывание по CRM sku (не настоящая ручная
+        // проверка) — иначе поле match_type молча берёт дефолт схемы 'manual' и
+        // визуально неотличимо от связи, которую реально проверил человек.
         await db.execute(sql`
-          INSERT INTO product_marketplace_links (product_id, store_id, external_sku, is_active, organization_id)
-          VALUES (${product.id}, ${(row as any).id}, ${externalSku}, true, ${product.organizationId})
+          INSERT INTO product_marketplace_links (product_id, store_id, external_sku, match_type, confidence_score, is_active, organization_id)
+          VALUES (${product.id}, ${(row as any).id}, ${externalSku}, 'auto_sku_fallback', '0.50', true, ${product.organizationId})
           ON CONFLICT (product_id, store_id) DO UPDATE
             SET external_sku = EXCLUDED.external_sku,
+                match_type = 'auto_sku_fallback',
+                confidence_score = '0.50',
                 is_active = true
             WHERE product_marketplace_links.external_sku IS NULL
         `);
@@ -512,8 +517,17 @@ export class InventorySyncEngine {
   }
 
   async syncProductToAllStores(productId: number): Promise<StoreSyncResult[]> {
-    const [product] = await db.select().from(products).where(eq(products.id, productId));
+    let [product] = await db.select().from(products).where(eq(products.id, productId));
     if (!product) return [];
+    if (product.masterProductId) {
+      // Товар — алиас (дубль другого товара): вся синхронизация должна идти через
+      // мастера, иначе остаток уйдёт по устаревшим/заблокированным ссылкам алиаса.
+      const [master] = await db.select().from(products).where(eq(products.id, product.masterProductId));
+      if (master) {
+        product = master;
+        productId = master.id;
+      }
+    }
     const syncSettings = await this.getSyncSettings(product.organizationId);
     if (syncSettings?.syncEnabled === false) return [];
 

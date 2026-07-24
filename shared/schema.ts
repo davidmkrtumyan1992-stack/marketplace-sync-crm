@@ -304,6 +304,21 @@ export const productMarketplaceLinks = pgTable("product_marketplace_links", {
   productStoreUnique: uniqueIndex("pml_product_store_idx").on(table.productId, table.storeId),
 }));
 
+export const marketplaceCatalogCache = pgTable("marketplace_catalog_cache", {
+  id: serial("id").primaryKey(),
+  organizationId: text("organization_id").notNull(),
+  storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
+  marketplaceProductId: text("marketplace_product_id").notNull(),
+  externalSku: text("external_sku"),
+  name: text("name"),
+  price: decimal("price", { precision: 10, scale: 2 }),
+  imageUrl: text("image_url"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  storeProductUnique: uniqueIndex("mcc_store_product_idx").on(table.storeId, table.marketplaceProductId),
+  idxStoreId: index("idx_mcc_store_id").on(table.storeId),
+}));
+
 export const stockEvents = pgTable("stock_events", {
   id: serial("id").primaryKey(),
   organizationId: text("organization_id").notNull(),
@@ -397,6 +412,7 @@ export const insertInventorySyncSettingsSchema = createInsertSchema(inventorySyn
 export const insertProductStoreExclusionSchema = createInsertSchema(productStoreExclusions).omit({ id: true, createdAt: true });
 export const insertProductMarketplaceLinkSchema = createInsertSchema(productMarketplaceLinks).omit({ id: true });
 export const insertStockEventSchema = createInsertSchema(stockEvents).omit({ id: true, createdAt: true, processedAt: true });
+export const insertMarketplaceCatalogCacheSchema = createInsertSchema(marketplaceCatalogCache).omit({ id: true, updatedAt: true });
 
 // === TYPES ===
 
@@ -436,6 +452,8 @@ export type WebhookLog = typeof webhookLogs.$inferSelect;
 export type InsertWebhookLog = z.infer<typeof insertWebhookLogSchema>;
 export type ProductMarketplaceLink = typeof productMarketplaceLinks.$inferSelect;
 export type InsertProductMarketplaceLink = z.infer<typeof insertProductMarketplaceLinkSchema>;
+export type MarketplaceCatalogCacheEntry = typeof marketplaceCatalogCache.$inferSelect;
+export type InsertMarketplaceCatalogCacheEntry = z.infer<typeof insertMarketplaceCatalogCacheSchema>;
 export type StockEvent = typeof stockEvents.$inferSelect;
 export type InsertStockEvent = z.infer<typeof insertStockEventSchema>;
 
@@ -451,6 +469,7 @@ export type ProductStoreStatus = {
   lastSyncAt: string | null;
   lastSyncStatus: string | null;
   lastSyncError: string | null;
+  unlinkedCount: number;
 };
 
 // API Requests

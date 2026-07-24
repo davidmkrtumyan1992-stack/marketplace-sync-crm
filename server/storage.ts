@@ -1,7 +1,7 @@
 import { 
   companies, stores, userRoles, expenses,
   products, customers, orders, orderItems, marketplaceSettings, taxSettings, auditLog, stockInflow, stockWriteoff, syncHistory,
-  stockSyncLog, inventorySyncSettings, productStoreExclusions, webhookLogs, productMarketplaceLinks,
+  stockSyncLog, inventorySyncSettings, productStoreExclusions, webhookLogs, productMarketplaceLinks, marketplaceCatalogCache,
   type Company, type InsertCompany,
   type Store, type InsertStore,
   type UserRole, type InsertUserRole,
@@ -20,12 +20,13 @@ import {
   type ProductStoreExclusion, type InsertProductStoreExclusion,
   type WebhookLog, type InsertWebhookLog,
   type ProductMarketplaceLink, type InsertProductMarketplaceLink, type ProductStoreStatus,
+  type MarketplaceCatalogCacheEntry, type InsertMarketplaceCatalogCacheEntry,
   type DashboardKPI, type CompanyWithStores, type StoreWithStats,
   type ABCProduct, type LowStockProduct, type SalesDataPoint, type SalesResponse,
   type SyncStatusSummary,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, or, sql, inArray, gte } from "drizzle-orm";
+import { eq, desc, and, or, sql, inArray, gte, ilike } from "drizzle-orm";
 import { authStorage } from "./replit_integrations/auth/storage";
 
 export interface IStorage {
@@ -285,6 +286,127 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(products).where(
       and(eq(products.masterProductId, masterProductId), eq(products.organizationId, organizationId))
     );
+  }
+
+  async resolveProductId(productId: number, organizationId: string): Promise<number> {
+    const [product] = await db.select().from(products)
+      .where(and(eq(products.id, productId), eq(products.organizationId, organizationId)));
+    if (!product) return productId;
+    if (product.masterProductId) return product.masterProductId;
+    return productId;
+  }
+
+  async upsertMarketplaceCatalogCache(entries: InsertMarketplaceCatalogCacheEntry[]): Promise<void> {
+    if (entries.length === 0) return;
+    // Postgres не разрешает ON CONFLICT DO UPDATE задеть одну и ту же строку дважды
+    // в пределах одного INSERT — а один и тот же marketplaceProductId иногда встречается
+    // в ответе площадки дважды (например, один Yandex-бизнес с несколькими кампаниями
+    // отдаёт одну и ту же карточку от каждой кампании). Дедуплицируем по (storeId,
+    // marketplaceProductId) перед вставкой, оставляя последнее значение.
+    const dedupMap = new Map<string, InsertMarketplaceCatalogCacheEntry>();
+    for (const entry of entries) {
+      dedupMap.set(`${entry.storeId}:${entry.marketplaceProductId}`, entry);
+    }
+    const deduped = Array.from(dedupMap.values());
+
+    const CHUNK = 200;
+    for (let i = 0; i < deduped.length; i += CHUNK) {
+      const chunk = deduped.slice(i, i + CHUNK);
+      await db.insert(marketplaceCatalogCache).values(chunk)
+        .onConflictDoUpdate({
+          target: [marketplaceCatalogCache.storeId, marketplaceCatalogCache.marketplaceProductId],
+          set: {
+            externalSku: sql`excluded.external_sku`,
+            name: sql`excluded.name`,
+            price: sql`excluded.price`,
+            imageUrl: sql`excluded.image_url`,
+            updatedAt: new Date(),
+          },
+        });
+    }
+  }
+
+  async searchMarketplaceCatalog(storeId: number, query: string, organizationId: string): Promise<MarketplaceCatalogCacheEntry[]> {
+    const term = `%${query}%`;
+    return db.select().from(marketplaceCatalogCache)
+      .where(and(
+        eq(marketplaceCatalogCache.storeId, storeId),
+        eq(marketplaceCatalogCache.organizationId, organizationId),
+        or(ilike(marketplaceCatalogCache.name, term), ilike(marketplaceCatalogCache.externalSku, term))
+      ))
+      .limit(30);
+  }
+
+  // Непривязанные карточки этого магазина (для панели поиска с фильтром "только непривязанные")
+  async searchUnlinkedMarketplaceCatalog(storeId: number, query: string, organizationId: string): Promise<MarketplaceCatalogCacheEntry[]> {
+    const term = `%${query}%`;
+    const rows = await db.select({ cache: marketplaceCatalogCache })
+      .from(marketplaceCatalogCache)
+      .leftJoin(productMarketplaceLinks, and(
+        eq(productMarketplaceLinks.storeId, marketplaceCatalogCache.storeId),
+        eq(productMarketplaceLinks.isActive, true),
+        or(
+          eq(productMarketplaceLinks.marketplaceProductId, marketplaceCatalogCache.marketplaceProductId),
+          eq(productMarketplaceLinks.externalSku, marketplaceCatalogCache.externalSku),
+        ),
+      ))
+      .where(and(
+        eq(marketplaceCatalogCache.storeId, storeId),
+        eq(marketplaceCatalogCache.organizationId, organizationId),
+        sql`${productMarketplaceLinks.id} IS NULL`,
+        query ? or(ilike(marketplaceCatalogCache.name, term), ilike(marketplaceCatalogCache.externalSku, term)) : sql`true`,
+      ))
+      .limit(50);
+    return rows.map(r => r.cache);
+  }
+
+  // Счётчик непривязанных карточек по каждому магазину организации — для бейджа "N непривязанных"
+  async getUnlinkedCatalogCounts(organizationId: string): Promise<Map<number, number>> {
+    const rows = await db.select({
+      storeId: marketplaceCatalogCache.storeId,
+      count: sql<number>`count(*)`,
+    })
+      .from(marketplaceCatalogCache)
+      .leftJoin(productMarketplaceLinks, and(
+        eq(productMarketplaceLinks.storeId, marketplaceCatalogCache.storeId),
+        eq(productMarketplaceLinks.isActive, true),
+        or(
+          eq(productMarketplaceLinks.marketplaceProductId, marketplaceCatalogCache.marketplaceProductId),
+          eq(productMarketplaceLinks.externalSku, marketplaceCatalogCache.externalSku),
+        ),
+      ))
+      .where(and(
+        eq(marketplaceCatalogCache.organizationId, organizationId),
+        sql`${productMarketplaceLinks.id} IS NULL`,
+      ))
+      .groupBy(marketplaceCatalogCache.storeId);
+    return new Map(rows.map(r => [r.storeId, Number(r.count)]));
+  }
+
+  // Активная связь конкретного магазина на конкретную карточку (по marketplaceProductId ИЛИ externalSku)
+  async getActiveLinkForStoreCard(storeId: number, marketplaceProductId: string | undefined, externalSku: string | undefined): Promise<ProductMarketplaceLink | undefined> {
+    if (!marketplaceProductId && !externalSku) return undefined;
+    const orConditions = [];
+    if (marketplaceProductId) orConditions.push(eq(productMarketplaceLinks.marketplaceProductId, marketplaceProductId));
+    if (externalSku) orConditions.push(eq(productMarketplaceLinks.externalSku, externalSku));
+    const [link] = await db.select().from(productMarketplaceLinks)
+      .where(and(
+        eq(productMarketplaceLinks.storeId, storeId),
+        eq(productMarketplaceLinks.isActive, true),
+        or(...orConditions),
+      ));
+    return link;
+  }
+
+  // Активная связь конкретного товара на конкретном магазине (не важно, какая карточка)
+  async getActiveLinkForProductAndStore(productId: number, storeId: number): Promise<ProductMarketplaceLink | undefined> {
+    const [link] = await db.select().from(productMarketplaceLinks)
+      .where(and(
+        eq(productMarketplaceLinks.productId, productId),
+        eq(productMarketplaceLinks.storeId, storeId),
+        eq(productMarketplaceLinks.isActive, true),
+      ));
+    return link;
   }
 
   async getProductBySku(sku: string, companyId: number): Promise<Product | undefined> {
@@ -1130,15 +1252,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertProductMarketplaceLink(data: InsertProductMarketplaceLink): Promise<ProductMarketplaceLink> {
+    const updateSet: Record<string, unknown> = {
+      isActive: data.isActive,
+      organizationId: data.organizationId,
+    };
+    if (data.marketplaceProductId !== undefined) updateSet.marketplaceProductId = data.marketplaceProductId;
+    if (data.externalSku !== undefined) updateSet.externalSku = data.externalSku;
+    if (data.matchType !== undefined) updateSet.matchType = data.matchType;
+    if (data.confidenceScore !== undefined) updateSet.confidenceScore = data.confidenceScore;
+
     const [result] = await db.insert(productMarketplaceLinks)
       .values(data)
       .onConflictDoUpdate({
         target: [productMarketplaceLinks.productId, productMarketplaceLinks.storeId],
-        set: {
-          marketplaceProductId: data.marketplaceProductId,
-          isActive: data.isActive,
-          organizationId: data.organizationId,
-        },
+        set: updateSet,
       })
       .returning();
     return result;
@@ -1162,6 +1289,7 @@ export class DatabaseStorage implements IStorage {
     const allSettings = await this.getMarketplaceSettings(organizationId);
     const links = await this.getProductMarketplaceLinks(productId);
     const linksMap = new Map(links.map(l => [l.storeId, l]));
+    const unlinkedCounts = await this.getUnlinkedCatalogCounts(organizationId);
 
     return orgStores
       .filter(s => s.isActive)
@@ -1181,6 +1309,7 @@ export class DatabaseStorage implements IStorage {
           lastSyncAt: link?.lastSyncAt ? link.lastSyncAt.toISOString() : null,
           lastSyncStatus: link?.lastSyncStatus ?? null,
           lastSyncError: link?.lastSyncError ?? null,
+          unlinkedCount: unlinkedCounts.get(store.id) ?? 0,
         };
       });
   }
